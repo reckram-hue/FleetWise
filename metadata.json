@@ -1,0 +1,7 @@
+{
+  "name": "FleetWise SA - Vehicle & Driver Management System",
+  "description": "An application for a security company to monitor vehicle costs, track driver shifts, log maintenance, and incentivize fuel-efficient driving.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
