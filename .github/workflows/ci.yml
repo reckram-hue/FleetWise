@@ -1,4 +1,14 @@
+name: Test Workflow
+
 on:
+  workflow_dispatch:
   push:
     branches:
-      - main
+      - main   # change to your real default branch if needed
+
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print hello
+        run: echo "Hello from GitHub Actions"
