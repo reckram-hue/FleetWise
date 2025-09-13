@@ -181,13 +181,11 @@ const QRModal: React.FC<QRModalProps> = ({ vehicle, onClose }) => {
         setQrStatus('loading');
 
         const generateQRCode = () => {
-            if (!isMounted || !canvasRef.current) return;
+            if (!isMounted) return;
             
             const QRCode = (window as any).QRCode;
-
-            // QRCodeJS library takes an element as the first argument, not a canvas ref.
-            // It creates its own canvas, so we need a container.
             const qrContainer = document.getElementById('qr-code-container');
+            
             if (qrContainer) {
                 qrContainer.innerHTML = ''; // Clear previous QR code
                  new QRCode(qrContainer, {
@@ -200,7 +198,6 @@ const QRModal: React.FC<QRModalProps> = ({ vehicle, onClose }) => {
                 });
                 setQrStatus('generated');
             } else {
-                 console.error("QR Code container element not found.");
                  setErrorMessage("QR Code container element not found.");
                  setQrStatus('error');
             }
