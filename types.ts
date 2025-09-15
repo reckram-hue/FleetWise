@@ -124,3 +124,84 @@ export interface VehicleStats {
     avgDailyDistanceKm: number;
     avgEnergyConsumptionKwhPerKm: number;
 }
+
+export enum FineType {
+    Speeding = 'Speeding',
+    IllegalParking = 'Illegal Parking',
+    NoSeatBelt = 'No Seat Belt',
+    MobilePhone = 'Mobile Phone Use',
+    RedLight = 'Red Light Violation',
+    StopSign = 'Stop Sign Violation',
+    Overloading = 'Vehicle Overloading',
+    UnlicensedDriving = 'Unlicensed Driving',
+    Other = 'Other'
+}
+
+export enum DamageType {
+    Accident = 'Traffic Accident',
+    Scratches = 'Scratches/Dents',
+    Windscreen = 'Windscreen Damage',
+    Tyres = 'Tyre Damage',
+    Interior = 'Interior Damage',
+    Mechanical = 'Mechanical Damage',
+    Vandalism = 'Vandalism',
+    Theft = 'Theft/Break-in',
+    Other = 'Other'
+}
+
+export enum IncidentSeverity {
+    Minor = 'Minor',
+    Moderate = 'Moderate',
+    Major = 'Major',
+    Critical = 'Critical'
+}
+
+export interface DriverFine {
+    id: string;
+    driverId: string;
+    vehicleId: string;
+    date: string; // YYYY-MM-DD
+    fineType: FineType;
+    amount: number;
+    description: string;
+    fineNumber?: string;
+    location?: string;
+    issuingAuthority?: string;
+    dueDate?: string; // YYYY-MM-DD
+    isPaid: boolean;
+    paidDate?: string; // YYYY-MM-DD
+    notes?: string;
+}
+
+export interface VehicleDamage {
+    id: string;
+    vehicleId: string;
+    driverId: string;
+    date: string; // YYYY-MM-DD
+    damageType: DamageType;
+    severity: IncidentSeverity;
+    estimatedCost: number;
+    actualCost?: number;
+    description: string;
+    location?: string; // Where on vehicle
+    isRepaired: boolean;
+    repairedDate?: string; // YYYY-MM-DD
+    insuranceClaim: boolean;
+    claimNumber?: string;
+    notes?: string;
+    photos?: string[]; // URLs or base64
+}
+
+export interface DriverIncidentSummary {
+    driverId: string;
+    driver: User;
+    totalFines: number;
+    totalFineAmount: number;
+    unpaidFines: number;
+    unpaidAmount: number;
+    totalDamages: number;
+    totalDamagesCost: number;
+    lastIncidentDate?: string;
+    riskScore: number; // 0-100, higher = more risky
+    needsTraining: boolean;
+}

@@ -9,6 +9,7 @@ import Leaderboard from '../shared/Leaderboard';
 import ManageDrivers from './ManageDrivers';
 import ManageVehicles from './ManageVehicles';
 import ManageCosts from './ManageCosts';
+import ManageIncidents from './ManageIncidents';
 
 
 const AdminDashboard: React.FC = () => {
@@ -42,6 +43,10 @@ const AdminDashboard: React.FC = () => {
         return <ManageCosts onBack={() => setView('dashboard')} />;
     }
 
+    if (view === 'manageIncidents') {
+        return <ManageIncidents onBack={() => setView('dashboard')} />;
+    }
+
   return (
     <div className="min-h-screen bg-gray-100">
       <Header title="Admin Dashboard" />
@@ -58,6 +63,7 @@ const AdminDashboard: React.FC = () => {
             <button onClick={() => setView('manageDrivers')} className="bg-indigo-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-indigo-600 transition">Manage Drivers</button>
             <button onClick={() => setView('manageVehicles')} className="bg-cyan-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-cyan-600 transition">Manage Vehicles</button>
             <button onClick={() => setView('manageCosts')} className="bg-orange-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-orange-600 transition">Track Costs</button>
+            <button onClick={() => setView('manageIncidents')} className="bg-red-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-600 transition">Manage Driver Incidents</button>
         </div>
 
 

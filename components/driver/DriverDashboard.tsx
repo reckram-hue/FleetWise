@@ -67,6 +67,7 @@ const DriverDashboard: React.FC = () => {
   const [showReportDefect, setShowReportDefect] = useState(false);
   const [showMyStats, setShowMyStats] = useState(false);
   const [showLogCharge, setShowLogCharge] = useState(false);
+  const [showLogRefuel, setShowLogRefuel] = useState(false);
   const [showEndShift, setShowEndShift] = useState(false);
   const [dashboardKey, setDashboardKey] = useState(0); // Used to force a refresh
 
@@ -105,7 +106,8 @@ const DriverDashboard: React.FC = () => {
   );
   if (showReportDefect) return <ReportDefectForm onBack={() => setShowReportDefect(false)} />;
   if (showMyStats) return <MyStats onBack={() => setShowMyStats(false)} currentUser={currentUser} />;
-  if (showLogCharge) return <LogChargeForm onBack={() => setShowLogCharge(false)} />;
+  if (showLogCharge) return <LogChargeForm onBack={() => setShowLogCharge(false)} activeVehicle={activeVehicle} />;
+  if (showLogRefuel) return <LogRefuelForm onBack={() => setShowLogRefuel(false)} activeVehicle={activeVehicle} />;
   if (showEndShift) return <EndShiftFlow onBack={() => setShowEndShift(false)} activeShift={activeShift} activeVehicle={activeVehicle} currentUser={currentUser} onShiftEnded={() => {
       setShowEndShift(false);
       setDashboardKey(k => k + 1);
@@ -155,12 +157,21 @@ const DriverDashboard: React.FC = () => {
             }}
             color={activeShift ? "bg-red-500 hover:bg-red-600" : "bg-blue-500 hover:bg-blue-600"}
           />
-          <MainButton
-            icon={<Bolt size={48} />}
-            text="Log Charge"
-            onClick={() => setShowLogCharge(true)}
-            color="bg-teal-500 hover:bg-teal-600"
-          />
+          {activeVehicle?.vehicleType === VehicleType.EV ? (
+            <MainButton
+              icon={<Bolt size={48} />}
+              text="Log Charge"
+              onClick={() => setShowLogCharge(true)}
+              color="bg-teal-500 hover:bg-teal-600"
+            />
+          ) : (
+            <MainButton
+              icon={<Fuel size={48} />}
+              text="Log Refuel"
+              onClick={() => setShowLogRefuel(true)}
+              color="bg-orange-500 hover:bg-orange-600"
+            />
+          )}
           <MainButton
             icon={<AlertTriangle size={48} />}
             text="Report a Fault"
@@ -649,21 +660,30 @@ const MyStats = ({ onBack, currentUser }: { onBack: () => void; currentUser: Use
 };
 
 
-const LogChargeForm = ({ onBack }: { onBack: () => void }) => {
+const LogChargeForm = ({ onBack, activeVehicle }: { onBack: () => void; activeVehicle?: Vehicle }) => {
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
     const [selectedVehicleId, setSelectedVehicleId] = useState('');
     const [recommendation, setRecommendation] = useState('');
     const [loading, setLoading] = useState(false);
+    const [showChecklist, setShowChecklist] = useState(false);
+    const [checklistItems, setChecklistItems] = useState<{[key: string]: boolean}>({
+        'charge_level': false,
+        'tyre_pressure': false,
+        'washer_fluid': false
+    });
 
     useEffect(() => {
         api.getVehicles().then(allVehicles => {
             const evs = allVehicles.filter(v => v.vehicleType === VehicleType.EV);
             setVehicles(evs);
-            if (evs.length > 0) {
+            // Prioritize active vehicle if it's an EV, otherwise use first available
+            if (activeVehicle && activeVehicle.vehicleType === VehicleType.EV) {
+                setSelectedVehicleId(activeVehicle.id);
+            } else if (evs.length > 0) {
                 setSelectedVehicleId(evs[0].id);
             }
         });
-    }, []);
+    }, [activeVehicle]);
 
     useEffect(() => {
         if (!selectedVehicleId) return;
@@ -689,6 +709,99 @@ const LogChargeForm = ({ onBack }: { onBack: () => void }) => {
 
     }, [selectedVehicleId, vehicles]);
 
+    const handleStartCharging = () => {
+        setShowChecklist(true);
+    };
+
+    const handleCompleteChecklist = () => {
+        // All checklist items must be checked
+        const allItemsChecked = Object.values(checklistItems).every(item => item);
+        if (allItemsChecked) {
+            alert('Charging session logged successfully! All safety checks completed.');
+            onBack();
+        }
+    };
+
+    if (showChecklist) {
+        const allItemsChecked = Object.values(checklistItems).every(item => item);
+        const selectedVehicle = vehicles.find(v => v.id === selectedVehicleId);
+
+        const checklistLabels = {
+            'charge_level': 'Verified charge level and connected charging cable properly',
+            'tyre_pressure': 'Checked tyre pressure and condition',
+            'washer_fluid': 'Checked washer fluid level'
+        };
+
+        return (
+            <div className="min-h-screen bg-gray-100">
+                <Header title="EV Charging Checklist" />
+                <main className="max-w-md mx-auto p-6">
+                    <Card>
+                        <div className="text-center mb-6">
+                            <Bolt className="mx-auto h-12 w-12 text-teal-500" />
+                            <h3 className="text-2xl font-bold mt-2">Charging Safety Check</h3>
+                            <p className="text-gray-600">
+                                {selectedVehicle ? `${selectedVehicle.registration} - ${selectedVehicle.make} ${selectedVehicle.model}` : 'Electric Vehicle'}
+                            </p>
+                        </div>
+
+                        <div className="space-y-4 mb-6">
+                            {Object.entries(checklistLabels).map(([key, label]) => (
+                                <label key={key} className="flex items-start space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+                                    <input
+                                        type="checkbox"
+                                        checked={checklistItems[key] || false}
+                                        onChange={(e) => setChecklistItems(prev => ({
+                                            ...prev,
+                                            [key]: e.target.checked
+                                        }))}
+                                        className="mt-1 h-4 w-4 text-teal-600 border-gray-300 rounded"
+                                    />
+                                    <span className="text-sm text-gray-700 leading-5">{label}</span>
+                                </label>
+                            ))}
+                        </div>
+
+                        <div className="bg-teal-50 border border-teal-200 rounded-lg p-4 mb-6">
+                            <div className="flex">
+                                <Bolt className="h-5 w-5 text-teal-400 mr-2 mt-0.5" />
+                                <div>
+                                    <h4 className="text-sm font-medium text-teal-800">Charging Safety</h4>
+                                    <p className="text-sm text-teal-700 mt-1">
+                                        Complete all safety checks before and during charging. Report any charging issues immediately.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-between items-center gap-4">
+                            <button
+                                type="button"
+                                onClick={() => setShowChecklist(false)}
+                                className="w-full bg-gray-200 text-gray-800 font-bold py-3 px-4 rounded-lg hover:bg-gray-300 transition"
+                            >
+                                Back
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleCompleteChecklist}
+                                disabled={!allItemsChecked}
+                                className={`w-full font-bold py-3 px-4 rounded-lg transition ${
+                                    !allItemsChecked
+                                        ? 'bg-gray-400 cursor-not-allowed text-white'
+                                        : 'bg-teal-500 hover:bg-teal-600 text-white'
+                                }`}
+                            >
+                                <Check className="inline h-5 w-5 mr-2"/>
+                                Complete Charging
+                            </button>
+                        </div>
+                    </Card>
+                </main>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-gray-100">
             <Header title="Log Charging Session" />
@@ -701,13 +814,334 @@ const LogChargeForm = ({ onBack }: { onBack: () => void }) => {
                             <p>{loading ? "Calculating..." : recommendation}</p>
                         </div>
                     )}
-                    <p className="text-gray-600">This form would allow the driver to select their EV, enter odometer, start/end charge %, energy added (kWh), and total cost.</p>
-                    <button onClick={onBack} className="mt-6 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">Back to Dashboard</button>
+
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Vehicle</label>
+                            <select
+                                value={selectedVehicleId}
+                                onChange={(e) => setSelectedVehicleId(e.target.value)}
+                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
+                            >
+                                {vehicles.map(vehicle => (
+                                    <option key={vehicle.id} value={vehicle.id}>
+                                        {vehicle.registration} - {vehicle.make} {vehicle.model}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="flex justify-between items-center gap-4">
+                            <button onClick={onBack} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                                Back to Dashboard
+                            </button>
+                            <button
+                                onClick={handleStartCharging}
+                                disabled={!selectedVehicleId}
+                                className={`font-bold py-2 px-6 rounded-lg transition ${
+                                    !selectedVehicleId
+                                        ? 'bg-gray-400 cursor-not-allowed text-white'
+                                        : 'bg-teal-500 hover:bg-teal-600 text-white'
+                                }`}
+                            >
+                                <Bolt className="inline h-5 w-5 mr-2"/>
+                                Start Charging Session
+                            </button>
+                        </div>
+                    </div>
                 </Card>
             </main>
         </div>
     );
 };
 
+const LogRefuelForm = ({ onBack, activeVehicle }: { onBack: () => void; activeVehicle?: Vehicle }) => {
+    const [showChecklist, setShowChecklist] = useState(false);
+    const [checklistItems, setChecklistItems] = useState<{[key: string]: boolean}>({
+        'oil_level': false,
+        'washer_fluid': false,
+        'tyre_pressure': false,
+        'fuel_level': false
+    });
+    const [refuelData, setRefuelData] = useState({
+        odometer: '',
+        litres: '',
+        fuelCost: '',
+        oilRequired: false,
+        oilCost: '',
+        notes: ''
+    });
+
+    // Ensure we have an active ICE vehicle
+    if (!activeVehicle || activeVehicle.vehicleType !== VehicleType.ICE) {
+        return (
+            <div className="min-h-screen bg-gray-100">
+                <Header title="Log Refueling Session" />
+                <main className="max-w-4xl mx-auto p-6">
+                    <Card>
+                        <div className="text-center">
+                            <AlertTriangle className="mx-auto h-16 w-16 text-red-500 mb-4" />
+                            <h3 className="text-xl font-semibold text-gray-800">No Active ICE Vehicle</h3>
+                            <p className="text-red-600 mt-2">You must have an active ICE vehicle shift to log refueling.</p>
+                            <button onClick={onBack} className="mt-6 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">Back to Dashboard</button>
+                        </div>
+                    </Card>
+                </main>
+            </div>
+        );
+    }
+
+    const handleStartRefueling = () => {
+        // Since button is disabled when validation fails, we can proceed directly to checklist
+        setShowChecklist(true);
+    };
+
+    const handleCompleteChecklist = () => {
+        const allItemsChecked = Object.values(checklistItems).every(item => item);
+        if (allItemsChecked) {
+            const totalCost = parseFloat(refuelData.fuelCost) + (refuelData.oilRequired ? parseFloat(refuelData.oilCost || '0') : 0);
+            alert(`Refueling completed successfully!\n\nSummary:\n- Vehicle: ${activeVehicle?.registration}\n- Odometer: ${parseInt(refuelData.odometer).toLocaleString()} km\n- Fuel: ${refuelData.litres}L @ R${parseFloat(refuelData.fuelCost).toFixed(2)}\n- Oil: ${refuelData.oilRequired ? `Yes - R${parseFloat(refuelData.oilCost || '0').toFixed(2)}` : 'No'}\n- Total Cost: R${totalCost.toFixed(2)}`);
+            onBack();
+        }
+    };
+
+    const calculateTotalCost = () => {
+        const fuelCost = parseFloat(refuelData.fuelCost || '0');
+        const oilCost = refuelData.oilRequired ? parseFloat(refuelData.oilCost || '0') : 0;
+        return fuelCost + oilCost;
+    };
+
+    const handleInputChange = (field: string, value: string | boolean) => {
+        setRefuelData(prev => ({
+            ...prev,
+            [field]: value
+        }));
+    };
+
+    if (showChecklist) {
+        const allItemsChecked = Object.values(checklistItems).every(item => item);
+        const checklistLabels = {
+            'oil_level': 'Checked engine oil level',
+            'washer_fluid': 'Checked washer fluid level',
+            'tyre_pressure': 'Checked tyre pressure and condition',
+            'fuel_level': 'Confirmed fuel tank is properly filled'
+        };
+
+        return (
+            <div className="min-h-screen bg-gray-100">
+                <Header title="Refueling Checklist" />
+                <main className="max-w-md mx-auto p-6">
+                    <Card>
+                        <div className="text-center mb-6">
+                            <Fuel className="mx-auto h-12 w-12 text-orange-500" />
+                            <h3 className="text-2xl font-bold mt-2">Refueling Safety Check</h3>
+                            <p className="text-gray-600">
+                                {activeVehicle ? `${activeVehicle.registration} - ${activeVehicle.make} ${activeVehicle.model}` : 'ICE Vehicle'}
+                            </p>
+                        </div>
+
+                        <div className="space-y-4 mb-6">
+                            {Object.entries(checklistLabels).map(([key, label]) => (
+                                <label key={key} className="flex items-start space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+                                    <input
+                                        type="checkbox"
+                                        checked={checklistItems[key] || false}
+                                        onChange={(e) => setChecklistItems(prev => ({
+                                            ...prev,
+                                            [key]: e.target.checked
+                                        }))}
+                                        className="mt-1 h-4 w-4 text-orange-600 border-gray-300 rounded"
+                                    />
+                                    <span className="text-sm text-gray-700 leading-5">{label}</span>
+                                </label>
+                            ))}
+                        </div>
+
+                        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
+                            <div className="flex">
+                                <Fuel className="h-5 w-5 text-orange-400 mr-2 mt-0.5" />
+                                <div>
+                                    <h4 className="text-sm font-medium text-orange-800">Refueling Safety</h4>
+                                    <p className="text-sm text-orange-700 mt-1">
+                                        Complete all safety checks during refueling. Check fluid levels and report any issues immediately.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-between items-center gap-4">
+                            <button
+                                type="button"
+                                onClick={() => setShowChecklist(false)}
+                                className="w-full bg-gray-200 text-gray-800 font-bold py-3 px-4 rounded-lg hover:bg-gray-300 transition"
+                            >
+                                Back
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleCompleteChecklist}
+                                disabled={!allItemsChecked}
+                                className={`w-full font-bold py-3 px-4 rounded-lg transition ${
+                                    !allItemsChecked
+                                        ? 'bg-gray-400 cursor-not-allowed text-white'
+                                        : 'bg-orange-500 hover:bg-orange-600 text-white'
+                                }`}
+                            >
+                                <Check className="inline h-5 w-5 mr-2"/>
+                                Complete Refueling
+                            </button>
+                        </div>
+                    </Card>
+                </main>
+            </div>
+        );
+    }
+
+    return (
+        <div className="min-h-screen bg-gray-100">
+            <Header title="Log Refueling Session" />
+            <main className="max-w-4xl mx-auto p-6">
+                <Card>
+                    <h2 className="text-2xl font-bold text-gray-800 mb-4">Log Vehicle Refuel</h2>
+
+                    <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6" role="alert">
+                        <p className="font-bold">Refueling Reminder</p>
+                        <p>Remember to turn off engine, check fluid levels, and ensure proper fuel cap closure.</p>
+                    </div>
+
+                    <div className="space-y-6">
+                        {/* Vehicle Info - Read Only */}
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                            <h3 className="font-semibold text-gray-800 mb-2">Vehicle</h3>
+                            <div className="flex items-center">
+                                <Car className="h-5 w-5 text-gray-500 mr-2" />
+                                <span className="text-lg font-medium">{activeVehicle.registration} - {activeVehicle.make} {activeVehicle.model}</span>
+                            </div>
+                        </div>
+
+                        {/* Refuel Data Form */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Current Odometer Reading (km) *</label>
+                                <input
+                                    type="number"
+                                    value={refuelData.odometer}
+                                    onChange={(e) => handleInputChange('odometer', e.target.value)}
+                                    placeholder={`e.g., ${(activeVehicle.currentOdometer || 50000) + 100}`}
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                                    required
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Litres Filled *</label>
+                                <input
+                                    type="number"
+                                    step="0.1"
+                                    value={refuelData.litres}
+                                    onChange={(e) => handleInputChange('litres', e.target.value)}
+                                    placeholder="e.g., 45.5"
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                                    required
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Fuel Cost (R) *</label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={refuelData.fuelCost}
+                                    onChange={(e) => handleInputChange('fuelCost', e.target.value)}
+                                    placeholder="e.g., 850.00"
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                                    required
+                                />
+                            </div>
+
+                            <div>
+                                <label className="flex items-center space-x-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={refuelData.oilRequired}
+                                        onChange={(e) => handleInputChange('oilRequired', e.target.checked)}
+                                        className="h-4 w-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500"
+                                    />
+                                    <span className="text-sm font-medium text-gray-700">Oil purchased</span>
+                                </label>
+
+                                {refuelData.oilRequired && (
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={refuelData.oilCost}
+                                        onChange={(e) => handleInputChange('oilCost', e.target.value)}
+                                        placeholder="Oil cost (R)"
+                                        className="mt-2 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                                        required={refuelData.oilRequired}
+                                    />
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Notes */}
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Notes (Optional)</label>
+                            <textarea
+                                value={refuelData.notes}
+                                onChange={(e) => handleInputChange('notes', e.target.value)}
+                                rows={2}
+                                placeholder="Any additional notes about refueling..."
+                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500"
+                            />
+                        </div>
+
+                        {/* Cost Summary */}
+                        {(refuelData.fuelCost || refuelData.oilCost) && (
+                            <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                                <h4 className="font-medium text-orange-800 mb-2">Cost Summary</h4>
+                                <div className="space-y-1 text-sm">
+                                    <div className="flex justify-between">
+                                        <span>Fuel:</span>
+                                        <span>R{parseFloat(refuelData.fuelCost || '0').toFixed(2)}</span>
+                                    </div>
+                                    {refuelData.oilRequired && (
+                                        <div className="flex justify-between">
+                                            <span>Oil:</span>
+                                            <span>R{parseFloat(refuelData.oilCost || '0').toFixed(2)}</span>
+                                        </div>
+                                    )}
+                                    <hr className="border-orange-200" />
+                                    <div className="flex justify-between font-medium text-orange-800">
+                                        <span>Total:</span>
+                                        <span>R{calculateTotalCost().toFixed(2)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="flex justify-between items-center gap-4">
+                            <button onClick={onBack} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                                Back to Dashboard
+                            </button>
+                            <button
+                                onClick={handleStartRefueling}
+                                disabled={!refuelData.odometer || !refuelData.litres || !refuelData.fuelCost || (refuelData.oilRequired && !refuelData.oilCost)}
+                                className={`font-bold py-2 px-6 rounded-lg transition ${
+                                    (!refuelData.odometer || !refuelData.litres || !refuelData.fuelCost || (refuelData.oilRequired && !refuelData.oilCost))
+                                        ? 'bg-gray-400 cursor-not-allowed text-white'
+                                        : 'bg-orange-500 hover:bg-orange-600 text-white'
+                                }`}
+                            >
+                                <Fuel className="inline h-5 w-5 mr-2"/>
+                                Proceed to Safety Check
+                            </button>
+                        </div>
+                    </div>
+                </Card>
+            </main>
+        </div>
+    );
+};
 
 export default DriverDashboard;

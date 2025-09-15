@@ -12,7 +12,13 @@ import {
   CostCategory,
   LeaderboardEntry,
   VehicleStats,
-  MaintenanceRecord
+  MaintenanceRecord,
+  DriverFine,
+  VehicleDamage,
+  FineType,
+  DamageType,
+  IncidentSeverity,
+  DriverIncidentSummary
 } from '../types';
 
 // FIX: Export mockUsers to be used in the login screen.
@@ -124,6 +130,134 @@ const mockLeaderboard: LeaderboardEntry[] = [
     { driver: mockUsers[1], totalKmDriven: 11230, averageKmL: 9.2 },
     { driver: mockUsers[3], totalKmDriven: 9870, averageKmL: 8.5 },
     { driver: mockUsers[4], totalKmDriven: 8500, averageKmL: 10.1 },
+];
+
+let mockDriverFines: DriverFine[] = [
+    {
+        id: 'f1',
+        driverId: 'driver1',
+        vehicleId: 'v1',
+        date: '2024-11-15',
+        fineType: FineType.Speeding,
+        amount: 1500,
+        description: 'Exceeding speed limit by 15km/h in 60km/h zone',
+        fineNumber: 'SP123456789',
+        location: 'N1 Highway, Cape Town',
+        issuingAuthority: 'City of Cape Town',
+        dueDate: '2024-12-15',
+        isPaid: false,
+        notes: 'Driver claims speedometer was faulty'
+    },
+    {
+        id: 'f2',
+        driverId: 'driver2',
+        vehicleId: 'v3',
+        date: '2024-11-20',
+        fineType: FineType.IllegalParking,
+        amount: 500,
+        description: 'Parking in disabled bay without permit',
+        fineNumber: 'PK987654321',
+        location: 'Sandton City Shopping Centre',
+        issuingAuthority: 'City of Johannesburg',
+        dueDate: '2024-12-20',
+        isPaid: true,
+        paidDate: '2024-11-25'
+    },
+    {
+        id: 'f3',
+        driverId: 'driver1',
+        vehicleId: 'v2',
+        date: '2024-10-30',
+        fineType: FineType.NoSeatBelt,
+        amount: 1000,
+        description: 'Driver not wearing seatbelt',
+        fineNumber: 'SB555666777',
+        location: 'M1 Highway, Johannesburg',
+        issuingAuthority: 'JMPD',
+        dueDate: '2024-11-30',
+        isPaid: true,
+        paidDate: '2024-11-05'
+    },
+    {
+        id: 'f4',
+        driverId: 'driver3',
+        vehicleId: 'v4',
+        date: '2024-11-10',
+        fineType: FineType.MobilePhone,
+        amount: 2000,
+        description: 'Using mobile phone while driving',
+        fineNumber: 'MP111222333',
+        location: 'William Nicol Drive, Sandton',
+        issuingAuthority: 'JMPD',
+        dueDate: '2024-12-10',
+        isPaid: false
+    }
+];
+
+let mockVehicleDamages: VehicleDamage[] = [
+    {
+        id: 'd1',
+        vehicleId: 'v1',
+        driverId: 'driver1',
+        date: '2024-11-12',
+        damageType: DamageType.Scratches,
+        severity: IncidentSeverity.Minor,
+        estimatedCost: 3500,
+        actualCost: 3200,
+        description: 'Scratches on left rear door from parking incident',
+        location: 'Left rear door',
+        isRepaired: true,
+        repairedDate: '2024-11-18',
+        insuranceClaim: false,
+        notes: 'Driver scraped against concrete pillar in parking garage'
+    },
+    {
+        id: 'd2',
+        vehicleId: 'v2',
+        driverId: 'driver3',
+        date: '2024-10-25',
+        damageType: DamageType.Windscreen,
+        severity: IncidentSeverity.Moderate,
+        estimatedCost: 2500,
+        actualCost: 2800,
+        description: 'Windscreen cracked by stone from truck',
+        location: 'Front windscreen - passenger side',
+        isRepaired: true,
+        repairedDate: '2024-10-28',
+        insuranceClaim: true,
+        claimNumber: 'WS2024-789456'
+    },
+    {
+        id: 'd3',
+        vehicleId: 'v4',
+        driverId: 'driver4',
+        date: '2024-09-15',
+        damageType: DamageType.Accident,
+        severity: IncidentSeverity.Major,
+        estimatedCost: 25000,
+        actualCost: 28500,
+        description: 'Rear-end collision at traffic light',
+        location: 'Rear bumper, boot, rear lights',
+        isRepaired: true,
+        repairedDate: '2024-10-05',
+        insuranceClaim: true,
+        claimNumber: 'ACC2024-123789',
+        notes: 'Third-party admitted fault. Driver followed all protocols correctly.'
+    },
+    {
+        id: 'd4',
+        vehicleId: 'v3',
+        driverId: 'driver2',
+        date: '2024-11-28',
+        damageType: DamageType.Interior,
+        severity: IncidentSeverity.Minor,
+        estimatedCost: 1500,
+        description: 'Cigarette burn on driver seat',
+        location: 'Driver seat cushion',
+        isRepaired: false,
+        insuranceClaim: false,
+        notes: 'Driver was smoking in vehicle against company policy'
+    }
 ];
 
 const api = {
@@ -276,6 +410,102 @@ const api = {
             .sort((a, b) => (b.endTime?.getTime() || 0) - (a.endTime?.getTime() || 0));
 
         return vehicleShifts.length > 0 ? vehicleShifts[0] : null;
+    },
+
+    // Driver Fines Management
+    getDriverFines: async (): Promise<DriverFine[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        return [...mockDriverFines].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    },
+
+    addDriverFine: async (fineData: Omit<DriverFine, 'id'>): Promise<DriverFine> => {
+        await new Promise(res => setTimeout(res, 300));
+        const newFine: DriverFine = {
+            ...fineData,
+            id: `f${mockDriverFines.length + 1}`,
+        };
+        mockDriverFines.push(newFine);
+        return newFine;
+    },
+
+    updateDriverFine: async (fine: DriverFine): Promise<DriverFine> => {
+        await new Promise(res => setTimeout(res, 300));
+        const fineIndex = mockDriverFines.findIndex(f => f.id === fine.id);
+        if (fineIndex === -1) throw new Error("Fine not found");
+        mockDriverFines[fineIndex] = { ...mockDriverFines[fineIndex], ...fine };
+        return mockDriverFines[fineIndex];
+    },
+
+    // Vehicle Damages Management
+    getVehicleDamages: async (): Promise<VehicleDamage[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        return [...mockVehicleDamages].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    },
+
+    addVehicleDamage: async (damageData: Omit<VehicleDamage, 'id'>): Promise<VehicleDamage> => {
+        await new Promise(res => setTimeout(res, 300));
+        const newDamage: VehicleDamage = {
+            ...damageData,
+            id: `d${mockVehicleDamages.length + 1}`,
+        };
+        mockVehicleDamages.push(newDamage);
+        return newDamage;
+    },
+
+    updateVehicleDamage: async (damage: VehicleDamage): Promise<VehicleDamage> => {
+        await new Promise(res => setTimeout(res, 300));
+        const damageIndex = mockVehicleDamages.findIndex(d => d.id === damage.id);
+        if (damageIndex === -1) throw new Error("Damage record not found");
+        mockVehicleDamages[damageIndex] = { ...mockVehicleDamages[damageIndex], ...damage };
+        return mockVehicleDamages[damageIndex];
+    },
+
+    // Driver Incident Analytics
+    getDriverIncidentSummary: async (driverId?: string): Promise<DriverIncidentSummary[]> => {
+        await new Promise(res => setTimeout(res, 500));
+
+        const drivers = driverId ? mockUsers.filter(u => u.id === driverId && u.role === UserRole.Driver)
+                                 : mockUsers.filter(u => u.role === UserRole.Driver);
+
+        return drivers.map(driver => {
+            const fines = mockDriverFines.filter(f => f.driverId === driver.id);
+            const damages = mockVehicleDamages.filter(d => d.driverId === driver.id);
+
+            const totalFineAmount = fines.reduce((sum, f) => sum + f.amount, 0);
+            const unpaidFines = fines.filter(f => !f.isPaid);
+            const unpaidAmount = unpaidFines.reduce((sum, f) => sum + f.amount, 0);
+            const totalDamagesCost = damages.reduce((sum, d) => sum + (d.actualCost || d.estimatedCost), 0);
+
+            // Calculate risk score (0-100)
+            let riskScore = 0;
+            riskScore += fines.length * 10; // 10 points per fine
+            riskScore += unpaidFines.length * 5; // Extra 5 points for unpaid fines
+            riskScore += damages.filter(d => d.severity === IncidentSeverity.Critical).length * 25;
+            riskScore += damages.filter(d => d.severity === IncidentSeverity.Major).length * 15;
+            riskScore += damages.filter(d => d.severity === IncidentSeverity.Moderate).length * 8;
+            riskScore += damages.filter(d => d.severity === IncidentSeverity.Minor).length * 3;
+
+            riskScore = Math.min(100, riskScore); // Cap at 100
+
+            const allIncidentDates = [
+                ...fines.map(f => f.date),
+                ...damages.map(d => d.date)
+            ].sort().reverse();
+
+            return {
+                driverId: driver.id,
+                driver,
+                totalFines: fines.length,
+                totalFineAmount,
+                unpaidFines: unpaidFines.length,
+                unpaidAmount,
+                totalDamages: damages.length,
+                totalDamagesCost,
+                lastIncidentDate: allIncidentDates[0],
+                riskScore,
+                needsTraining: riskScore >= 30 || unpaidFines.length >= 2 || damages.filter(d => d.severity === IncidentSeverity.Major || d.severity === IncidentSeverity.Critical).length > 0
+            };
+        }).sort((a, b) => b.riskScore - a.riskScore);
     }
 };
 
