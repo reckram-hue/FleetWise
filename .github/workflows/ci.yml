@@ -25,7 +25,7 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        # If your project uses yarn or pnpm instead, tell me and we’ll change this line.
+        # If your project uses yarn or pnpm instead, tell me and we'll change this line.
 
       - name: Lint (optional)
         run: npm run lint --if-present
@@ -35,5 +35,3 @@ jobs:
 
       - name: Test (optional)
         run: npm test --if-present -- --ci --reporters=default --watch=false
-
-
