@@ -250,6 +250,32 @@ const api = {
             return { avgDailyDistanceKm: 150, avgEnergyConsumptionKwhPerKm: 0.18 };
         }
         return { avgDailyDistanceKm: 0, avgEnergyConsumptionKwhPerKm: 0 };
+    },
+    endShift: async (shiftData: { driverId: string; endOdometer?: number; endChargePercent?: number; }): Promise<Shift> => {
+        await new Promise(res => setTimeout(res, 500));
+        const activeShiftIndex = mockShifts.findIndex(s => s.driverId === shiftData.driverId && s.status === ShiftStatus.Active);
+        if (activeShiftIndex === -1) {
+            throw new Error("No active shift found for this driver.");
+        }
+
+        const updatedShift: Shift = {
+            ...mockShifts[activeShiftIndex],
+            endTime: new Date(),
+            endOdometer: shiftData.endOdometer,
+            endChargePercent: shiftData.endChargePercent,
+            status: ShiftStatus.Completed,
+        };
+
+        mockShifts[activeShiftIndex] = updatedShift;
+        return updatedShift;
+    },
+    getLastCompletedShift: async (vehicleId: string): Promise<Shift | null> => {
+        await new Promise(res => setTimeout(res, 200));
+        const vehicleShifts = mockShifts
+            .filter(s => s.vehicleId === vehicleId && s.status === ShiftStatus.Completed)
+            .sort((a, b) => (b.endTime?.getTime() || 0) - (a.endTime?.getTime() || 0));
+
+        return vehicleShifts.length > 0 ? vehicleShifts[0] : null;
     }
 };
 

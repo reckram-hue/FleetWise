@@ -180,47 +180,78 @@ const QRModal: React.FC<QRModalProps> = ({ vehicle, onClose }) => {
         let isMounted = true;
         setQrStatus('loading');
 
-        const generateQRCode = () => {
+        const loadScript = (src: string): Promise<void> => {
+            return new Promise((resolve, reject) => {
+                if (document.querySelector(`script[src="${src}"]`)) {
+                    resolve();
+                    return;
+                }
+
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = () => resolve();
+                script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+                document.head.appendChild(script);
+            });
+        };
+
+        const generateQRCode = async () => {
             if (!isMounted) return;
-            
-            const QRCode = (window as any).QRCode;
-            const qrContainer = document.getElementById('qr-code-container');
-            
-            if (qrContainer) {
-                qrContainer.innerHTML = ''; // Clear previous QR code
-                 new QRCode(qrContainer, {
-                    text: vehicle.id,
-                    width: 256,
-                    height: 256,
-                    colorDark : "#000000",
-                    colorLight : "#ffffff",
-                    correctLevel : QRCode.CorrectLevel.H
-                });
+
+            try {
+                // Load QRCode library from CDN
+                await loadScript('https://unpkg.com/qrcode-generator@1.4.4/qrcode.js');
+
+                // Wait a bit for library to initialize
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                const qrContainer = document.getElementById('qr-code-container');
+                if (!qrContainer) {
+                    setErrorMessage("QR Code container element not found.");
+                    setQrStatus('error');
+                    return;
+                }
+
+                // Use qrcode-generator library (different API)
+                const qr = (window as any).qrcode(0, 'H');
+                qr.addData(vehicle.id);
+                qr.make();
+
+                // Create the QR code as SVG
+                const cellSize = 4;
+                const margin = 4;
+                const size = qr.getModuleCount();
+                const svgSize = (size + 2 * margin) * cellSize;
+
+                let svg = `<svg width="${svgSize}" height="${svgSize}" xmlns="http://www.w3.org/2000/svg">`;
+                svg += `<rect width="${svgSize}" height="${svgSize}" fill="white"/>`;
+
+                for (let row = 0; row < size; row++) {
+                    for (let col = 0; col < size; col++) {
+                        if (qr.isDark(row, col)) {
+                            const x = (col + margin) * cellSize;
+                            const y = (row + margin) * cellSize;
+                            svg += `<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" fill="black"/>`;
+                        }
+                    }
+                }
+                svg += '</svg>';
+
+                qrContainer.innerHTML = svg;
                 setQrStatus('generated');
-            } else {
-                 setErrorMessage("QR Code container element not found.");
-                 setQrStatus('error');
+                console.log("QR Code generated successfully for vehicle:", vehicle.id);
+
+            } catch (error) {
+                console.error("QR Code generation error:", error);
+                setErrorMessage("Failed to generate QR Code. Please try again.");
+                setQrStatus('error');
             }
         };
 
-        const startTime = Date.now();
-        const intervalId = setInterval(() => {
-            if ((window as any).QRCode) {
-                clearInterval(intervalId);
-                generateQRCode();
-            } else if (Date.now() - startTime > 10000) { // 10 second timeout
-                clearInterval(intervalId);
-                if (isMounted) {
-                    console.error("QRCode library is not available on the window object after 10 seconds.");
-                    setErrorMessage("QR Code generation library failed to initialize.");
-                    setQrStatus('error');
-                }
-            }
-        }, 100);
+        generateQRCode();
 
         return () => {
             isMounted = false;
-            clearInterval(intervalId);
         };
     }, [vehicle]);
 

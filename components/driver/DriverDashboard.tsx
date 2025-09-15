@@ -1,10 +1,63 @@
-import React, { useState, useContext, useEffect, useRef } from 'react';
+import React, { useState, useContext, useEffect, useRef, Component, ErrorInfo } from 'react';
 import { PlusCircle, AlertTriangle, BarChart2, CheckCircle, XCircle, Bolt, Route, Fuel, ScanLine, Car, Check } from 'lucide-react';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
 import { UserContext } from '../../contexts/UserContext';
 import { Shift, ShiftStatus, Vehicle, VehicleType, User, LeaderboardEntry } from '../../types';
 import api from '../../services/mockApi';
+
+class ErrorBoundary extends Component<
+  { children: React.ReactNode; onError?: () => void },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode; onError?: () => void }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(_: Error) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('QR Scanner Error:', error, errorInfo);
+    if (this.props.onError) {
+      this.props.onError();
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-gray-100">
+          <Header title="Start New Shift" />
+          <main className="max-w-md mx-auto p-6">
+            <Card>
+              <div className="text-center">
+                <XCircle className="mx-auto h-16 w-16 text-red-500 mb-4" />
+                <h3 className="text-xl font-semibold text-gray-800">Something went wrong</h3>
+                <p className="text-gray-600 mt-2">The QR scanner encountered an error. Please try again.</p>
+                <button
+                  onClick={() => {
+                    this.setState({ hasError: false });
+                    if (this.props.onError) {
+                      this.props.onError();
+                    }
+                  }}
+                  className="mt-6 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
+                >
+                  Try Again
+                </button>
+              </div>
+            </Card>
+          </main>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 const DriverDashboard: React.FC = () => {
   const { currentUser } = useContext(UserContext);
@@ -14,6 +67,7 @@ const DriverDashboard: React.FC = () => {
   const [showReportDefect, setShowReportDefect] = useState(false);
   const [showMyStats, setShowMyStats] = useState(false);
   const [showLogCharge, setShowLogCharge] = useState(false);
+  const [showEndShift, setShowEndShift] = useState(false);
   const [dashboardKey, setDashboardKey] = useState(0); // Used to force a refresh
 
   useEffect(() => {
@@ -41,13 +95,21 @@ const DriverDashboard: React.FC = () => {
 
   if (!currentUser) return null;
   
-  if (showStartShift) return <StartShiftFlow onBack={() => setShowStartShift(false)} vehicles={vehicles} currentUser={currentUser} onShiftStarted={() => {
-      setShowStartShift(false);
-      setDashboardKey(k => k + 1);
-  }} />;
+  if (showStartShift) return (
+    <ErrorBoundary onError={() => setShowStartShift(false)}>
+      <StartShiftFlow onBack={() => setShowStartShift(false)} vehicles={vehicles} currentUser={currentUser} onShiftStarted={() => {
+          setShowStartShift(false);
+          setDashboardKey(k => k + 1);
+      }} />
+    </ErrorBoundary>
+  );
   if (showReportDefect) return <ReportDefectForm onBack={() => setShowReportDefect(false)} />;
   if (showMyStats) return <MyStats onBack={() => setShowMyStats(false)} currentUser={currentUser} />;
   if (showLogCharge) return <LogChargeForm onBack={() => setShowLogCharge(false)} />;
+  if (showEndShift) return <EndShiftFlow onBack={() => setShowEndShift(false)} activeShift={activeShift} activeVehicle={activeVehicle} currentUser={currentUser} onShiftEnded={() => {
+      setShowEndShift(false);
+      setDashboardKey(k => k + 1);
+  }} />;
 
 
   return (
@@ -86,7 +148,7 @@ const DriverDashboard: React.FC = () => {
             text={activeShift ? "End Shift" : "Start New Shift"}
             onClick={() => {
               if (activeShift) {
-                alert("Ending shift is not implemented yet.");
+                setShowEndShift(true);
               } else {
                 setShowStartShift(true);
               }
@@ -122,6 +184,8 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
     const [scannedVehicle, setScannedVehicle] = useState<Vehicle | null>(null);
     const [startValue, setStartValue] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
+    const [lastShiftEndOdometer, setLastShiftEndOdometer] = useState<number | null>(null);
+    const [validationMessage, setValidationMessage] = useState('');
     const scannerRef = useRef<any>(null);
 
     useEffect(() => {
@@ -132,36 +196,110 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
             return;
         }
 
-        const Html5Qrcode = (window as any).Html5Qrcode;
-        if (!Html5Qrcode) {
-            console.error("Html5Qrcode library not loaded.");
-            setErrorMessage("QR Code scanner library failed to load.");
-            setStep('error');
-            return;
-        }
+        const loadScript = (src: string): Promise<void> => {
+            return new Promise((resolve, reject) => {
+                if (document.querySelector(`script[src="${src}"]`)) {
+                    resolve();
+                    return;
+                }
 
-        const html5QrCode = new Html5Qrcode("qr-reader");
-        scannerRef.current = html5QrCode;
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = () => resolve();
+                script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+                document.head.appendChild(script);
+            });
+        };
 
-        const qrCodeSuccessCallback = (decodedText: string) => {
-            const foundVehicle = vehicles.find(v => v.id === decodedText);
-            if (foundVehicle) {
-                setScannedVehicle(foundVehicle);
-                setStep('confirm');
-                setErrorMessage('');
-            } else {
-                setErrorMessage(`Vehicle with ID "${decodedText}" not found. Please scan a valid QR code.`);
+        const initializeQRScanner = async () => {
+            try {
+                // Load Html5Qrcode library from CDN (more reliable)
+                await loadScript('https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js');
+
+                // Wait a bit for the library to initialize
+                await new Promise(resolve => setTimeout(resolve, 200));
+
+                const Html5Qrcode = (window as any).Html5Qrcode;
+                if (!Html5Qrcode) {
+                    throw new Error("Html5Qrcode library not available after loading");
+                }
+
+                console.log("Html5Qrcode library loaded successfully from CDN");
+
+                // Wait a bit for DOM to be ready and check if element exists
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                const qrContainer = document.getElementById('qr-reader');
+                if (!qrContainer) {
+                    throw new Error("QR scanner container element not found in DOM");
+                }
+
+                const html5QrCode = new Html5Qrcode("qr-reader");
+                scannerRef.current = html5QrCode;
+
+                const qrCodeSuccessCallback = (decodedText: string) => {
+                    console.log("QR code scanned:", decodedText);
+
+                    // Stop the scanner first to prevent multiple scans
+                    if (scannerRef.current && scannerRef.current.isScanning) {
+                        scannerRef.current.stop().catch((err: any) => console.error("Failed to stop scanner", err));
+                    }
+
+                    const foundVehicle = vehicles.find(v => v.id === decodedText);
+                    if (foundVehicle) {
+                        // Batch state updates
+                        setTimeout(async () => {
+                            setScannedVehicle(foundVehicle);
+                            setErrorMessage('');
+
+                            // Get last completed shift for this vehicle
+                            try {
+                                const lastShift = await api.getLastCompletedShift(foundVehicle.id);
+                                if (lastShift && lastShift.endOdometer && foundVehicle.vehicleType === VehicleType.ICE) {
+                                    setLastShiftEndOdometer(lastShift.endOdometer);
+                                    setValidationMessage(`Last shift ended at ${lastShift.endOdometer.toLocaleString()} km`);
+                                } else {
+                                    setLastShiftEndOdometer(null);
+                                    setValidationMessage('');
+                                }
+                            } catch (error) {
+                                console.error("Failed to get last shift:", error);
+                                setLastShiftEndOdometer(null);
+                                setValidationMessage('');
+                            }
+
+                            setStep('confirm');
+                        }, 100);
+                    } else {
+                        setTimeout(() => {
+                            setErrorMessage(`Vehicle with ID "${decodedText}" not found. Please scan a valid QR code.`);
+                            setStep('error');
+                        }, 100);
+                    }
+                };
+
+                const config = { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 };
+
+                await html5QrCode.start({ facingMode: "environment" }, config, qrCodeSuccessCallback, undefined);
+
+            } catch (err: any) {
+                console.error("QR Scanner initialization error:", err);
+                const errorMsg = err?.message || err?.toString() || "Unknown error";
+
+                if (errorMsg.includes("NotAllowedError") || errorMsg.includes("permission")) {
+                    setErrorMessage("Camera permission denied. Please allow camera access and try again.");
+                } else if (errorMsg.includes("script") || errorMsg.includes("library")) {
+                    setErrorMessage("Failed to load QR scanner. Please refresh the page and try again.");
+                } else if (errorMsg.includes("qr-reader") || errorMsg.includes("not found")) {
+                    setErrorMessage("QR scanner setup failed. Please try again.");
+                } else {
+                    setErrorMessage("Could not start camera. Please ensure permissions are granted and try again.");
+                }
                 setStep('error');
             }
         };
 
-        const config = { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 };
-
-        html5QrCode.start({ facingMode: "environment" }, config, qrCodeSuccessCallback, undefined)
-            .catch((err: any) => {
-                setErrorMessage("Could not start camera. Please ensure permissions are granted.");
-                setStep('error');
-            });
+        initializeQRScanner();
 
         return () => {
             if (scannerRef.current && scannerRef.current.isScanning) {
@@ -172,9 +310,28 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!scannedVehicle || !startValue) return;
+        console.log("Form submitted with:", { scannedVehicle: scannedVehicle?.id, startValue });
+
+        if (!scannedVehicle || !startValue) {
+            console.log("Missing data - vehicle or start value");
+            return;
+        }
+
+        // Final validation for ICE vehicles
+        if (scannedVehicle.vehicleType === VehicleType.ICE && lastShiftEndOdometer !== null) {
+            const enteredOdometer = parseInt(startValue, 10);
+            const difference = Math.abs(enteredOdometer - lastShiftEndOdometer);
+
+            if (difference > 5) {
+                const confirmed = confirm(`The odometer reading (${enteredOdometer.toLocaleString()} km) differs by ${difference} km from the last shift end (${lastShiftEndOdometer.toLocaleString()} km). Do you want to continue anyway?`);
+                if (!confirmed) {
+                    return;
+                }
+            }
+        }
+
         setStep('submitting');
-        
+
         const startData = {
             driverId: currentUser.id,
             vehicleId: scannedVehicle.id,
@@ -182,10 +339,14 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
             startChargePercent: scannedVehicle.vehicleType === VehicleType.EV ? parseInt(startValue, 10) : undefined
         };
 
+        console.log("Starting shift with data:", startData);
+
         try {
             await api.startShift(startData);
+            console.log("Shift started successfully");
             onShiftStarted();
         } catch(err: any) {
+            console.error("Shift start failed:", err);
             setErrorMessage(err.message || "Failed to start shift.");
             setStep('error');
         }
@@ -218,15 +379,49 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
                                 type="number"
                                 id="startValue"
                                 value={startValue}
-                                onChange={e => setStartValue(e.target.value)}
+                                onChange={e => {
+                                    console.log("Input changed to:", e.target.value);
+                                    const value = e.target.value;
+                                    setStartValue(value);
+
+                                    // Validate odometer against last shift for ICE vehicles
+                                    if (scannedVehicle?.vehicleType === VehicleType.ICE && lastShiftEndOdometer !== null && value) {
+                                        const enteredOdometer = parseInt(value, 10);
+                                        const difference = Math.abs(enteredOdometer - lastShiftEndOdometer);
+
+                                        if (difference > 5) {
+                                            if (enteredOdometer < lastShiftEndOdometer) {
+                                                setValidationMessage(`⚠️ Odometer reading (${enteredOdometer.toLocaleString()} km) is ${difference} km less than last shift end (${lastShiftEndOdometer.toLocaleString()} km). This seems incorrect.`);
+                                            } else {
+                                                setValidationMessage(`⚠️ Odometer reading (${enteredOdometer.toLocaleString()} km) is ${difference} km more than last shift end (${lastShiftEndOdometer.toLocaleString()} km). Please verify this is correct.`);
+                                            }
+                                        } else {
+                                            setValidationMessage(`✅ Odometer reading looks correct (difference: ${difference} km)`);
+                                        }
+                                    }
+                                }}
                                 placeholder={isEV ? 'e.g., 95' : `e.g., ${scannedVehicle.currentOdometer}`}
                                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                                 required
                             />
+                            {validationMessage && (
+                                <div className={`mt-2 p-2 rounded-md text-sm ${
+                                    validationMessage.includes('✅')
+                                        ? 'bg-green-50 text-green-800 border border-green-200'
+                                        : 'bg-yellow-50 text-yellow-800 border border-yellow-200'
+                                }`}>
+                                    {validationMessage}
+                                </div>
+                            )}
                         </div>
                         <div className="mt-8 flex justify-between items-center gap-4">
                             <button type="button" onClick={() => setStep('scan')} className="w-full bg-gray-200 text-gray-800 font-bold py-3 px-4 rounded-lg hover:bg-gray-300 transition">Scan Again</button>
-                            <button type="submit" className="w-full bg-blue-500 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-600 transition disabled:bg-gray-400" disabled={!startValue}>
+                            <button
+                                type="submit"
+                                className={`w-full font-bold py-3 px-4 rounded-lg transition ${!startValue ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600'} text-white`}
+                                disabled={!startValue}
+                                onClick={() => console.log("Button clicked, startValue:", startValue)}
+                            >
                                 <Check className="inline h-5 w-5 mr-2"/>
                                 Start Shift
                             </button>
@@ -257,6 +452,115 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
                  <div className="text-center mt-4">
                     <button onClick={onBack} className="text-gray-600 hover:text-gray-800 font-semibold">Cancel</button>
                  </div>
+            </main>
+        </div>
+    );
+}
+
+const EndShiftFlow = ({ onBack, onShiftEnded, activeShift, activeVehicle, currentUser }: {
+    onBack: () => void;
+    onShiftEnded: () => void;
+    activeShift: Shift | null;
+    activeVehicle: Vehicle | undefined;
+    currentUser: User
+}) => {
+    const [endValue, setEndValue] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [errorMessage, setErrorMessage] = useState('');
+
+    if (!activeShift || !activeVehicle) {
+        return (
+            <div className="min-h-screen bg-gray-100">
+                <Header title="End Shift" />
+                <main className="max-w-md mx-auto p-6">
+                    <Card>
+                        <div className="text-center">
+                            <XCircle className="mx-auto h-16 w-16 text-red-500 mb-4" />
+                            <h3 className="text-xl font-semibold text-gray-800">Error</h3>
+                            <p className="text-red-600 mt-2">No active shift found.</p>
+                            <button onClick={onBack} className="mt-6 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">Back to Dashboard</button>
+                        </div>
+                    </Card>
+                </main>
+            </div>
+        );
+    }
+
+    const isEV = activeVehicle.vehicleType === VehicleType.EV;
+    const startValue = isEV ? activeShift.startChargePercent : activeShift.startOdometer;
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!endValue) return;
+
+        setIsSubmitting(true);
+        setErrorMessage('');
+
+        const endData = {
+            driverId: currentUser.id,
+            endOdometer: isEV ? undefined : parseInt(endValue, 10),
+            endChargePercent: isEV ? parseInt(endValue, 10) : undefined
+        };
+
+        try {
+            await api.endShift(endData);
+            onShiftEnded();
+        } catch(err: any) {
+            setErrorMessage(err.message || "Failed to end shift.");
+            setIsSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="min-h-screen bg-gray-100">
+            <Header title="End Shift" />
+            <main className="max-w-md mx-auto p-6">
+                <Card>
+                    <form onSubmit={handleSubmit}>
+                        <div className="text-center">
+                            <Car className="mx-auto h-12 w-12 text-red-500" />
+                            <h3 className="text-2xl font-bold mt-2">{activeVehicle.make} {activeVehicle.model}</h3>
+                            <p className="text-lg text-gray-600 font-medium">{activeVehicle.registration}</p>
+                        </div>
+
+                        <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                            <h4 className="font-semibold text-gray-800 mb-2">Shift Summary</h4>
+                            <div className="space-y-1 text-sm">
+                                <p><span className="text-gray-600">Started:</span> {activeShift.startTime.toLocaleString()}</p>
+                                <p><span className="text-gray-600">{isEV ? 'Start Charge:' : 'Start Odometer:'}</span> {startValue}{isEV ? '%' : ' km'}</p>
+                            </div>
+                        </div>
+
+                        <div className="mt-6">
+                            <label htmlFor="endValue" className="block text-sm font-medium text-gray-700">
+                                {isEV ? 'Ending Charge (%)' : 'Ending Odometer (km)'}
+                            </label>
+                            <input
+                                type="number"
+                                id="endValue"
+                                value={endValue}
+                                onChange={e => setEndValue(e.target.value)}
+                                placeholder={isEV ? 'e.g., 45' : 'e.g., 45750'}
+                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm"
+                                required
+                            />
+                        </div>
+
+                        {errorMessage && (
+                            <div className="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                                {errorMessage}
+                            </div>
+                        )}
+
+                        <div className="mt-8 flex justify-between items-center gap-4">
+                            <button type="button" onClick={onBack} className="w-full bg-gray-200 text-gray-800 font-bold py-3 px-4 rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                            <button type="submit" className="w-full bg-red-500 text-white font-bold py-3 px-4 rounded-lg hover:bg-red-600 transition disabled:bg-gray-400" disabled={!endValue || isSubmitting}>
+                                <Check className="inline h-5 w-5 mr-2"/>
+                                {isSubmitting ? 'Ending Shift...' : 'End Shift'}
+                            </button>
+                        </div>
+                    </form>
+                </Card>
             </main>
         </div>
     );
