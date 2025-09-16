@@ -125,7 +125,7 @@ const CriticalDefects: React.FC = () => {
               <p className="font-semibold">{defect.description}</p>
               <span className={`px-2 py-1 text-xs font-semibold rounded-full ${urgencyColor[defect.urgency]}`}>{defect.urgency}</span>
             </div>
-            <p className="text-sm text-gray-500 mt-1">Vehicle: {defect.vehicleId} | Reported: {defect.dateTime.toLocaleDateString()}</p>
+            <p className="text-sm text-gray-500 mt-1">Vehicle: {defect.vehicleId} | Reported: {defect.reportedDateTime.toLocaleDateString()}</p>
           </div>
         )) : <p className="text-gray-500">No high or critical defects reported.</p>}
       </div>

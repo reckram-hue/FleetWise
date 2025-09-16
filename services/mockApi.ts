@@ -8,6 +8,8 @@ import {
   ShiftStatus,
   DefectReport,
   DefectUrgency,
+  DefectCategory,
+  DefectStatus,
   Cost,
   CostCategory,
   LeaderboardEntry,
@@ -18,7 +20,9 @@ import {
   FineType,
   DamageType,
   IncidentSeverity,
-  DriverIncidentSummary
+  DriverIncidentSummary,
+  RefuelRecord,
+  ChargeRecord
 } from '../types';
 
 // FIX: Export mockUsers to be used in the login screen.
@@ -39,81 +43,243 @@ let mockMaintenanceRecords: MaintenanceRecord[] = [
 ];
 
 export let mockVehicles: Vehicle[] = [
-    { 
-        id: 'v1', 
-        registration: 'CA 123-456', 
-        make: 'Toyota', 
-        model: 'Hilux', 
-        vehicleType: VehicleType.ICE, 
-        currentOdometer: 45600, 
-        serviceIntervalKm: 10000, 
-        lastServiceOdometer: 45100, 
-        maintenanceHistory: mockMaintenanceRecords.filter(r => r.vehicleId === 'v1'), 
+    {
+        id: 'v1',
+        registration: 'CA 123-456',
+        make: 'Toyota',
+        model: 'Hilux',
+        vehicleType: VehicleType.ICE,
+        baselineFuelConsumption: 11.5, // L/100km - Toyota Hilux baseline
+        currentOdometer: 45600,
+        serviceIntervalKm: 10000,
+        lastServiceOdometer: 45100,
+        maintenanceHistory: mockMaintenanceRecords.filter(r => r.vehicleId === 'v1'),
         financeCompany: 'WesBank',
         financeAccountNumber: 'WB1234567',
-        financeCost: 7500.00, 
-        financeEndDate: '2026-08-31', 
+        financeCost: 7500.00,
+        financeEndDate: '2026-08-31',
         balloonPayment: 80000.00,
         insuranceCompany: 'Santam',
         insurancePolicyNumber: 'POL9876543',
-        insuranceFee: 1500.00, 
+        insuranceFee: 1500.00,
         trackingCompany: 'Tracker',
         trackingAccountNumber: 'TRK555123',
-        trackingFee: 250.00, 
+        trackingFee: 250.00,
     },
-    { 
-        id: 'v2', 
-        registration: 'GP 789-XYZ', 
-        make: 'Ford', 
-        model: 'Ranger', 
-        vehicleType: VehicleType.ICE, 
-        currentOdometer: 73500, 
-        serviceIntervalKm: 15000, 
-        lastServiceOdometer: 72300, 
-        maintenanceHistory: mockMaintenanceRecords.filter(r => r.vehicleId === 'v2'), 
+    {
+        id: 'v2',
+        registration: 'GP 789-XYZ',
+        make: 'Ford',
+        model: 'Ranger',
+        vehicleType: VehicleType.ICE,
+        baselineFuelConsumption: 12.8, // L/100km - Ford Ranger baseline (higher consumption)
+        currentOdometer: 73500,
+        serviceIntervalKm: 15000,
+        lastServiceOdometer: 72300,
+        maintenanceHistory: mockMaintenanceRecords.filter(r => r.vehicleId === 'v2'),
         financeCompany: 'MFC',
         financeAccountNumber: 'MFC-987654',
-        financeCost: 8200.00, 
-        financeEndDate: '2025-11-30', 
+        financeCost: 8200.00,
+        financeEndDate: '2025-11-30',
         balloonPayment: 95000.00,
         insuranceCompany: 'OUTsurance',
         insurancePolicyNumber: 'OUT-112233',
-        insuranceFee: 1800.00, 
+        insuranceFee: 1800.00,
         trackingCompany: 'Netstar',
         trackingAccountNumber: 'NET-445566',
-        trackingFee: 300.00, 
+        trackingFee: 300.00,
     },
-    { 
-        id: 'v6', 
-        registration: 'NC 321-654', 
-        make: 'Kia', 
-        model: 'Sonet', 
-        vehicleType: VehicleType.ICE, 
-        currentOdometer: 14500, 
-        serviceIntervalKm: 15000, 
+    {
+        id: 'v6',
+        registration: 'NC 321-654',
+        make: 'Kia',
+        model: 'Sonet',
+        vehicleType: VehicleType.ICE,
+        baselineFuelConsumption: 7.2, // L/100km - Kia Sonet baseline (more economical)
+        currentOdometer: 14500,
+        serviceIntervalKm: 15000,
         lastServiceOdometer: 0,
         freeServicesUntilKm: 45000,
-        maintenanceHistory: [] 
+        maintenanceHistory: []
     },
-    { id: 'v3', registration: 'EC 456-789', make: 'Hyundai', model: 'Kona EV', vehicleType: VehicleType.EV, batteryCapacityKwh: 64, currentOdometer: 32000, maintenanceHistory: [] },
-    { id: 'v4', registration: 'KZN 987-654', make: 'Isuzu', model: 'D-Max', vehicleType: VehicleType.ICE, currentOdometer: 98000, serviceIntervalKm: 10000, lastServiceOdometer: 95000, maintenanceHistory: mockMaintenanceRecords.filter(r => r.vehicleId === 'v4') },
-    { id: 'v5', registration: 'WP 111-222', make: 'VW', model: 'ID.4', vehicleType: VehicleType.EV, batteryCapacityKwh: 77, currentOdometer: 15000, maintenanceHistory: [] },
+    {
+        id: 'v3',
+        registration: 'EC 456-789',
+        make: 'Hyundai',
+        model: 'Kona EV',
+        vehicleType: VehicleType.EV,
+        batteryCapacityKwh: 64,
+        baselineEnergyConsumption: 16.8, // kWh/100km - Hyundai Kona EV baseline
+        currentOdometer: 32000,
+        maintenanceHistory: []
+    },
+    {
+        id: 'v4',
+        registration: 'KZN 987-654',
+        make: 'Isuzu',
+        model: 'D-Max',
+        vehicleType: VehicleType.ICE,
+        baselineFuelConsumption: 13.5, // L/100km - Isuzu D-Max baseline (highest consumption)
+        currentOdometer: 98000,
+        serviceIntervalKm: 10000,
+        lastServiceOdometer: 95000,
+        maintenanceHistory: mockMaintenanceRecords.filter(r => r.vehicleId === 'v4')
+    },
+    {
+        id: 'v5',
+        registration: 'WP 111-222',
+        make: 'VW',
+        model: 'ID.4',
+        vehicleType: VehicleType.EV,
+        batteryCapacityKwh: 77,
+        baselineEnergyConsumption: 19.2, // kWh/100km - VW ID.4 baseline (larger EV, higher consumption)
+        currentOdometer: 15000,
+        maintenanceHistory: []
+    },
 ];
 
 const mockShifts: Shift[] = [
     { id: 's1', driverId: 'driver1', vehicleId: 'v1', startTime: new Date(new Date().setHours(new Date().getHours() - 4)), startOdometer: 45450, status: ShiftStatus.Active },
     { id: 's2', driverId: 'driver2', vehicleId: 'v3', startTime: new Date(new Date().setDate(new Date().getDate() - 1)), endTime: new Date(new Date().setDate(new Date().getDate() - 1)), startOdometer: 31800, endOdometer: 32000, startChargePercent: 95, endChargePercent: 40, status: ShiftStatus.Completed },
     { id: 's3', driverId: 'driver3', vehicleId: 'v2', startTime: new Date(new Date().setDate(new Date().getDate() - 2)), endTime: new Date(new Date().setDate(new Date().getDate() - 2)), startOdometer: 73000, endOdometer: 73250, status: ShiftStatus.Completed },
+    { id: 's4', driverId: 'driver1', vehicleId: 'v1', startTime: new Date(new Date().setDate(new Date().getDate() - 3)), endTime: new Date(new Date().setDate(new Date().getDate() - 3)), startOdometer: 45200, endOdometer: 45400, status: ShiftStatus.Completed },
+    { id: 's5', driverId: 'driver2', vehicleId: 'v5', startTime: new Date(new Date().setDate(new Date().getDate() - 4)), endTime: new Date(new Date().setDate(new Date().getDate() - 4)), startOdometer: 14800, endOdometer: 15000, startChargePercent: 80, endChargePercent: 45, status: ShiftStatus.Completed },
+    { id: 's6', driverId: 'driver3', vehicleId: 'v4', startTime: new Date(new Date().setDate(new Date().getDate() - 5)), endTime: new Date(new Date().setDate(new Date().getDate() - 5)), startOdometer: 97800, endOdometer: 98000, status: ShiftStatus.Completed },
+    { id: 's7', driverId: 'driver4', vehicleId: 'v2', startTime: new Date(new Date().setDate(new Date().getDate() - 6)), endTime: new Date(new Date().setDate(new Date().getDate() - 6)), startOdometer: 72800, endOdometer: 73000, status: ShiftStatus.Completed },
+    // Additional shifts for John Doe (driver1) in EV vehicles
+    { id: 's8', driverId: 'driver1', vehicleId: 'v3', startTime: new Date(new Date().setDate(new Date().getDate() - 7)), endTime: new Date(new Date().setDate(new Date().getDate() - 7)), startOdometer: 31500, endOdometer: 31700, startChargePercent: 90, endChargePercent: 65, status: ShiftStatus.Completed },
+    { id: 's9', driverId: 'driver1', vehicleId: 'v5', startTime: new Date(new Date().setDate(new Date().getDate() - 8)), endTime: new Date(new Date().setDate(new Date().getDate() - 8)), startOdometer: 14400, endOdometer: 14650, startChargePercent: 85, endChargePercent: 50, status: ShiftStatus.Completed },
+    { id: 's10', driverId: 'driver1', vehicleId: 'v3', startTime: new Date(new Date().setDate(new Date().getDate() - 10)), endTime: new Date(new Date().setDate(new Date().getDate() - 10)), startOdometer: 31200, endOdometer: 31450, startChargePercent: 80, endChargePercent: 40, status: ShiftStatus.Completed },
+    { id: 's11', driverId: 'driver1', vehicleId: 'v1', startTime: new Date(new Date().setDate(new Date().getDate() - 12)), endTime: new Date(new Date().setDate(new Date().getDate() - 12)), startOdometer: 44950, endOdometer: 45150, status: ShiftStatus.Completed },
 ];
 
-const mockDefects: DefectReport[] = [
-    { id: 'd1', vehicleId: 'v2', driverId: 'driver3', dateTime: new Date(new Date().setDate(new Date().getDate() - 1)), description: 'Brakes feel spongy', urgency: DefectUrgency.High, isResolved: false },
-    { id: 'd2', vehicleId: 'v1', driverId: 'driver1', dateTime: new Date(new Date().setDate(new Date().getDate() - 5)), description: 'Engine warning light on', urgency: DefectUrgency.Critical, isResolved: false },
-    { id: 'd3', vehicleId: 'v3', driverId: 'driver2', dateTime: new Date(new Date().setDate(new Date().getDate() - 10)), description: 'Cracked windscreen', urgency: DefectUrgency.Medium, isResolved: false },
-    { id: 'd4', vehicleId: 'v4', driverId: 'driver4', dateTime: new Date(new Date().setDate(new Date().getDate() - 3)), description: 'Left headlight bulb out', urgency: DefectUrgency.Low, isResolved: true },
-    { id: 'd5', vehicleId: 'v1', driverId: 'driver1', dateTime: new Date(new Date().setDate(new Date().getDate() - 2)), description: 'Check engine light flashing intermittently', urgency: DefectUrgency.High, isResolved: false },
-    { id: 'd6', vehicleId: 'v2', driverId: 'driver3', dateTime: new Date(new Date().setDate(new Date().getDate() - 4)), description: 'Tire pressure sensor fault', urgency: DefectUrgency.Medium, isResolved: false },
-    { id: 'd7', vehicleId: 'v3', driverId: 'driver2', dateTime: new Date(new Date().setDate(new Date().getDate() - 1)), description: 'Charging port cover loose', urgency: DefectUrgency.Low, isResolved: false },
+let mockRefuelRecords: RefuelRecord[] = [
+    { id: 'r1', vehicleId: 'v1', driverId: 'driver1', shiftId: 's4', date: new Date(new Date().setDate(new Date().getDate() - 3)), odometer: 45300, litresFilled: 45, fuelCost: 850, notes: 'Mid-shift refuel' },
+    { id: 'r2', vehicleId: 'v2', driverId: 'driver3', shiftId: 's3', date: new Date(new Date().setDate(new Date().getDate() - 2)), odometer: 73150, litresFilled: 40, fuelCost: 760, notes: 'Mid-shift refuel' },
+    { id: 'r3', vehicleId: 'v4', driverId: 'driver3', shiftId: 's6', date: new Date(new Date().setDate(new Date().getDate() - 5)), odometer: 97900, litresFilled: 50, fuelCost: 950, oilCost: 120, notes: 'Full tank + oil change' },
+    { id: 'r4', vehicleId: 'v1', driverId: 'driver4', date: new Date(new Date().setDate(new Date().getDate() - 7)), odometer: 45100, litresFilled: 48, fuelCost: 912, notes: 'End of shift refuel' },
+    { id: 'r5', vehicleId: 'v2', driverId: 'driver4', shiftId: 's7', date: new Date(new Date().setDate(new Date().getDate() - 6)), odometer: 72950, litresFilled: 35, fuelCost: 665, notes: 'Mid-shift refuel' },
+    // Additional refuel records for John Doe (driver1)
+    { id: 'r6', vehicleId: 'v1', driverId: 'driver1', shiftId: 's11', date: new Date(new Date().setDate(new Date().getDate() - 12)), odometer: 45050, litresFilled: 42, fuelCost: 798, notes: 'Pre-shift refuel' },
+    { id: 'r7', vehicleId: 'v1', driverId: 'driver1', date: new Date(new Date().setDate(new Date().getDate() - 14)), odometer: 44800, litresFilled: 40, fuelCost: 760, notes: 'End of shift refuel' },
+];
+
+let mockChargeRecords: ChargeRecord[] = [
+    { id: 'c1', vehicleId: 'v3', driverId: 'driver2', shiftId: 's2', date: new Date(new Date().setDate(new Date().getDate() - 1)), odometer: 31900, kwhAdded: 35, chargeCost: 150, startChargePercent: 60, endChargePercent: 95, notes: 'Mid-shift fast charge' },
+    { id: 'c2', vehicleId: 'v5', driverId: 'driver2', shiftId: 's5', date: new Date(new Date().setDate(new Date().getDate() - 4)), odometer: 14900, kwhAdded: 25, chargeCost: 120, startChargePercent: 50, endChargePercent: 80, notes: 'Mid-shift charge' },
+    { id: 'c3', vehicleId: 'v3', driverId: 'driver1', date: new Date(new Date().setDate(new Date().getDate() - 8)), odometer: 31600, kwhAdded: 40, chargeCost: 180, startChargePercent: 25, endChargePercent: 90, notes: 'Overnight charge' },
+    { id: 'c4', vehicleId: 'v5', driverId: 'driver3', date: new Date(new Date().setDate(new Date().getDate() - 9)), odometer: 14600, kwhAdded: 45, chargeCost: 200, startChargePercent: 20, endChargePercent: 85, notes: 'Full charge session' },
+    // Additional charge records for John Doe (driver1) EV shifts
+    { id: 'c5', vehicleId: 'v3', driverId: 'driver1', shiftId: 's8', date: new Date(new Date().setDate(new Date().getDate() - 7)), odometer: 31600, kwhAdded: 20, chargeCost: 95, startChargePercent: 70, endChargePercent: 90, notes: 'Pre-shift top-up charge' },
+    { id: 'c6', vehicleId: 'v5', driverId: 'driver1', shiftId: 's9', date: new Date(new Date().setDate(new Date().getDate() - 8)), odometer: 14500, kwhAdded: 28, chargeCost: 130, startChargePercent: 55, endChargePercent: 85, notes: 'Mid-shift charge' },
+    { id: 'c7', vehicleId: 'v3', driverId: 'driver1', shiftId: 's10', date: new Date(new Date().setDate(new Date().getDate() - 10)), odometer: 31300, kwhAdded: 30, chargeCost: 140, startChargePercent: 50, endChargePercent: 80, notes: 'Mid-shift DC fast charge' },
+    { id: 'c8', vehicleId: 'v3', driverId: 'driver1', date: new Date(new Date().setDate(new Date().getDate() - 11)), odometer: 31100, kwhAdded: 35, chargeCost: 160, startChargePercent: 30, endChargePercent: 85, notes: 'End of shift charge' },
+];
+
+let mockDefects: DefectReport[] = [
+    {
+        id: 'd1',
+        vehicleId: 'v2',
+        driverId: 'driver3',
+        reportedDateTime: new Date(new Date().setDate(new Date().getDate() - 5)),
+        category: DefectCategory.Brakes,
+        description: 'Brakes feel spongy when pressed, requires more pressure than usual',
+        urgency: DefectUrgency.High,
+        status: DefectStatus.Acknowledged,
+        location: 'Brake pedal/system',
+        acknowledgedBy: 'admin1',
+        acknowledgedDateTime: new Date(new Date().setDate(new Date().getDate() - 4)),
+        estimatedCost: 2500,
+        isVisibleToDriver: true
+    },
+    {
+        id: 'd2',
+        vehicleId: 'v1',
+        driverId: 'driver1',
+        reportedDateTime: new Date(new Date().setDate(new Date().getDate() - 8)),
+        category: DefectCategory.Engine,
+        description: 'Engine warning light constantly on, engine runs rough on startup',
+        urgency: DefectUrgency.Critical,
+        status: DefectStatus.InProgress,
+        location: 'Dashboard warning light',
+        acknowledgedBy: 'admin1',
+        acknowledgedDateTime: new Date(new Date().setDate(new Date().getDate() - 7)),
+        assignedTo: 'Main Street Motors',
+        estimatedCost: 3500,
+        actualCost: 3200,
+        isVisibleToDriver: true
+    },
+    {
+        id: 'd3',
+        vehicleId: 'v3',
+        driverId: 'driver2',
+        reportedDateTime: new Date(new Date().setDate(new Date().getDate() - 15)),
+        category: DefectCategory.Exterior,
+        description: 'Small chip in windscreen on passenger side, approximately 2cm',
+        urgency: DefectUrgency.Medium,
+        status: DefectStatus.Open,
+        location: 'Front windscreen - passenger side',
+        notes: 'Chip present when vehicle was collected',
+        isVisibleToDriver: true
+    },
+    {
+        id: 'd4',
+        vehicleId: 'v4',
+        driverId: 'driver4',
+        reportedDateTime: new Date(new Date().setDate(new Date().getDate() - 10)),
+        category: DefectCategory.Electrical,
+        description: 'Left headlight bulb completely out',
+        urgency: DefectUrgency.Low,
+        status: DefectStatus.Resolved,
+        location: 'Front left headlight',
+        acknowledgedBy: 'admin1',
+        acknowledgedDateTime: new Date(new Date().setDate(new Date().getDate() - 9)),
+        resolvedBy: 'admin1',
+        resolvedDateTime: new Date(new Date().setDate(new Date().getDate() - 3)),
+        actualCost: 45,
+        isVisibleToDriver: false
+    },
+    {
+        id: 'd5',
+        vehicleId: 'v1',
+        driverId: 'driver1',
+        reportedDateTime: new Date(new Date().setDate(new Date().getDate() - 2)),
+        category: DefectCategory.Engine,
+        description: 'Check engine light flashing intermittently during acceleration',
+        urgency: DefectUrgency.High,
+        status: DefectStatus.Duplicate,
+        location: 'Dashboard warning light',
+        duplicateOf: 'd2',
+        notes: 'Duplicate of existing engine issue - same vehicle, same problem',
+        isVisibleToDriver: false
+    },
+    {
+        id: 'd6',
+        vehicleId: 'v2',
+        driverId: 'driver3',
+        reportedDateTime: new Date(new Date().setDate(new Date().getDate() - 6)),
+        category: DefectCategory.Tires,
+        description: 'Tire pressure sensor warning showing constantly',
+        urgency: DefectUrgency.Medium,
+        status: DefectStatus.Open,
+        location: 'Front right tire sensor',
+        isVisibleToDriver: true
+    },
+    {
+        id: 'd7',
+        vehicleId: 'v3',
+        driverId: 'driver2',
+        reportedDateTime: new Date(new Date().setDate(new Date().getDate() - 3)),
+        category: DefectCategory.Electrical,
+        description: 'Charging port cover is loose and wobbly',
+        urgency: DefectUrgency.Low,
+        status: DefectStatus.Acknowledged,
+        location: 'Rear charging port',
+        acknowledgedBy: 'admin1',
+        acknowledgedDateTime: new Date(new Date().setDate(new Date().getDate() - 2)),
+        estimatedCost: 150,
+        isVisibleToDriver: true
+    }
 ];
 
 let mockCosts: Cost[] = [
@@ -125,12 +291,7 @@ let mockCosts: Cost[] = [
     { id: 'c6', vehicleId: 'v3', date: new Date(new Date().setDate(new Date().getDate() - 15)), cost: 200, category: CostCategory.Fuel, description: 'Overnight charge' },
 ];
 
-const mockLeaderboard: LeaderboardEntry[] = [
-    { driver: mockUsers[2], totalKmDriven: 12540, averageKmPerKwh: 5.8 },
-    { driver: mockUsers[1], totalKmDriven: 11230, averageKmL: 9.2 },
-    { driver: mockUsers[3], totalKmDriven: 9870, averageKmL: 8.5 },
-    { driver: mockUsers[4], totalKmDriven: 8500, averageKmL: 10.1 },
-];
+// Remove the static mockLeaderboard - we'll calculate it dynamically
 
 let mockDriverFines: DriverFine[] = [
     {
@@ -147,6 +308,22 @@ let mockDriverFines: DriverFine[] = [
         dueDate: '2024-12-15',
         isPaid: false,
         notes: 'Driver claims speedometer was faulty'
+    },
+    {
+        id: 'f5',
+        driverId: 'driver1',
+        vehicleId: 'v3',
+        date: '2024-10-20',
+        fineType: FineType.IllegalParking,
+        amount: 500,
+        description: 'Parking in loading zone',
+        fineNumber: 'PK888999000',
+        location: 'Cape Town CBD',
+        issuingAuthority: 'City of Cape Town',
+        dueDate: '2024-11-20',
+        isPaid: true,
+        paidDate: '2024-11-10',
+        notes: 'Paid promptly'
     },
     {
         id: 'f2',
@@ -210,6 +387,22 @@ let mockVehicleDamages: VehicleDamage[] = [
         repairedDate: '2024-11-18',
         insuranceClaim: false,
         notes: 'Driver scraped against concrete pillar in parking garage'
+    },
+    {
+        id: 'd5',
+        vehicleId: 'v3',
+        driverId: 'driver1',
+        date: '2024-09-20',
+        damageType: DamageType.Scratches,
+        severity: IncidentSeverity.Minor,
+        estimatedCost: 1800,
+        actualCost: 1650,
+        description: 'Minor scratches on front bumper',
+        location: 'Front bumper',
+        isRepaired: true,
+        repairedDate: '2024-09-25',
+        insuranceClaim: false,
+        notes: 'Minor parking incident, driver took responsibility'
     },
     {
         id: 'd2',
@@ -357,7 +550,86 @@ const api = {
     },
     getActiveDefects: async (): Promise<DefectReport[]> => {
         await new Promise(res => setTimeout(res, 500));
-        return mockDefects.filter(d => !d.isResolved);
+        return mockDefects.filter(d => d.status !== DefectStatus.Resolved && d.isVisibleToDriver);
+    },
+
+    // Get defects for a specific vehicle (visible to drivers)
+    getVehicleDefects: async (vehicleId: string): Promise<DefectReport[]> => {
+        await new Promise(res => setTimeout(res, 300));
+        return mockDefects
+            .filter(d => d.vehicleId === vehicleId && d.isVisibleToDriver)
+            .sort((a, b) => b.reportedDateTime.getTime() - a.reportedDateTime.getTime());
+    },
+
+    // Add new defect with duplicate checking
+    addDefectReport: async (defectData: Omit<DefectReport, 'id' | 'reportedDateTime' | 'status' | 'isVisibleToDriver'>): Promise<DefectReport> => {
+        await new Promise(res => setTimeout(res, 400));
+
+        // Check for potential duplicates
+        const existingDefects = mockDefects.filter(d =>
+            d.vehicleId === defectData.vehicleId &&
+            d.isVisibleToDriver &&
+            d.status !== DefectStatus.Resolved &&
+            d.category === defectData.category
+        );
+
+        // Simple similarity check based on keywords
+        const keywords = defectData.description.toLowerCase().split(' ').filter(word => word.length > 3);
+        const potentialDuplicate = existingDefects.find(existing => {
+            const existingWords = existing.description.toLowerCase().split(' ').filter(word => word.length > 3);
+            const commonWords = keywords.filter(word => existingWords.includes(word));
+            return commonWords.length >= 2; // If 2+ significant words match, might be duplicate
+        });
+
+        const newDefect: DefectReport = {
+            id: `def${mockDefects.length + 1}`,
+            reportedDateTime: new Date(),
+            status: DefectStatus.Open,
+            isVisibleToDriver: true,
+            ...defectData
+        };
+
+        // If potential duplicate found, still add but flag for admin review
+        if (potentialDuplicate) {
+            newDefect.notes = (newDefect.notes || '') +
+                ` [System Note: Potential duplicate of defect ${potentialDuplicate.id}]`;
+        }
+
+        mockDefects.unshift(newDefect);
+        return newDefect;
+    },
+
+    // Check for existing defects when reporting (to warn driver)
+    checkSimilarDefects: async (vehicleId: string, category: DefectCategory, description: string): Promise<DefectReport[]> => {
+        await new Promise(res => setTimeout(res, 200));
+
+        const keywords = description.toLowerCase().split(' ').filter(word => word.length > 3);
+        const existingDefects = mockDefects.filter(d =>
+            d.vehicleId === vehicleId &&
+            d.isVisibleToDriver &&
+            d.status !== DefectStatus.Resolved &&
+            (d.category === category || keywords.some(word => d.description.toLowerCase().includes(word)))
+        );
+
+        return existingDefects
+            .sort((a, b) => b.reportedDateTime.getTime() - a.reportedDateTime.getTime())
+            .slice(0, 3); // Return top 3 most recent similar defects
+    },
+
+    // Get driver's current active vehicle
+    getDriverActiveVehicle: async (driverId: string): Promise<Vehicle | null> => {
+        await new Promise(res => setTimeout(res, 200));
+
+        const activeShift = mockShifts.find(shift =>
+            shift.driverId === driverId &&
+            shift.status === ShiftStatus.Active
+        );
+
+        if (activeShift) {
+            return mockVehicles.find(vehicle => vehicle.id === activeShift.vehicleId) || null;
+        }
+
+        return null;
     },
     getVehicleCosts: async (): Promise<Cost[]> => {
         await new Promise(res => setTimeout(res, 500));
@@ -375,7 +647,237 @@ const api = {
     },
     getLeaderboard: async (): Promise<LeaderboardEntry[]> => {
         await new Promise(res => setTimeout(res, 800));
-        return mockLeaderboard.sort((a,b) => b.totalKmDriven - a.totalKmDriven);
+
+        // Calculate leaderboard dynamically based on actual shift and fuel/charge data
+        const drivers = mockUsers.filter(user => user.role === UserRole.Driver);
+
+        const leaderboardEntries: LeaderboardEntry[] = drivers.map(driver => {
+            // Get all completed shifts for this driver
+            const driverShifts = mockShifts.filter(shift =>
+                shift.driverId === driver.id &&
+                shift.status === ShiftStatus.Completed &&
+                shift.endOdometer !== undefined
+            );
+
+            // Separate ICE and EV shifts
+            const iceShifts = driverShifts.filter(shift => {
+                const vehicle = mockVehicles.find(v => v.id === shift.vehicleId);
+                return vehicle?.vehicleType === VehicleType.ICE;
+            });
+
+            const evShifts = driverShifts.filter(shift => {
+                const vehicle = mockVehicles.find(v => v.id === shift.vehicleId);
+                return vehicle?.vehicleType === VehicleType.EV;
+            });
+
+            // Calculate ICE consumption with mid-shift refueling logic
+            let totalICEKmDriven = 0;
+            let totalFuelConsumed = 0;
+
+            for (const shift of iceShifts) {
+                const kmDriven = (shift.endOdometer || 0) - shift.startOdometer;
+                totalICEKmDriven += kmDriven;
+
+                // Find refuel records for this shift and driver
+                const shiftRefuels = mockRefuelRecords.filter(refuel =>
+                    refuel.driverId === driver.id &&
+                    (refuel.shiftId === shift.id ||
+                     (refuel.date >= shift.startTime &&
+                      refuel.date <= (shift.endTime || new Date()) &&
+                      refuel.vehicleId === shift.vehicleId))
+                );
+
+                if (shiftRefuels.length > 0) {
+                    // Sum up fuel from all refuels during this shift
+                    const fuelForThisShift = shiftRefuels.reduce((sum, refuel) => sum + refuel.litresFilled, 0);
+
+                    // Calculate the proportion of fuel used by this driver
+                    // If there were mid-shift refuels, allocate fuel consumption proportionally
+                    if (shiftRefuels.length === 1 && shiftRefuels[0].shiftId === shift.id) {
+                        // Single refuel for this shift - driver used all of it
+                        totalFuelConsumed += fuelForThisShift;
+                    } else {
+                        // Multiple refuels or refuels shared between shifts - estimate based on km driven
+                        // Use a baseline consumption rate of 12L/100km for estimation
+                        const estimatedConsumption = (kmDriven / 100) * 12;
+                        totalFuelConsumed += Math.min(estimatedConsumption, fuelForThisShift);
+                    }
+                } else {
+                    // No refuel data for this shift - estimate consumption
+                    const estimatedConsumption = (kmDriven / 100) * 12; // 12L/100km baseline
+                    totalFuelConsumed += estimatedConsumption;
+                }
+            }
+
+            // Calculate EV consumption with mid-shift charging logic
+            let totalEVKmDriven = 0;
+            let totalEnergyConsumed = 0;
+
+            for (const shift of evShifts) {
+                const kmDriven = (shift.endOdometer || 0) - shift.startOdometer;
+                totalEVKmDriven += kmDriven;
+
+                const vehicle = mockVehicles.find(v => v.id === shift.vehicleId);
+                if (!vehicle?.batteryCapacityKwh) continue;
+
+                // Find charge records for this shift and driver
+                const shiftCharges = mockChargeRecords.filter(charge =>
+                    charge.driverId === driver.id &&
+                    (charge.shiftId === shift.id ||
+                     (charge.date >= shift.startTime &&
+                      charge.date <= (shift.endTime || new Date()) &&
+                      charge.vehicleId === shift.vehicleId))
+                );
+
+                if (shiftCharges.length > 0) {
+                    // Use actual charge data
+                    const energyAdded = shiftCharges.reduce((sum, charge) => sum + charge.kwhAdded, 0);
+
+                    // Calculate energy consumed during shift (not just energy added)
+                    if (shift.startChargePercent !== undefined && shift.endChargePercent !== undefined) {
+                        const chargeUsed = shift.startChargePercent - shift.endChargePercent;
+                        const energyUsed = (chargeUsed / 100) * vehicle.batteryCapacityKwh;
+                        totalEnergyConsumed += energyUsed;
+                    } else {
+                        // Fallback to estimation
+                        const estimatedConsumption = (kmDriven / 100) * 18; // 18kWh/100km baseline
+                        totalEnergyConsumed += estimatedConsumption;
+                    }
+                } else {
+                    // No charge data - calculate from battery percentage if available
+                    if (shift.startChargePercent !== undefined && shift.endChargePercent !== undefined) {
+                        const chargeUsed = shift.startChargePercent - shift.endChargePercent;
+                        const energyUsed = (chargeUsed / 100) * vehicle.batteryCapacityKwh;
+                        totalEnergyConsumed += energyUsed;
+                    } else {
+                        // Estimate consumption
+                        const estimatedConsumption = (kmDriven / 100) * 18; // 18kWh/100km baseline
+                        totalEnergyConsumed += estimatedConsumption;
+                    }
+                }
+            }
+
+            // Calculate efficiency metrics
+            const averageKmL = totalFuelConsumed > 0 ? totalICEKmDriven / totalFuelConsumed : undefined;
+            const averageKmPerKwh = totalEnergyConsumed > 0 ? totalEVKmDriven / totalEnergyConsumed : undefined;
+            const totalKmDriven = totalICEKmDriven + totalEVKmDriven;
+
+            // Calculate performance scores against vehicle baselines
+            let iceEfficiencyScore: number | undefined;
+            let evEfficiencyScore: number | undefined;
+
+            // ICE Performance Scoring
+            if (totalICEKmDriven > 0 && totalFuelConsumed > 0) {
+                // Calculate weighted baseline consumption for ICE vehicles driven
+                let totalWeightedBaseline = 0;
+                let totalWeightedActual = 0;
+
+                for (const shift of iceShifts) {
+                    const vehicle = mockVehicles.find(v => v.id === shift.vehicleId);
+                    if (!vehicle?.baselineFuelConsumption) continue;
+
+                    const kmDriven = (shift.endOdometer || 0) - shift.startOdometer;
+                    const vehicleBaseline = vehicle.baselineFuelConsumption; // L/100km
+
+                    // Find fuel consumption for this specific shift/vehicle
+                    const shiftRefuels = mockRefuelRecords.filter(refuel =>
+                        refuel.driverId === driver.id &&
+                        (refuel.shiftId === shift.id ||
+                         (refuel.date >= shift.startTime &&
+                          refuel.date <= (shift.endTime || new Date()) &&
+                          refuel.vehicleId === shift.vehicleId))
+                    );
+
+                    let actualConsumptionL100km: number;
+                    if (shiftRefuels.length > 0) {
+                        const fuelUsed = shiftRefuels.reduce((sum, refuel) => sum + refuel.litresFilled, 0);
+                        actualConsumptionL100km = (fuelUsed / kmDriven) * 100;
+                    } else {
+                        // Use overall average for this driver
+                        actualConsumptionL100km = (totalFuelConsumed / totalICEKmDriven) * 100;
+                    }
+
+                    totalWeightedBaseline += vehicleBaseline * kmDriven;
+                    totalWeightedActual += actualConsumptionL100km * kmDriven;
+                }
+
+                if (totalWeightedBaseline > 0) {
+                    const avgBaseline = totalWeightedBaseline / totalICEKmDriven;
+                    const avgActual = totalWeightedActual / totalICEKmDriven;
+
+                    // Score: 100 = perfect baseline, >100 = better than baseline, <100 = worse
+                    // Formula: (baseline / actual) * 100
+                    iceEfficiencyScore = Math.round((avgBaseline / avgActual) * 100);
+                    iceEfficiencyScore = Math.min(150, Math.max(25, iceEfficiencyScore)); // Cap between 25-150
+                }
+            }
+
+            // EV Performance Scoring
+            if (totalEVKmDriven > 0 && totalEnergyConsumed > 0) {
+                let totalWeightedBaseline = 0;
+                let totalWeightedActual = 0;
+
+                for (const shift of evShifts) {
+                    const vehicle = mockVehicles.find(v => v.id === shift.vehicleId);
+                    if (!vehicle?.baselineEnergyConsumption || !vehicle.batteryCapacityKwh) continue;
+
+                    const kmDriven = (shift.endOdometer || 0) - shift.startOdometer;
+                    const vehicleBaseline = vehicle.baselineEnergyConsumption; // kWh/100km
+
+                    let actualConsumptionKwh100km: number;
+                    if (shift.startChargePercent !== undefined && shift.endChargePercent !== undefined) {
+                        const chargeUsed = shift.startChargePercent - shift.endChargePercent;
+                        const energyUsed = (chargeUsed / 100) * vehicle.batteryCapacityKwh;
+                        actualConsumptionKwh100km = (energyUsed / kmDriven) * 100;
+                    } else {
+                        // Use overall average for this driver
+                        actualConsumptionKwh100km = (totalEnergyConsumed / totalEVKmDriven) * 100;
+                    }
+
+                    totalWeightedBaseline += vehicleBaseline * kmDriven;
+                    totalWeightedActual += actualConsumptionKwh100km * kmDriven;
+                }
+
+                if (totalWeightedBaseline > 0) {
+                    const avgBaseline = totalWeightedBaseline / totalEVKmDriven;
+                    const avgActual = totalWeightedActual / totalEVKmDriven;
+
+                    // Score: 100 = perfect baseline, >100 = better than baseline, <100 = worse
+                    evEfficiencyScore = Math.round((avgBaseline / avgActual) * 100);
+                    evEfficiencyScore = Math.min(150, Math.max(25, evEfficiencyScore)); // Cap between 25-150
+                }
+            }
+
+            // Calculate overall efficiency score (weighted by distance driven)
+            let overallEfficiencyScore: number | undefined;
+            if (iceEfficiencyScore !== undefined && evEfficiencyScore !== undefined) {
+                const iceWeight = totalICEKmDriven / totalKmDriven;
+                const evWeight = totalEVKmDriven / totalKmDriven;
+                overallEfficiencyScore = Math.round((iceEfficiencyScore * iceWeight) + (evEfficiencyScore * evWeight));
+            } else if (iceEfficiencyScore !== undefined) {
+                overallEfficiencyScore = iceEfficiencyScore;
+            } else if (evEfficiencyScore !== undefined) {
+                overallEfficiencyScore = evEfficiencyScore;
+            }
+
+            return {
+                driver,
+                totalKmDriven,
+                totalICEKmDriven,
+                totalEVKmDriven,
+                totalFuelConsumed,
+                totalEnergyConsumed,
+                averageKmL,
+                averageKmPerKwh,
+                iceEfficiencyScore,
+                evEfficiencyScore,
+                overallEfficiencyScore
+            };
+        });
+
+        return leaderboardEntries
+            .filter(entry => entry.totalKmDriven > 0) // Only include drivers with actual driving data
+            .sort((a, b) => b.totalKmDriven - a.totalKmDriven);
     },
     getVehicleStats: async (vehicleId: string): Promise<VehicleStats> => {
         await new Promise(res => setTimeout(res, 600));
@@ -506,6 +1008,44 @@ const api = {
                 needsTraining: riskScore >= 30 || unpaidFines.length >= 2 || damages.filter(d => d.severity === IncidentSeverity.Major || d.severity === IncidentSeverity.Critical).length > 0
             };
         }).sort((a, b) => b.riskScore - a.riskScore);
+    },
+
+    // Refuel Records Management
+    getRefuelRecords: async (driverId?: string): Promise<RefuelRecord[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        const records = driverId
+            ? mockRefuelRecords.filter(r => r.driverId === driverId)
+            : mockRefuelRecords;
+        return [...records].sort((a, b) => b.date.getTime() - a.date.getTime());
+    },
+
+    addRefuelRecord: async (refuelData: Omit<RefuelRecord, 'id'>): Promise<RefuelRecord> => {
+        await new Promise(res => setTimeout(res, 300));
+        const newRefuel: RefuelRecord = {
+            ...refuelData,
+            id: `r${mockRefuelRecords.length + 1}`,
+        };
+        mockRefuelRecords.push(newRefuel);
+        return newRefuel;
+    },
+
+    // Charge Records Management
+    getChargeRecords: async (driverId?: string): Promise<ChargeRecord[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        const records = driverId
+            ? mockChargeRecords.filter(r => r.driverId === driverId)
+            : mockChargeRecords;
+        return [...records].sort((a, b) => b.date.getTime() - a.date.getTime());
+    },
+
+    addChargeRecord: async (chargeData: Omit<ChargeRecord, 'id'>): Promise<ChargeRecord> => {
+        await new Promise(res => setTimeout(res, 300));
+        const newCharge: ChargeRecord = {
+            ...chargeData,
+            id: `c${mockChargeRecords.length + 1}`,
+        };
+        mockChargeRecords.push(newCharge);
+        return newCharge;
     }
 };
 

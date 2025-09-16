@@ -44,7 +44,11 @@ export interface Vehicle {
   currentOdometer?: number;
   freeServicesUntilKm?: number;
   maintenanceHistory?: MaintenanceRecord[];
-  
+
+  // Performance Baselines
+  baselineFuelConsumption?: number; // L/100km for ICE vehicles
+  baselineEnergyConsumption?: number; // kWh/100km for EVs
+
   // Financial Details
   financeCompany?: string;
   financeAccountNumber?: string;
@@ -86,14 +90,53 @@ export enum DefectUrgency {
     Low = 'Low',
 }
 
+export enum DefectCategory {
+    Engine = 'Engine',
+    Transmission = 'Transmission',
+    Brakes = 'Brakes',
+    Electrical = 'Electrical',
+    HVAC = 'HVAC/Climate',
+    Exterior = 'Exterior',
+    Interior = 'Interior',
+    Tires = 'Tires',
+    Safety = 'Safety Systems',
+    Audio = 'Audio/Entertainment',
+    Other = 'Other'
+}
+
+export enum DefectStatus {
+    Open = 'Open',
+    Acknowledged = 'Acknowledged', // Admin has seen it
+    InProgress = 'In Progress', // Being repaired
+    Resolved = 'Resolved', // Fixed and closed
+    Duplicate = 'Duplicate' // Marked as duplicate of another defect
+}
+
 export interface DefectReport {
     id: string;
     vehicleId: string;
     driverId: string;
-    dateTime: Date;
+    reportedDateTime: Date;
+    category: DefectCategory;
     description: string;
     urgency: DefectUrgency;
-    isResolved: boolean;
+    status: DefectStatus;
+    location?: string; // Where on the vehicle
+    photos?: string[]; // URLs or base64
+    notes?: string;
+
+    // Admin fields
+    acknowledgedBy?: string; // Admin user ID
+    acknowledgedDateTime?: Date;
+    assignedTo?: string; // Technician/repair shop
+    estimatedCost?: number;
+    actualCost?: number;
+    resolvedBy?: string; // Admin user ID
+    resolvedDateTime?: Date;
+    duplicateOf?: string; // ID of original defect if this is a duplicate
+
+    // Tracking
+    isVisibleToDriver: boolean; // False if marked as duplicate
 }
 
 export enum CostCategory {
@@ -118,11 +161,46 @@ export interface LeaderboardEntry {
     totalKmDriven: number;
     averageKmL?: number;
     averageKmPerKwh?: number;
+    totalICEKmDriven?: number;
+    totalEVKmDriven?: number;
+    totalFuelConsumed?: number;
+    totalEnergyConsumed?: number;
+    // Performance scoring
+    iceEfficiencyScore?: number; // 0-100, compared to vehicle baselines
+    evEfficiencyScore?: number; // 0-100, compared to vehicle baselines
+    overallEfficiencyScore?: number; // Weighted average of ICE and EV scores
 }
 
 export interface VehicleStats {
     avgDailyDistanceKm: number;
     avgEnergyConsumptionKwhPerKm: number;
+}
+
+export interface RefuelRecord {
+    id: string;
+    vehicleId: string;
+    driverId: string;
+    shiftId?: string;
+    date: Date;
+    odometer: number;
+    litresFilled: number;
+    fuelCost: number;
+    oilCost?: number;
+    notes?: string;
+}
+
+export interface ChargeRecord {
+    id: string;
+    vehicleId: string;
+    driverId: string;
+    shiftId?: string;
+    date: Date;
+    odometer: number;
+    kwhAdded: number;
+    chargeCost: number;
+    startChargePercent: number;
+    endChargePercent: number;
+    notes?: string;
 }
 
 export enum FineType {
