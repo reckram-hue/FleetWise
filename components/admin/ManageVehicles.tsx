@@ -1,7 +1,7 @@
 
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Vehicle, VehicleType, MaintenanceRecord } from '../../types';
+import { Vehicle, VehicleType, VehicleStatus, MaintenanceRecord } from '../../types';
 import api from '../../services/mockApi';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
@@ -12,11 +12,21 @@ const emptyVehicle: Omit<Vehicle, 'id'> = {
     make: '',
     model: '',
     vehicleType: VehicleType.ICE,
+    status: VehicleStatus.Active,
+    statusDate: new Date().toISOString().split('T')[0],
+    statusNotes: '',
     currentOdometer: 0,
     serviceIntervalKm: 10000,
     lastServiceOdometer: 0,
     freeServicesUntilKm: 0,
     batteryCapacityKwh: 0,
+    // Performance specifications
+    manufacturerFuelConsumption: 0,
+    manufacturerEnergyConsumption: 0,
+    baselineFuelConsumption: 0,
+    baselineEnergyConsumption: 0,
+    economyVarianceThreshold: 15,
+    // Financial details
     financeCompany: '',
     financeAccountNumber: '',
     financeCost: 0,
@@ -367,7 +377,15 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
     
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         const { name, value } = e.target;
-        const numericFields = ['currentOdometer', 'serviceIntervalKm', 'lastServiceOdometer', 'batteryCapacityKwh', 'financeCost', 'insuranceFee', 'trackingFee', 'balloonPayment', 'freeServicesUntilKm'];
+        const numericFields = [
+            'currentOdometer', 'serviceIntervalKm', 'lastServiceOdometer', 'batteryCapacityKwh',
+            'financeCost', 'insuranceFee', 'trackingFee', 'balloonPayment', 'freeServicesUntilKm',
+            // Manufacturer and performance specs
+            'manufacturerFuelConsumption', 'manufacturerEnergyConsumption',
+            'baselineFuelConsumption', 'baselineEnergyConsumption',
+            'currentFuelConsumption', 'currentEnergyConsumption',
+            'economyVarianceThreshold'
+        ];
         const parsedValue = numericFields.includes(name) ? (parseFloat(value) || 0) : value;
         setSelectedVehicle({ ...selectedVehicle, [name]: parsedValue });
     };
@@ -446,6 +464,24 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                 </select>
                             </div>
                             <div>
+                                <label className="block text-sm font-medium text-gray-700">Status</label>
+                                <select name="status" value={selectedVehicle.status} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required>
+                                    <option value={VehicleStatus.Active}>Active</option>
+                                    <option value={VehicleStatus.InService}>In Service</option>
+                                    <option value={VehicleStatus.Repairs}>Repairs</option>
+                                    <option value={VehicleStatus.Sold}>Sold</option>
+                                    <option value={VehicleStatus.EndOfLife}>End of Life</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Status Date</label>
+                                <input type="date" name="statusDate" value={selectedVehicle.statusDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Status Notes</label>
+                                <input name="statusNotes" value={selectedVehicle.statusNotes || ''} onChange={handleFormChange} placeholder="Reason for status change, expected return date, etc." className="mt-1 p-2 border rounded w-full" />
+                            </div>
+                            <div>
                                 <label className="block text-sm font-medium text-gray-700">Current Odometer (km)</label>
                                 <input type="number" name="currentOdometer" value={selectedVehicle.currentOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required />
                             </div>
@@ -474,6 +510,103 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                     <input type="number" name="batteryCapacityKwh" value={selectedVehicle.batteryCapacityKwh || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
                                 </div>
                             )}
+                        </div>
+                    </div>
+
+                    {/* Manufacturer Specifications & Performance */}
+                    <div>
+                        <h4 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">Performance Specifications</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {selectedVehicle.vehicleType === VehicleType.ICE ? (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700">
+                                            Manufacturer Fuel Economy (L/100km)
+                                            <span className="text-xs text-gray-500 block">Official manufacturer specification</span>
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            name="manufacturerFuelConsumption"
+                                            value={selectedVehicle.manufacturerFuelConsumption || ''}
+                                            onChange={handleFormChange}
+                                            className="mt-1 p-2 border rounded w-full"
+                                            placeholder="e.g., 8.5"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700">
+                                            Actual Baseline (L/100km)
+                                            <span className="text-xs text-gray-500 block">Real-world established baseline</span>
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            name="baselineFuelConsumption"
+                                            value={selectedVehicle.baselineFuelConsumption || ''}
+                                            onChange={handleFormChange}
+                                            className="mt-1 p-2 border rounded w-full"
+                                            placeholder="e.g., 9.2"
+                                        />
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700">
+                                            Manufacturer Energy Economy (kWh/100km)
+                                            <span className="text-xs text-gray-500 block">Official manufacturer specification</span>
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            name="manufacturerEnergyConsumption"
+                                            value={selectedVehicle.manufacturerEnergyConsumption || ''}
+                                            onChange={handleFormChange}
+                                            className="mt-1 p-2 border rounded w-full"
+                                            placeholder="e.g., 18.5"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700">
+                                            Actual Baseline (kWh/100km)
+                                            <span className="text-xs text-gray-500 block">Real-world established baseline</span>
+                                        </label>
+                                        <input
+                                            type="number"
+                                            step="0.1"
+                                            name="baselineEnergyConsumption"
+                                            value={selectedVehicle.baselineEnergyConsumption || ''}
+                                            onChange={handleFormChange}
+                                            className="mt-1 p-2 border rounded w-full"
+                                            placeholder="e.g., 20.8"
+                                        />
+                                    </div>
+                                </>
+                            )}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">
+                                    Economy Alert Threshold (%)
+                                    <span className="text-xs text-gray-500 block">Alert when consumption exceeds baseline by this %</span>
+                                </label>
+                                <input
+                                    type="number"
+                                    step="1"
+                                    name="economyVarianceThreshold"
+                                    value={selectedVehicle.economyVarianceThreshold || 15}
+                                    onChange={handleFormChange}
+                                    className="mt-1 p-2 border rounded w-full"
+                                    min="5"
+                                    max="50"
+                                    placeholder="15"
+                                />
+                            </div>
+                        </div>
+                        <div className="mt-3 p-3 bg-blue-50 rounded-md">
+                            <p className="text-sm text-blue-800">
+                                <strong>Tip:</strong> Manufacturer specifications are usually optimistic. Set realistic baselines based on actual performance.
+                                The system will alert you when current consumption significantly exceeds the baseline, indicating potential maintenance needs.
+                            </p>
                         </div>
                     </div>
 
@@ -572,7 +705,19 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
             <div className="md:col-span-1">
                 <h3 className="text-lg font-bold text-gray-900">{vehicle.make} {vehicle.model}</h3>
                 <p className="text-sm font-medium text-blue-600">{vehicle.registration}</p>
-                <span className={`mt-2 px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${vehicle.vehicleType === VehicleType.EV ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>{vehicle.vehicleType}</span>
+                <div className="flex flex-wrap gap-2 mt-2">
+                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${vehicle.vehicleType === VehicleType.EV ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>{vehicle.vehicleType}</span>
+                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        vehicle.status === VehicleStatus.Active ? 'bg-green-100 text-green-800' :
+                        vehicle.status === VehicleStatus.InService ? 'bg-yellow-100 text-yellow-800' :
+                        vehicle.status === VehicleStatus.Repairs ? 'bg-red-100 text-red-800' :
+                        vehicle.status === VehicleStatus.Sold ? 'bg-gray-100 text-gray-800' :
+                        'bg-gray-100 text-gray-800'
+                    }`}>{vehicle.status}</span>
+                </div>
+                {vehicle.status !== VehicleStatus.Active && vehicle.statusNotes && (
+                    <p className="text-xs text-gray-600 mt-1">{vehicle.statusNotes}</p>
+                )}
             </div>
             {/* Column 2: Odometer & Service */}
             <div className="md:col-span-1">

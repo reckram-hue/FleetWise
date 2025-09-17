@@ -17,9 +17,10 @@ import {
 
 interface ManageIncidentsProps {
     onBack: () => void;
+    hideBackButton?: boolean;
 }
 
-const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack }) => {
+const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButton }) => {
     const [activeTab, setActiveTab] = useState<'fines' | 'damages' | 'analytics'>('fines');
     const [fines, setFines] = useState<DriverFine[]>([]);
     const [damages, setDamages] = useState<VehicleDamage[]>([]);
@@ -253,12 +254,14 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack }) => {
                 <Card>
                     <div className="flex justify-between items-center mb-6">
                         <h2 className="text-2xl font-bold text-gray-800">Driver Incidents & Penalties</h2>
-                        <button
-                            onClick={onBack}
-                            className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition"
-                        >
-                            Back to Dashboard
-                        </button>
+                        {!hideBackButton && (
+                            <button
+                                onClick={onBack}
+                                className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition"
+                            >
+                                Back to Dashboard
+                            </button>
+                        )}
                     </div>
 
                     {/* Tab Navigation */}
@@ -402,6 +405,7 @@ const FineFormModal = ({
         driverId: fine?.driverId || '',
         vehicleId: fine?.vehicleId || '',
         date: fine?.date || new Date().toISOString().split('T')[0],
+        time: fine?.time || '',
         fineType: fine?.fineType || FineType.Speeding,
         amount: fine?.amount || 0,
         description: fine?.description || '',
@@ -411,10 +415,60 @@ const FineFormModal = ({
         dueDate: fine?.dueDate || '',
         isPaid: fine?.isPaid || false,
         paidDate: fine?.paidDate || '',
-        notes: fine?.notes || ''
+        notes: fine?.notes || '',
+        allocatedAutomatically: fine?.allocatedAutomatically || false,
+        allocationMethod: fine?.allocationMethod || 'manual'
     });
 
+    const [vehicleRegistration, setVehicleRegistration] = useState(fine ? vehicles.find(v => v.id === fine.vehicleId)?.registration || '' : '');
+    const [allocationInfo, setAllocationInfo] = useState<any>(null);
+    const [showAutoAllocation, setShowAutoAllocation] = useState(!fine); // Show streamlined flow for new fines
+    const [showManualAssignment, setShowManualAssignment] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [autoAssignComplete, setAutoAssignComplete] = useState(false);
+
+    const handleAutoAllocate = async () => {
+        if (!vehicleRegistration || !formData.date || !formData.time) {
+            alert('Please complete all three steps: Vehicle Registration, Date, and Time');
+            return;
+        }
+
+        try {
+            const result = await api.determineDriverForFine(
+                vehicleRegistration,
+                formData.date,
+                formData.time
+            );
+
+            setAllocationInfo(result);
+
+            if (result.driverId && result.vehicleId) {
+                setFormData(prev => ({
+                    ...prev,
+                    driverId: result.driverId || '',
+                    vehicleId: result.vehicleId || '',
+                    allocatedAutomatically: true,
+                    allocationMethod: result.method
+                }));
+                setAutoAssignComplete(true);
+            } else {
+                // No match found - show manual assignment and alert admin
+                setShowManualAssignment(true);
+                alert(`⚠️ ADMIN ALERT: No driver found for vehicle ${vehicleRegistration} on ${formData.date} at ${formData.time}. Please assign manually.`);
+            }
+        } catch (error) {
+            console.error('Auto-allocation failed:', error);
+            setShowManualAssignment(true);
+            alert('⚠️ ADMIN ALERT: Auto-allocation system failed. Please assign driver manually.');
+        }
+    };
+
+    // Auto-trigger allocation when all three fields are filled
+    useEffect(() => {
+        if (showAutoAllocation && !autoAssignComplete && vehicleRegistration && formData.date && formData.time) {
+            handleAutoAllocate();
+        }
+    }, [vehicleRegistration, formData.date, formData.time, showAutoAllocation, autoAssignComplete]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -456,175 +510,302 @@ const FineFormModal = ({
                     </button>
                 </div>
 
-                <form onSubmit={handleSubmit} className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <form onSubmit={handleSubmit} className="space-y-6">
+                    {/* Streamlined 3-Step Process for New Fines */}
+                    {showAutoAllocation && !showManualAssignment && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                            <h4 className="text-lg font-semibold text-blue-800 mb-4">Quick Fine Entry - 3 Simple Steps</h4>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                {/* Step 1: Vehicle Registration */}
+                                <div className="relative">
+                                    <div className="absolute -top-3 left-2 bg-blue-600 text-white text-xs px-2 py-1 rounded-full z-10">Step 1</div>
+                                    <label className="block text-sm font-medium text-gray-700 mt-4 mb-1">Vehicle Registration *</label>
+                                    <select
+                                        value={vehicleRegistration}
+                                        onChange={(e) => setVehicleRegistration(e.target.value)}
+                                        className="block w-full px-3 py-2 border-2 border-blue-300 rounded-md focus:border-blue-500 focus:ring-blue-500"
+                                        required
+                                    >
+                                        <option value="">Select Vehicle Registration</option>
+                                        {vehicles.map(vehicle => (
+                                            <option key={vehicle.id} value={vehicle.registration}>
+                                                {vehicle.registration} - {vehicle.make} {vehicle.model}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {/* Step 2: Date */}
+                                <div className="relative">
+                                    <div className="absolute -top-3 left-2 bg-blue-600 text-white text-xs px-2 py-1 rounded-full z-10">Step 2</div>
+                                    <label className="block text-sm font-medium text-gray-700 mt-4 mb-1">Fine Date *</label>
+                                    <input
+                                        type="date"
+                                        name="date"
+                                        value={formData.date}
+                                        onChange={handleChange}
+                                        className="block w-full px-3 py-2 border-2 border-blue-300 rounded-md focus:border-blue-500 focus:ring-blue-500"
+                                        required
+                                    />
+                                </div>
+
+                                {/* Step 3: Time */}
+                                <div className="relative">
+                                    <div className="absolute -top-3 left-2 bg-blue-600 text-white text-xs px-2 py-1 rounded-full z-10">Step 3</div>
+                                    <label className="block text-sm font-medium text-gray-700 mt-4 mb-1">Fine Time *</label>
+                                    <input
+                                        type="time"
+                                        name="time"
+                                        value={formData.time}
+                                        onChange={handleChange}
+                                        className="block w-full px-3 py-2 border-2 border-blue-300 rounded-md focus:border-blue-500 focus:ring-blue-500"
+                                        required
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Auto-allocation Status */}
+                            {allocationInfo && (
+                                <div className={`mt-4 p-3 rounded-lg ${
+                                    allocationInfo.driverId ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'
+                                }`}>
+                                    {allocationInfo.driverId ? (
+                                        <div className="text-green-800">
+                                            <div className="flex items-center">
+                                                <span className="text-green-600 mr-2">✓</span>
+                                                <strong>Driver Automatically Assigned!</strong>
+                                            </div>
+                                            <p className="text-sm mt-1">
+                                                Driver: {users.find(u => u.id === allocationInfo.driverId)?.firstName} {users.find(u => u.id === allocationInfo.driverId)?.surname}
+                                            </p>
+                                            <p className="text-sm">
+                                                Vehicle: {vehicles.find(v => v.id === allocationInfo.vehicleId)?.make} {vehicles.find(v => v.id === allocationInfo.vehicleId)?.model} ({vehicles.find(v => v.id === allocationInfo.vehicleId)?.registration})
+                                            </p>
+                                            <p className="text-sm">
+                                                Method: {allocationInfo.method} | Confidence: {allocationInfo.confidence}
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div className="text-orange-800">
+                                            <div className="flex items-center">
+                                                <span className="text-orange-600 mr-2">⚠</span>
+                                                <strong>No Matching Driver Found</strong>
+                                            </div>
+                                            <p className="text-sm mt-1">{allocationInfo.message}</p>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowManualAssignment(true)}
+                                                className="mt-2 text-sm bg-orange-200 hover:bg-orange-300 text-orange-800 px-3 py-1 rounded"
+                                            >
+                                                Assign Manually
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Manual Assignment Fields - Show when editing or when auto-assignment fails */}
+                    {(fine || showManualAssignment) && (
+                        <div className="space-y-4">
+                            {showManualAssignment && (
+                                <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-4">
+                                    <h4 className="font-semibold text-orange-800">⚠️ Manual Assignment Required</h4>
+                                    <p className="text-sm text-orange-700 mt-1">Please manually select the driver and vehicle below.</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Driver *</label>
+                                    <select
+                                        name="driverId"
+                                        value={formData.driverId}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                        required
+                                    >
+                                        <option value="">Select Driver</option>
+                                        {users.map(user => (
+                                            <option key={user.id} value={user.id}>
+                                                {user.firstName} {user.surname}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Vehicle *</label>
+                                    <select
+                                        name="vehicleId"
+                                        value={formData.vehicleId}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                        required
+                                    >
+                                        <option value="">Select Vehicle</option>
+                                        {vehicles.map(vehicle => (
+                                            <option key={vehicle.id} value={vehicle.id}>
+                                                {vehicle.registration} - {vehicle.make} {vehicle.model}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Date *</label>
+                                    <input
+                                        type="date"
+                                        name="date"
+                                        value={formData.date}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                        required
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Time</label>
+                                    <input
+                                        type="time"
+                                        name="time"
+                                        value={formData.time}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Fine Details - Always shown after driver assignment */}
+                    {(autoAssignComplete || fine || showManualAssignment) && (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700">Driver *</label>
-                            <select
-                                name="driverId"
-                                value={formData.driverId}
-                                onChange={handleChange}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                                required
-                            >
-                                <option value="">Select Driver</option>
-                                {users.map(user => (
-                                    <option key={user.id} value={user.id}>
-                                        {user.firstName} {user.surname}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
+                            <h4 className="text-lg font-semibold text-gray-800 mb-3">Fine Details</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Fine Type *</label>
+                                    <select
+                                        name="fineType"
+                                        value={formData.fineType}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                        required
+                                    >
+                                        {Object.values(FineType).map(type => (
+                                            <option key={type} value={type}>{type}</option>
+                                        ))}
+                                    </select>
+                                </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Vehicle *</label>
-                            <select
-                                name="vehicleId"
-                                value={formData.vehicleId}
-                                onChange={handleChange}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                                required
-                            >
-                                <option value="">Select Vehicle</option>
-                                {vehicles.map(vehicle => (
-                                    <option key={vehicle.id} value={vehicle.id}>
-                                        {vehicle.registration} - {vehicle.make} {vehicle.model}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Amount (R) *</label>
+                                    <input
+                                        type="number"
+                                        name="amount"
+                                        value={formData.amount}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                        required
+                                        min="0"
+                                        step="0.01"
+                                    />
+                                </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Date *</label>
-                            <input
-                                type="date"
-                                name="date"
-                                value={formData.date}
-                                onChange={handleChange}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                                required
-                            />
-                        </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Fine Number</label>
+                                    <input
+                                        type="text"
+                                        name="fineNumber"
+                                        value={formData.fineNumber}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                    />
+                                </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Fine Type *</label>
-                            <select
-                                name="fineType"
-                                value={formData.fineType}
-                                onChange={handleChange}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                                required
-                            >
-                                {Object.values(FineType).map(type => (
-                                    <option key={type} value={type}>{type}</option>
-                                ))}
-                            </select>
-                        </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Location</label>
+                                    <input
+                                        type="text"
+                                        name="location"
+                                        value={formData.location}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                    />
+                                </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Amount (R) *</label>
-                            <input
-                                type="number"
-                                name="amount"
-                                value={formData.amount}
-                                onChange={handleChange}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                                required
-                                min="0"
-                                step="0.01"
-                            />
-                        </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Issuing Authority</label>
+                                    <input
+                                        type="text"
+                                        name="issuingAuthority"
+                                        value={formData.issuingAuthority}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                    />
+                                </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Fine Number</label>
-                            <input
-                                type="text"
-                                name="fineNumber"
-                                value={formData.fineNumber}
-                                onChange={handleChange}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                            />
-                        </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Due Date</label>
+                                    <input
+                                        type="date"
+                                        name="dueDate"
+                                        value={formData.dueDate}
+                                        onChange={handleChange}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                    />
+                                </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Location</label>
-                            <input
-                                type="text"
-                                name="location"
-                                value={formData.location}
-                                onChange={handleChange}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                            />
-                        </div>
+                                <div className="flex items-center">
+                                    <input
+                                        type="checkbox"
+                                        name="isPaid"
+                                        checked={formData.isPaid}
+                                        onChange={handleChange}
+                                        className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                                    />
+                                    <label className="ml-2 block text-sm text-gray-700">Fine has been paid</label>
+                                </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Issuing Authority</label>
-                            <input
-                                type="text"
-                                name="issuingAuthority"
-                                value={formData.issuingAuthority}
-                                onChange={handleChange}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                            />
-                        </div>
+                                {formData.isPaid && (
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700">Paid Date</label>
+                                        <input
+                                            type="date"
+                                            name="paidDate"
+                                            value={formData.paidDate}
+                                            onChange={handleChange}
+                                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                        />
+                                    </div>
+                                )}
+                            </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Due Date</label>
-                            <input
-                                type="date"
-                                name="dueDate"
-                                value={formData.dueDate}
-                                onChange={handleChange}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                            />
-                        </div>
-
-                        <div className="flex items-center">
-                            <input
-                                type="checkbox"
-                                name="isPaid"
-                                checked={formData.isPaid}
-                                onChange={handleChange}
-                                className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                            />
-                            <label className="ml-2 block text-sm text-gray-700">Fine has been paid</label>
-                        </div>
-
-                        {formData.isPaid && (
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">Paid Date</label>
-                                <input
-                                    type="date"
-                                    name="paidDate"
-                                    value={formData.paidDate}
+                            <div className="mt-4">
+                                <label className="block text-sm font-medium text-gray-700">Description</label>
+                                <textarea
+                                    name="description"
+                                    value={formData.description}
                                     onChange={handleChange}
+                                    rows={3}
                                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
                                 />
                             </div>
-                        )}
-                    </div>
 
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">Description</label>
-                        <textarea
-                            name="description"
-                            value={formData.description}
-                            onChange={handleChange}
-                            rows={3}
-                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">Notes</label>
-                        <textarea
-                            name="notes"
-                            value={formData.notes}
-                            onChange={handleChange}
-                            rows={2}
-                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
-                        />
-                    </div>
+                            <div className="mt-4">
+                                <label className="block text-sm font-medium text-gray-700">Notes</label>
+                                <textarea
+                                    name="notes"
+                                    value={formData.notes}
+                                    onChange={handleChange}
+                                    rows={2}
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                                />
+                            </div>
+                        </div>
+                    )}
 
                     <div className="flex justify-end space-x-3 pt-4">
                         <button

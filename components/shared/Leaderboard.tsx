@@ -7,9 +7,10 @@ import api from '../../services/mockApi';
 
 interface LeaderboardProps {
     onBack?: () => void;
+    hideBackButton?: boolean;
 }
 
-const Leaderboard: React.FC<LeaderboardProps> = ({ onBack }) => {
+const Leaderboard: React.FC<LeaderboardProps> = ({ onBack, hideBackButton }) => {
   const [leaderboardData, setLeaderboardData] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -43,7 +44,7 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ onBack }) => {
             </div>
           </div>
           
-          {onBack && <button onClick={onBack} className="mb-4 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">Back to Dashboard</button>}
+          {onBack && !hideBackButton && <button onClick={onBack} className="mb-4 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">Back to Dashboard</button>}
 
           {loading ? (
             <p>Loading leaderboard...</p>

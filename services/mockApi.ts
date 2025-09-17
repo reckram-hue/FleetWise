@@ -4,6 +4,7 @@ import {
   UserRole,
   Vehicle,
   VehicleType,
+  VehicleStatus,
   Shift,
   ShiftStatus,
   DefectReport,
@@ -14,7 +15,9 @@ import {
   CostCategory,
   LeaderboardEntry,
   VehicleStats,
+  VehicleUsageStats,
   MaintenanceRecord,
+  ScheduledService,
   DriverFine,
   VehicleDamage,
   FineType,
@@ -22,16 +25,19 @@ import {
   IncidentSeverity,
   DriverIncidentSummary,
   RefuelRecord,
-  ChargeRecord
+  ChargeRecord,
+  AppSettings,
+  EmploymentStatus,
+  FuelEconomyAlert
 } from '../types';
 
 // FIX: Export mockUsers to be used in the login screen.
 export let mockUsers: User[] = [
   { id: 'admin1', firstName: 'Admin', surname: 'User', role: UserRole.Admin, email: 'admin@fleetwise.com' },
-  { id: 'driver1', firstName: 'John', surname: 'Doe', role: UserRole.Driver, email: 'john.d@fleetwise.com', idNumber: '8501015000080', driversLicenceNumber: 'JDOE12345', driversLicenceExpiry: '2025-12-31', contactNumber: '0821234567', driversLicenceImageUrl: 'https://i.pravatar.cc/150?u=driver1' },
-  { id: 'driver2', firstName: 'Jane', surname: 'Smith', role: UserRole.Driver, email: 'jane.s@fleetwise.com', idNumber: '9203054001081', driversLicenceNumber: 'JSMITH6789', driversLicenceExpiry: '2024-08-15', contactNumber: '0837654321', driversLicenceImageUrl: 'https://i.pravatar.cc/150?u=driver2' },
-  { id: 'driver3', firstName: 'Peter', surname: 'Jones', role: UserRole.Driver, email: 'peter.j@fleetwise.com', idNumber: '8811205002085', driversLicenceNumber: 'PJONES1122', driversLicenceExpiry: '2026-02-28', contactNumber: '0848889999', driversLicenceImageUrl: 'https://i.pravatar.cc/150?u=driver3' },
-  { id: 'driver4', firstName: 'Mary', surname: 'Williams', role: UserRole.Driver, email: 'mary.w@fleetwise.com', idNumber: '9507154003083', driversLicenceNumber: 'MWILLS3344', driversLicenceExpiry: '2023-05-20', contactNumber: '0825556666', driversLicenceImageUrl: 'https://i.pravatar.cc/150?u=driver4' },
+  { id: 'driver1', firstName: 'John', surname: 'Doe', role: UserRole.Driver, email: 'john.d@fleetwise.com', idNumber: '8501015000080', driversLicenceNumber: 'JDOE12345', driversLicenceExpiry: '2025-12-31', contactNumber: '0821234567', driversLicenceImageUrl: 'https://i.pravatar.cc/150?u=driver1', employmentStatus: EmploymentStatus.Active, area: 'Cape Town', department: 'Operations' },
+  { id: 'driver2', firstName: 'Jane', surname: 'Smith', role: UserRole.Driver, email: 'jane.s@fleetwise.com', idNumber: '9203054001081', driversLicenceNumber: 'JSMITH6789', driversLicenceExpiry: '2024-08-15', contactNumber: '0837654321', driversLicenceImageUrl: 'https://i.pravatar.cc/150?u=driver2', employmentStatus: EmploymentStatus.Active, area: 'Johannesburg', department: 'Logistics' },
+  { id: 'driver3', firstName: 'Peter', surname: 'Jones', role: UserRole.Driver, email: 'peter.j@fleetwise.com', idNumber: '8811205002085', driversLicenceNumber: 'PJONES1122', driversLicenceExpiry: '2026-02-28', contactNumber: '0848889999', driversLicenceImageUrl: 'https://i.pravatar.cc/150?u=driver3', employmentStatus: EmploymentStatus.Inactive, area: 'Durban', department: 'Sales', employmentEndDate: '2024-06-30' },
+  { id: 'driver4', firstName: 'Mary', surname: 'Williams', role: UserRole.Driver, email: 'mary.w@fleetwise.com', idNumber: '9507154003083', driversLicenceNumber: 'MWILLS3344', driversLicenceExpiry: '2023-05-20', contactNumber: '0825556666', driversLicenceImageUrl: 'https://i.pravatar.cc/150?u=driver4', employmentStatus: EmploymentStatus.Active, area: 'Pretoria', department: 'Finance' },
 ];
 
 let mockMaintenanceRecords: MaintenanceRecord[] = [
@@ -42,6 +48,82 @@ let mockMaintenanceRecords: MaintenanceRecord[] = [
   { id: 'm5', vehicleId: 'v4', date: '2023-09-05', odometer: 95000, serviceType: 'Major Service', cost: 3200, notes: 'Timing belt checked, all fluids replaced.' },
 ];
 
+let mockScheduledServices: ScheduledService[] = [
+  {
+    id: 'ss1',
+    vehicleId: 'v1',
+    serviceType: '10,000 km Service',
+    dueDate: '2024-01-20',
+    dueOdometer: 46000,
+    isBooked: false,
+    notes: 'Due soon - 400km remaining'
+  },
+  {
+    id: 'ss2',
+    vehicleId: 'v2',
+    serviceType: '15,000 km Service',
+    dueDate: '2024-01-25',
+    dueOdometer: 74500,
+    isBooked: true,
+    bookedDate: '2024-01-25',
+    bookedTime: '09:00',
+    serviceProvider: 'City Motors Workshop',
+    reminderSent: false,
+    notes: 'Booked with preferred service center'
+  },
+  {
+    id: 'ss3',
+    vehicleId: 'v6',
+    serviceType: 'First Service',
+    dueDate: '2024-01-18',
+    dueOdometer: 15000,
+    isBooked: true,
+    bookedDate: '2024-01-18',
+    bookedTime: '14:30',
+    serviceProvider: 'Kia Service Center',
+    reminderSent: true,
+    notes: 'Free service - reminder already sent'
+  },
+];
+
+let mockVehicleUsageStats: VehicleUsageStats[] = [
+  {
+    vehicleId: 'v1',
+    avgDailyUsageKm: 120, // CA 123-456 Toyota Hilux - moderate usage
+    totalDaysTracked: 45,
+    lastCalculated: new Date(),
+    recentUsageTrend: 'stable'
+  },
+  {
+    vehicleId: 'v2',
+    avgDailyUsageKm: 200, // GP 789-XYZ Ford Ranger - high usage
+    totalDaysTracked: 38,
+    lastCalculated: new Date(),
+    recentUsageTrend: 'increasing'
+  },
+  {
+    vehicleId: 'v6',
+    avgDailyUsageKm: 85, // NC 321-654 Kia Sonet - low usage
+    totalDaysTracked: 20,
+    lastCalculated: new Date(),
+    recentUsageTrend: 'stable'
+  },
+  {
+    vehicleId: 'v3',
+    avgDailyUsageKm: 95, // EC 456-789 Hyundai Kona EV - currently out of service
+    totalDaysTracked: 30,
+    lastCalculated: new Date(),
+    recentUsageTrend: 'decreasing'
+  },
+  {
+    vehicleId: 'v5',
+    avgDailyUsageKm: 160, // WP 111-222 VW ID.4 - higher usage EV
+    totalDaysTracked: 25,
+    lastCalculated: new Date(),
+    recentUsageTrend: 'stable'
+  }
+];
+
 export let mockVehicles: Vehicle[] = [
     {
         id: 'v1',
@@ -49,7 +131,14 @@ export let mockVehicles: Vehicle[] = [
         make: 'Toyota',
         model: 'Hilux',
         vehicleType: VehicleType.ICE,
-        baselineFuelConsumption: 11.5, // L/100km - Toyota Hilux baseline
+        status: VehicleStatus.Active,
+        statusDate: '2024-01-01',
+        statusNotes: '',
+        manufacturerFuelConsumption: 9.8, // L/100km - Toyota's claimed consumption
+        baselineFuelConsumption: 11.5, // L/100km - actual established baseline
+        currentFuelConsumption: 12.8, // L/100km - recent performance (degrading)
+        economyVarianceThreshold: 15, // Alert if 15% above baseline
+        economyTrendDirection: 'degrading',
         currentOdometer: 45600,
         serviceIntervalKm: 10000,
         lastServiceOdometer: 45100,
@@ -72,7 +161,14 @@ export let mockVehicles: Vehicle[] = [
         make: 'Ford',
         model: 'Ranger',
         vehicleType: VehicleType.ICE,
-        baselineFuelConsumption: 12.8, // L/100km - Ford Ranger baseline (higher consumption)
+        status: VehicleStatus.InService,
+        statusDate: '2024-01-15',
+        statusNotes: 'Scheduled maintenance - expected return Jan 17',
+        manufacturerFuelConsumption: 10.2, // L/100km - Ford's claimed consumption
+        baselineFuelConsumption: 12.8, // L/100km - actual baseline (higher consumption)
+        currentFuelConsumption: 12.6, // L/100km - recent performance (improving)
+        economyVarianceThreshold: 15,
+        economyTrendDirection: 'improving',
         currentOdometer: 73500,
         serviceIntervalKm: 15000,
         lastServiceOdometer: 72300,
@@ -95,7 +191,14 @@ export let mockVehicles: Vehicle[] = [
         make: 'Kia',
         model: 'Sonet',
         vehicleType: VehicleType.ICE,
-        baselineFuelConsumption: 7.2, // L/100km - Kia Sonet baseline (more economical)
+        status: VehicleStatus.Active,
+        statusDate: '2024-01-01',
+        statusNotes: '',
+        manufacturerFuelConsumption: 5.8, // L/100km - Kia's claimed consumption
+        baselineFuelConsumption: 7.2, // L/100km - actual baseline (more economical)
+        currentFuelConsumption: 7.1, // L/100km - recent performance (stable)
+        economyVarianceThreshold: 15,
+        economyTrendDirection: 'stable',
         currentOdometer: 14500,
         serviceIntervalKm: 15000,
         lastServiceOdometer: 0,
@@ -108,6 +211,9 @@ export let mockVehicles: Vehicle[] = [
         make: 'Hyundai',
         model: 'Kona EV',
         vehicleType: VehicleType.EV,
+        status: VehicleStatus.Repairs,
+        statusDate: '2024-01-10',
+        statusNotes: 'Accident damage repair - awaiting parts',
         batteryCapacityKwh: 64,
         baselineEnergyConsumption: 16.8, // kWh/100km - Hyundai Kona EV baseline
         currentOdometer: 32000,
@@ -119,6 +225,9 @@ export let mockVehicles: Vehicle[] = [
         make: 'Isuzu',
         model: 'D-Max',
         vehicleType: VehicleType.ICE,
+        status: VehicleStatus.Sold,
+        statusDate: '2023-12-15',
+        statusNotes: 'Vehicle sold - high mileage, no longer cost effective',
         baselineFuelConsumption: 13.5, // L/100km - Isuzu D-Max baseline (highest consumption)
         currentOdometer: 98000,
         serviceIntervalKm: 10000,
@@ -131,6 +240,9 @@ export let mockVehicles: Vehicle[] = [
         make: 'VW',
         model: 'ID.4',
         vehicleType: VehicleType.EV,
+        status: VehicleStatus.Active,
+        statusDate: '2024-01-01',
+        statusNotes: '',
         batteryCapacityKwh: 77,
         baselineEnergyConsumption: 19.2, // kWh/100km - VW ID.4 baseline (larger EV, higher consumption)
         currentOdometer: 15000,
@@ -450,6 +562,69 @@ let mockVehicleDamages: VehicleDamage[] = [
         isRepaired: false,
         insuranceClaim: false,
         notes: 'Driver was smoking in vehicle against company policy'
+    }
+];
+
+let mockSettings: AppSettings = {
+    id: 'settings1',
+    areas: [
+        'Cape Town',
+        'Johannesburg',
+        'Durban',
+        'Pretoria',
+        'Port Elizabeth',
+        'Bloemfontein',
+        'East London',
+        'Pietermaritzburg'
+    ],
+    departments: [
+        'Operations',
+        'Logistics',
+        'Sales',
+        'Marketing',
+        'Finance',
+        'Human Resources',
+        'IT',
+        'Maintenance',
+        'Customer Service',
+        'Administration'
+    ],
+    // Service booking deadline settings
+    serviceBookingLeadTimeDays: 10, // Default: 10 days notice needed
+    enableSmartBookingReminders: true, // Enable usage-based reminders
+    defaultDailyUsageKm: 150, // Default daily usage if no history
+    bookingReminderThresholdKm: 1500, // Manual override threshold
+    createdBy: 'admin1',
+    lastModified: new Date()
+};
+
+let mockFuelEconomyAlerts: FuelEconomyAlert[] = [
+    {
+        id: 'ea1',
+        vehicleId: 'v1',
+        date: new Date().toISOString().split('T')[0],
+        alertType: 'degradation',
+        currentConsumption: 12.8,
+        baselineConsumption: 11.5,
+        manufacturerConsumption: 9.8,
+        variancePercentage: 11.3, // 11.3% above baseline
+        severity: 'medium',
+        isResolved: false,
+        notes: 'Fuel consumption has increased significantly. Possible maintenance required.'
+    },
+    {
+        id: 'ea2',
+        vehicleId: 'v1',
+        date: '2024-08-15',
+        alertType: 'maintenance_required',
+        currentConsumption: 13.2,
+        baselineConsumption: 11.5,
+        manufacturerConsumption: 9.8,
+        variancePercentage: 14.8, // 14.8% above baseline
+        severity: 'high',
+        isResolved: true,
+        resolvedDate: '2024-08-20',
+        notes: 'Air filter replacement resolved the issue'
     }
 ];
 
@@ -920,6 +1095,103 @@ const api = {
         return [...mockDriverFines].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     },
 
+    // Automatically determine driver for a fine based on shift records
+    determineDriverForFine: async (vehicleRegistration: string, fineDate: string, fineTime?: string): Promise<{
+        driverId: string | null;
+        vehicleId: string | null;
+        method: 'shift_lookup' | 'single_driver' | 'no_match';
+        confidence: 'high' | 'medium' | 'low';
+        details: string;
+    }> => {
+        await new Promise(res => setTimeout(res, 100));
+
+        // Find vehicle by registration
+        const vehicle = mockVehicles.find(v => v.registration.toLowerCase() === vehicleRegistration.toLowerCase());
+        if (!vehicle) {
+            return {
+                driverId: null,
+                vehicleId: null,
+                method: 'no_match',
+                confidence: 'low',
+                details: `Vehicle with registration ${vehicleRegistration} not found`
+            };
+        }
+
+        // Parse fine date and time
+        const fineDateTime = new Date(`${fineDate}T${fineTime || '12:00'}:00`);
+        const fineDateStart = new Date(`${fineDate}T00:00:00`);
+        const fineDateEnd = new Date(`${fineDate}T23:59:59`);
+
+        // Find shifts for this vehicle on the fine date
+        const vehicleShifts = mockShifts.filter(shift =>
+            shift.vehicleId === vehicle.id &&
+            shift.startTime >= fineDateStart &&
+            shift.startTime <= fineDateEnd
+        );
+
+        if (vehicleShifts.length === 0) {
+            // No shifts found for that date - check if there's only one active driver for this vehicle
+            const vehicleHistory = mockShifts.filter(shift => shift.vehicleId === vehicle.id);
+            const uniqueDrivers = [...new Set(vehicleHistory.map(s => s.driverId))];
+
+            if (uniqueDrivers.length === 1) {
+                return {
+                    driverId: uniqueDrivers[0],
+                    vehicleId: vehicle.id,
+                    method: 'single_driver',
+                    confidence: 'medium',
+                    details: `Only one driver (${uniqueDrivers[0]}) has driven this vehicle`
+                };
+            }
+
+            return {
+                driverId: null,
+                vehicleId: vehicle.id,
+                method: 'no_match',
+                confidence: 'low',
+                details: `No shifts found for ${vehicleRegistration} on ${fineDate}`
+            };
+        }
+
+        if (vehicleShifts.length === 1) {
+            // Only one shift that day - assign to that driver
+            return {
+                driverId: vehicleShifts[0].driverId,
+                vehicleId: vehicle.id,
+                method: 'shift_lookup',
+                confidence: 'high',
+                details: `Single shift on ${fineDate} by driver ${vehicleShifts[0].driverId}`
+            };
+        }
+
+        // Multiple shifts - try to match by time if provided
+        if (fineTime) {
+            for (const shift of vehicleShifts) {
+                const shiftStart = shift.startTime;
+                const shiftEnd = shift.endTime || new Date(); // Use current time if shift not ended
+
+                if (fineDateTime >= shiftStart && fineDateTime <= shiftEnd) {
+                    return {
+                        driverId: shift.driverId,
+                        vehicleId: vehicle.id,
+                        method: 'shift_lookup',
+                        confidence: 'high',
+                        details: `Fine time ${fineTime} matches shift ${shift.id} (${shift.startTime.toLocaleTimeString()} - ${shiftEnd.toLocaleTimeString()})`
+                    };
+                }
+            }
+        }
+
+        // Multiple shifts but no time match - return the first shift as a guess
+        return {
+            driverId: vehicleShifts[0].driverId,
+            vehicleId: vehicle.id,
+            method: 'shift_lookup',
+            confidence: 'medium',
+            details: `Multiple shifts on ${fineDate}, assigned to first shift driver ${vehicleShifts[0].driverId}`
+        };
+    },
+
     addDriverFine: async (fineData: Omit<DriverFine, 'id'>): Promise<DriverFine> => {
         await new Promise(res => setTimeout(res, 300));
         const newFine: DriverFine = {
@@ -928,6 +1200,65 @@ const api = {
         };
         mockDriverFines.push(newFine);
         return newFine;
+    },
+
+    // Enhanced method to add fine with automatic driver allocation
+    addDriverFineWithAutoAllocation: async (fineData: {
+        vehicleRegistration: string;
+        date: string;
+        time?: string;
+        fineType: FineType;
+        amount: number;
+        description: string;
+        fineNumber?: string;
+        location?: string;
+        issuingAuthority?: string;
+        dueDate?: string;
+        notes?: string;
+    }): Promise<DriverFine & { allocationInfo: any }> => {
+        await new Promise(res => setTimeout(res, 300));
+
+        // Try to automatically determine the driver
+        const allocationResult = await api.determineDriverForFine(
+            fineData.vehicleRegistration,
+            fineData.date,
+            fineData.time
+        );
+
+        let driverId = allocationResult.driverId;
+        let vehicleId = allocationResult.vehicleId;
+
+        // If no driver found automatically, leave empty for manual assignment
+        if (!driverId) {
+            driverId = '';
+            vehicleId = vehicleId || '';
+        }
+
+        const newFine: DriverFine = {
+            id: `f${mockDriverFines.length + 1}`,
+            driverId,
+            vehicleId: vehicleId || '',
+            date: fineData.date,
+            time: fineData.time,
+            fineType: fineData.fineType,
+            amount: fineData.amount,
+            description: fineData.description,
+            fineNumber: fineData.fineNumber,
+            location: fineData.location,
+            issuingAuthority: fineData.issuingAuthority,
+            dueDate: fineData.dueDate,
+            isPaid: false,
+            notes: fineData.notes,
+            allocatedAutomatically: !!allocationResult.driverId,
+            allocationMethod: allocationResult.method
+        };
+
+        mockDriverFines.push(newFine);
+
+        return {
+            ...newFine,
+            allocationInfo: allocationResult
+        };
     },
 
     updateDriverFine: async (fine: DriverFine): Promise<DriverFine> => {
@@ -1046,6 +1377,344 @@ const api = {
         };
         mockChargeRecords.push(newCharge);
         return newCharge;
+    },
+
+    // Settings Management
+    getSettings: async (): Promise<AppSettings> => {
+        await new Promise(res => setTimeout(res, 200));
+        return { ...mockSettings };
+    },
+
+    updateSettings: async (settings: Partial<AppSettings>): Promise<AppSettings> => {
+        await new Promise(res => setTimeout(res, 300));
+        Object.assign(mockSettings, {
+            ...settings,
+            lastModified: new Date()
+        });
+        return { ...mockSettings };
+    },
+
+    // Employment Status Management
+    updateEmploymentStatus: async (driverId: string, status: EmploymentStatus, endDate?: string): Promise<User> => {
+        await new Promise(res => setTimeout(res, 300));
+        const driverIndex = mockUsers.findIndex(u => u.id === driverId);
+        if (driverIndex === -1) {
+            throw new Error('Driver not found');
+        }
+
+        mockUsers[driverIndex] = {
+            ...mockUsers[driverIndex],
+            employmentStatus: status,
+            employmentEndDate: status !== EmploymentStatus.Active ? endDate : undefined
+        };
+
+        return mockUsers[driverIndex];
+    },
+
+    // Driver Deletion with Validation
+    canDeleteDriver: async (driverId: string): Promise<{ canDelete: boolean; reasons: string[] }> => {
+        await new Promise(res => setTimeout(res, 200));
+        const reasons: string[] = [];
+
+        // Check for outstanding fines
+        const unpaidFines = mockDriverFines.filter(f => f.driverId === driverId && !f.isPaid);
+        if (unpaidFines.length > 0) {
+            reasons.push(`${unpaidFines.length} unpaid fine(s)`);
+        }
+
+        // Check for unrepaired damages
+        const unrepairedDamages = mockVehicleDamages.filter(d => d.driverId === driverId && !d.isRepaired);
+        if (unrepairedDamages.length > 0) {
+            reasons.push(`${unrepairedDamages.length} unrepaired damage(s)`);
+        }
+
+        // Check for active shifts
+        const activeShifts = mockShifts.filter(s => s.driverId === driverId && s.status === ShiftStatus.Active);
+        if (activeShifts.length > 0) {
+            reasons.push(`${activeShifts.length} active shift(s)`);
+        }
+
+        // Check for recent activity (shifts in last 30 days)
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const recentShifts = mockShifts.filter(s =>
+            s.driverId === driverId &&
+            s.startTime > thirtyDaysAgo
+        );
+        if (recentShifts.length > 0) {
+            reasons.push(`${recentShifts.length} shift(s) in the last 30 days`);
+        }
+
+        return {
+            canDelete: reasons.length === 0,
+            reasons
+        };
+    },
+
+    deleteDriver: async (driverId: string): Promise<void> => {
+        await new Promise(res => setTimeout(res, 300));
+        const validation = await api.canDeleteDriver(driverId);
+
+        if (!validation.canDelete) {
+            throw new Error(`Cannot delete driver: ${validation.reasons.join(', ')}`);
+        }
+
+        const driverIndex = mockUsers.findIndex(u => u.id === driverId);
+        if (driverIndex === -1) {
+            throw new Error('Driver not found');
+        }
+
+        // Remove driver from all related data
+        mockUsers.splice(driverIndex, 1);
+
+        // Clean up related data (only if no historical importance)
+        // Note: We should NOT delete fines, damages, or shifts for audit purposes
+        // This would only be done if the driver has no relevant data
+    },
+
+    // Fuel Economy Management
+    getFuelEconomyAlerts: async (vehicleId?: string): Promise<FuelEconomyAlert[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        const alerts = vehicleId
+            ? mockFuelEconomyAlerts.filter(a => a.vehicleId === vehicleId)
+            : mockFuelEconomyAlerts;
+        return [...alerts].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    },
+
+    updateFuelEconomyAlert: async (alertId: string, updates: Partial<FuelEconomyAlert>): Promise<FuelEconomyAlert> => {
+        await new Promise(res => setTimeout(res, 300));
+        const alertIndex = mockFuelEconomyAlerts.findIndex(a => a.id === alertId);
+        if (alertIndex === -1) {
+            throw new Error('Alert not found');
+        }
+
+        mockFuelEconomyAlerts[alertIndex] = {
+            ...mockFuelEconomyAlerts[alertIndex],
+            ...updates
+        };
+
+        return mockFuelEconomyAlerts[alertIndex];
+    },
+
+    calculateFuelEconomyStatus: async (vehicleId: string): Promise<{
+        vehicle: Vehicle;
+        manufacturerVsBaseline: number; // % difference
+        currentVsBaseline: number; // % difference
+        currentVsManufacturer: number; // % difference
+        needsAttention: boolean;
+        trend: 'improving' | 'stable' | 'degrading' | 'unknown';
+        recommendations: string[];
+    }> => {
+        await new Promise(res => setTimeout(res, 200));
+        const vehicle = mockVehicles.find(v => v.id === vehicleId);
+        if (!vehicle) {
+            throw new Error('Vehicle not found');
+        }
+
+        const manufacturerConsumption = vehicle.vehicleType === VehicleType.ICE
+            ? (vehicle.manufacturerFuelConsumption || 0)
+            : (vehicle.manufacturerEnergyConsumption || 0);
+        const baselineConsumption = vehicle.vehicleType === VehicleType.ICE
+            ? (vehicle.baselineFuelConsumption || 0)
+            : (vehicle.baselineEnergyConsumption || 0);
+        const currentConsumption = vehicle.vehicleType === VehicleType.ICE
+            ? (vehicle.currentFuelConsumption || 0)
+            : (vehicle.currentEnergyConsumption || 0);
+
+        const manufacturerVsBaseline = (baselineConsumption > 0 && manufacturerConsumption > 0)
+            ? ((baselineConsumption - manufacturerConsumption) / manufacturerConsumption) * 100
+            : 0;
+
+        const currentVsBaseline = (baselineConsumption > 0 && currentConsumption > 0)
+            ? ((currentConsumption - baselineConsumption) / baselineConsumption) * 100
+            : 0;
+
+        const currentVsManufacturer = (manufacturerConsumption > 0 && currentConsumption > 0)
+            ? ((currentConsumption - manufacturerConsumption) / manufacturerConsumption) * 100
+            : 0;
+
+        const threshold = vehicle.economyVarianceThreshold || 15;
+        const needsAttention = !isNaN(currentVsBaseline) && isFinite(currentVsBaseline) && Math.abs(currentVsBaseline) > threshold;
+
+        const recommendations: string[] = [];
+        if (!isNaN(currentVsBaseline) && isFinite(currentVsBaseline)) {
+            if (currentVsBaseline > 15) {
+                recommendations.push('Consider engine service - consumption significantly above baseline');
+            }
+            if (currentVsBaseline > 20) {
+                recommendations.push('Check air filter, fuel injectors, and tire pressure');
+            }
+            if (currentVsBaseline > 25) {
+                recommendations.push('URGENT: Major maintenance required - investigate engine performance');
+            }
+        }
+        if (!isNaN(currentVsManufacturer) && isFinite(currentVsManufacturer) && currentVsManufacturer > 30) {
+            recommendations.push('Performance significantly below manufacturer specifications');
+        }
+
+        return {
+            vehicle,
+            manufacturerVsBaseline: isNaN(manufacturerVsBaseline) || !isFinite(manufacturerVsBaseline) ? 0 : manufacturerVsBaseline,
+            currentVsBaseline: isNaN(currentVsBaseline) || !isFinite(currentVsBaseline) ? 0 : currentVsBaseline,
+            currentVsManufacturer: isNaN(currentVsManufacturer) || !isFinite(currentVsManufacturer) ? 0 : currentVsManufacturer,
+            needsAttention,
+            trend: vehicle.economyTrendDirection || 'unknown',
+            recommendations
+        };
+    },
+
+    // Scheduled Services Management
+    getScheduledServices: async (): Promise<ScheduledService[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        return [...mockScheduledServices].sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+    },
+
+    updateScheduledService: async (serviceId: string, updates: Partial<ScheduledService>): Promise<ScheduledService> => {
+        await new Promise(res => setTimeout(res, 300));
+        const serviceIndex = mockScheduledServices.findIndex(s => s.id === serviceId);
+        if (serviceIndex === -1) {
+            throw new Error('Scheduled service not found');
+        }
+
+        mockScheduledServices[serviceIndex] = {
+            ...mockScheduledServices[serviceIndex],
+            ...updates
+        };
+
+        return mockScheduledServices[serviceIndex];
+    },
+
+    getServicesNeedingReminders: async (): Promise<ScheduledService[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+        return mockScheduledServices.filter(service =>
+            service.isBooked &&
+            !service.reminderSent &&
+            service.bookedDate === tomorrowStr
+        );
+    },
+
+    markReminderSent: async (serviceId: string): Promise<void> => {
+        await new Promise(res => setTimeout(res, 200));
+        const serviceIndex = mockScheduledServices.findIndex(s => s.id === serviceId);
+        if (serviceIndex !== -1) {
+            mockScheduledServices[serviceIndex].reminderSent = true;
+        }
+    },
+
+    // Vehicle Usage Statistics
+    getVehicleUsageStats: async (vehicleId?: string): Promise<VehicleUsageStats[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        if (vehicleId) {
+            const stats = mockVehicleUsageStats.filter(s => s.vehicleId === vehicleId);
+            return stats;
+        }
+        return [...mockVehicleUsageStats];
+    },
+
+    calculateVehicleUsageStats: async (vehicleId: string): Promise<VehicleUsageStats> => {
+        await new Promise(res => setTimeout(res, 300));
+
+        // In a real system, this would calculate from shift data
+        // For demo, we'll return existing or create new stats
+        let existingStats = mockVehicleUsageStats.find(s => s.vehicleId === vehicleId);
+
+        if (!existingStats) {
+            // Calculate from shift data (simplified for demo)
+            const vehicleShifts = mockShifts.filter(s => s.vehicleId === vehicleId && s.status === ShiftStatus.Completed);
+
+            if (vehicleShifts.length === 0) {
+                // No shift data, use default
+                const settings = await api.getSettings();
+                existingStats = {
+                    vehicleId,
+                    avgDailyUsageKm: settings.defaultDailyUsageKm,
+                    totalDaysTracked: 0,
+                    lastCalculated: new Date(),
+                    recentUsageTrend: 'stable'
+                };
+            } else {
+                // Calculate from available shifts
+                const totalKm = vehicleShifts.reduce((sum, shift) =>
+                    sum + ((shift.endOdometer || 0) - shift.startOdometer), 0);
+                const avgKm = totalKm / vehicleShifts.length;
+
+                existingStats = {
+                    vehicleId,
+                    avgDailyUsageKm: Math.round(avgKm),
+                    totalDaysTracked: vehicleShifts.length,
+                    lastCalculated: new Date(),
+                    recentUsageTrend: 'stable'
+                };
+            }
+
+            mockVehicleUsageStats.push(existingStats);
+        }
+
+        return existingStats;
+    },
+
+    getServicesNeedingBooking: async (): Promise<{
+        service: ScheduledService;
+        vehicle: Vehicle;
+        usageStats: VehicleUsageStats;
+        kmUntilBookingDeadline: number;
+        daysUntilBookingDeadline: number;
+        bookingDeadlineKm: number;
+        priority: 'urgent' | 'due-soon' | 'upcoming';
+    }[]> => {
+        await new Promise(res => setTimeout(res, 300));
+        const settings = await api.getSettings();
+        const vehicles = mockVehicles;
+        const result = [];
+
+        for (const service of mockScheduledServices) {
+            if (service.isBooked) continue; // Skip already booked services
+
+            const vehicle = vehicles.find(v => v.id === service.vehicleId);
+            if (!vehicle || vehicle.status !== VehicleStatus.Active) continue;
+
+            const usageStats = await api.calculateVehicleUsageStats(service.vehicleId);
+
+            let bookingDeadlineKm: number;
+
+            if (settings.enableSmartBookingReminders) {
+                // Smart calculation: lead time days × daily usage
+                bookingDeadlineKm = settings.serviceBookingLeadTimeDays * usageStats.avgDailyUsageKm;
+            } else {
+                // Manual override threshold
+                bookingDeadlineKm = settings.bookingReminderThresholdKm;
+            }
+
+            // Calculate how many km until we reach the booking deadline
+            const kmUntilService = service.dueOdometer - (vehicle.currentOdometer || 0);
+            const kmUntilBookingDeadline = kmUntilService - bookingDeadlineKm;
+
+            // Only include if we're at or past the booking deadline
+            if (kmUntilBookingDeadline <= 0) {
+                const daysUntilBookingDeadline = Math.ceil(Math.abs(kmUntilBookingDeadline) / usageStats.avgDailyUsageKm);
+
+                let priority: 'urgent' | 'due-soon' | 'upcoming';
+                if (kmUntilBookingDeadline <= -200) priority = 'urgent'; // 200km past deadline
+                else if (kmUntilBookingDeadline <= 0) priority = 'due-soon'; // At or just past deadline
+                else priority = 'upcoming';
+
+                result.push({
+                    service,
+                    vehicle,
+                    usageStats,
+                    kmUntilBookingDeadline,
+                    daysUntilBookingDeadline,
+                    bookingDeadlineKm,
+                    priority
+                });
+            }
+        }
+
+        return result.sort((a, b) => a.kmUntilBookingDeadline - b.kmUntilBookingDeadline);
     }
 };
 

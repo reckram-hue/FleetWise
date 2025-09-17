@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { Cost, CostCategory, Vehicle } from '../../types';
 import api from '../../services/mockApi';
 import Header from '../shared/Header';
@@ -16,9 +16,10 @@ const emptyCost: Omit<Cost, 'id'> = {
 
 interface ManageCostsProps {
     onBack: () => void;
+    hideBackButton?: boolean;
 }
 
-const ManageCosts: React.FC<ManageCostsProps> = ({ onBack }) => {
+const ManageCosts: React.FC<ManageCostsProps> = ({ onBack, hideBackButton }) => {
     const [costs, setCosts] = useState<Cost[]>([]);
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
     const [loading, setLoading] = useState(true);
@@ -142,14 +143,34 @@ const ManageCosts: React.FC<ManageCostsProps> = ({ onBack }) => {
                         </button>
                     </div>
 
-                    <button onClick={onBack} className="mb-4 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                        Back to Dashboard
-                    </button>
+                    {!hideBackButton && (
+                        <button onClick={onBack} className="mb-4 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                            Back to Dashboard
+                        </button>
+                    )}
                     
                      {loading ? (
                         <p>Loading cost data...</p>
                     ) : (
-                        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                        <div className="space-y-6">
+                            {/* Vehicle Running Costs by Category Bar Chart */}
+                            <Card>
+                                <h2 className="text-xl font-bold text-gray-800 mb-4">Vehicle Running Costs by Category</h2>
+                                <div className="h-80">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={costByCategory} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" />
+                                            <XAxis dataKey="name" angle={-45} textAnchor="end" height={60} interval={0} fontSize={12} />
+                                            <YAxis />
+                                            <Tooltip formatter={(value: number) => `R ${value.toLocaleString()}`} />
+                                            <Legend />
+                                            <Bar dataKey="value" fill="#3b82f6" />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </Card>
+
+                            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
                            <Card className="lg:col-span-2">
                                 <h3 className="text-xl font-bold text-gray-800 mb-4">Costs by Category</h3>
                                 <div className="h-80">
@@ -183,6 +204,7 @@ const ManageCosts: React.FC<ManageCostsProps> = ({ onBack }) => {
                                     )}
                                 </div>
                             </Card>
+                        </div>
                         </div>
                     )}
                 </Card>

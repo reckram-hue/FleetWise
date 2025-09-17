@@ -4,6 +4,12 @@ export enum UserRole {
   Driver = 'driver',
 }
 
+export enum EmploymentStatus {
+  Active = 'Active',
+  Inactive = 'Inactive',
+  Terminated = 'Terminated'
+}
+
 export interface User {
   id: string;
   firstName: string;
@@ -15,11 +21,23 @@ export interface User {
   driversLicenceExpiry?: string; // Storing as string YYYY-MM-DD for simplicity
   contactNumber?: string;
   driversLicenceImageUrl?: string; // base64 or URL
+  area?: string;
+  department?: string;
+  employmentStatus?: EmploymentStatus;
+  employmentEndDate?: string; // YYYY-MM-DD when employment ended
 }
 
 export enum VehicleType {
     ICE = 'ICE', // Internal Combustion Engine
     EV = 'EV',   // Electric Vehicle
+}
+
+export enum VehicleStatus {
+    Active = 'Active',
+    InService = 'In Service', // Scheduled maintenance or repairs
+    Repairs = 'Repairs', // Major repairs, accident damage, etc.
+    Sold = 'Sold', // Vehicle sold/disposed
+    EndOfLife = 'End of Life' // Vehicle retired/disposed
 }
 
 export interface MaintenanceRecord {
@@ -32,12 +50,29 @@ export interface MaintenanceRecord {
   notes?: string;
 }
 
+export interface ScheduledService {
+  id: string;
+  vehicleId: string;
+  serviceType: string;
+  dueDate: string; // YYYY-MM-DD when service is due
+  dueOdometer: number; // Odometer reading when service is due
+  isBooked: boolean; // Whether service appointment is booked
+  bookedDate?: string; // YYYY-MM-DD when service is scheduled
+  bookedTime?: string; // HH:MM appointment time
+  serviceProvider?: string; // Workshop/service center name
+  reminderSent?: boolean; // Whether day-before reminder has been sent
+  notes?: string;
+}
+
 export interface Vehicle {
   id: string;
   registration: string;
   make: string;
   model: string;
   vehicleType: VehicleType;
+  status: VehicleStatus;
+  statusDate?: string; // YYYY-MM-DD when status was last changed
+  statusNotes?: string; // Reason for status change, expected return date, etc.
   batteryCapacityKwh?: number; // for EVs
   serviceIntervalKm?: number;
   lastServiceOdometer?: number;
@@ -45,9 +80,20 @@ export interface Vehicle {
   freeServicesUntilKm?: number;
   maintenanceHistory?: MaintenanceRecord[];
 
-  // Performance Baselines
-  baselineFuelConsumption?: number; // L/100km for ICE vehicles
-  baselineEnergyConsumption?: number; // kWh/100km for EVs
+  // Manufacturer Specifications (official claims)
+  manufacturerFuelConsumption?: number; // L/100km - manufacturer's claimed consumption
+  manufacturerEnergyConsumption?: number; // kWh/100km - for EVs
+
+  // Actual Performance Baselines (real-world established baselines)
+  baselineFuelConsumption?: number; // L/100km for ICE vehicles - actual baseline
+  baselineEnergyConsumption?: number; // kWh/100km for EVs - actual baseline
+
+  // Economy Monitoring
+  currentFuelConsumption?: number; // L/100km - latest calculated consumption
+  currentEnergyConsumption?: number; // kWh/100km - latest calculated for EVs
+  economyVarianceThreshold?: number; // % variation threshold for alerts (default 15%)
+  lastEconomyAlert?: string; // YYYY-MM-DD - last time economy alert was triggered
+  economyTrendDirection?: 'improving' | 'stable' | 'degrading' | 'unknown';
 
   // Financial Details
   financeCompany?: string;
@@ -176,6 +222,14 @@ export interface VehicleStats {
     avgEnergyConsumptionKwhPerKm: number;
 }
 
+export interface VehicleUsageStats {
+    vehicleId: string;
+    avgDailyUsageKm: number; // Average daily kilometers driven
+    totalDaysTracked: number; // Number of days with usage data
+    lastCalculated: Date; // When stats were last updated
+    recentUsageTrend: 'increasing' | 'stable' | 'decreasing'; // Usage pattern trend
+}
+
 export interface RefuelRecord {
     id: string;
     vehicleId: string;
@@ -239,6 +293,7 @@ export interface DriverFine {
     driverId: string;
     vehicleId: string;
     date: string; // YYYY-MM-DD
+    time?: string; // HH:MM format for automatic driver allocation
     fineType: FineType;
     amount: number;
     description: string;
@@ -249,6 +304,9 @@ export interface DriverFine {
     isPaid: boolean;
     paidDate?: string; // YYYY-MM-DD
     notes?: string;
+    // Auto-allocation tracking
+    allocatedAutomatically?: boolean; // True if driver was determined via shift lookup
+    allocationMethod?: 'manual' | 'shift_lookup' | 'single_driver'; // How the driver was determined
 }
 
 export interface VehicleDamage {
@@ -282,4 +340,32 @@ export interface DriverIncidentSummary {
     lastIncidentDate?: string;
     riskScore: number; // 0-100, higher = more risky
     needsTraining: boolean;
+}
+
+export interface FuelEconomyAlert {
+    id: string;
+    vehicleId: string;
+    date: string; // YYYY-MM-DD
+    alertType: 'degradation' | 'improvement' | 'maintenance_required';
+    currentConsumption: number;
+    baselineConsumption: number;
+    manufacturerConsumption?: number;
+    variancePercentage: number; // % difference from baseline
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    isResolved: boolean;
+    resolvedDate?: string;
+    notes?: string;
+}
+
+export interface AppSettings {
+    id: string;
+    areas: string[];
+    departments: string[];
+    // Service booking deadline settings
+    serviceBookingLeadTimeDays: number; // How many days notice needed to book a service
+    enableSmartBookingReminders: boolean; // Enable smart reminders based on usage
+    defaultDailyUsageKm: number; // Fallback usage if vehicle has no history
+    bookingReminderThresholdKm: number; // Manual override - fixed km threshold for all vehicles
+    createdBy: string;
+    lastModified: Date;
 }
