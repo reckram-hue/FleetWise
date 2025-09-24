@@ -28,7 +28,8 @@ import {
   ChargeRecord,
   AppSettings,
   EmploymentStatus,
-  FuelEconomyAlert
+  FuelEconomyAlert,
+  ServiceProvider
 } from '../types';
 
 // FIX: Export mockUsers to be used in the login screen.
@@ -84,6 +85,43 @@ let mockScheduledServices: ScheduledService[] = [
     reminderSent: true,
     notes: 'Free service - reminder already sent'
   },
+  {
+    id: 'ss4',
+    vehicleId: 'v1',
+    serviceType: '15,000 km Service',
+    dueDate: '2024-02-05',
+    dueOdometer: 47000,
+    isBooked: true,
+    bookedDate: '2024-02-05',
+    bookedTime: '08:30',
+    serviceProvider: 'Toyota Service Center',
+    reminderSent: false,
+    notes: 'Major service scheduled'
+  },
+  {
+    id: 'ss5',
+    vehicleId: 'v5',
+    serviceType: 'Annual Service',
+    dueDate: '2024-02-10',
+    dueOdometer: 16000,
+    isBooked: false,
+    notes: 'First annual service for EV'
+  },
+  {
+    id: 'ss6',
+    vehicleId: 'v2',
+    serviceType: '20,000 km Service',
+    dueDate: '2024-01-15',
+    dueOdometer: 75000,
+    isBooked: true,
+    bookedDate: '2024-01-15',
+    bookedTime: '10:00',
+    serviceProvider: 'Ford Service Center',
+    reminderSent: true,
+    sentForService: true,
+    sentDate: '2024-01-15',
+    notes: 'Major service - vehicle currently at service center'
+  }
 ];
 
 let mockVehicleUsageStats: VehicleUsageStats[] = [
@@ -154,6 +192,8 @@ export let mockVehicles: Vehicle[] = [
         trackingCompany: 'Tracker',
         trackingAccountNumber: 'TRK555123',
         trackingFee: 250.00,
+        defaultServiceProviderId: 'sp1', // City Motors Workshop
+        warrantyServiceProviderId: 'sp1',
     },
     {
         id: 'v2',
@@ -184,6 +224,8 @@ export let mockVehicles: Vehicle[] = [
         trackingCompany: 'Netstar',
         trackingAccountNumber: 'NET-445566',
         trackingFee: 300.00,
+        defaultServiceProviderId: 'sp3', // AutoFix Mobile Services
+        warrantyServiceProviderId: 'sp1', // City Motors Workshop
     },
     {
         id: 'v6',
@@ -203,7 +245,9 @@ export let mockVehicles: Vehicle[] = [
         serviceIntervalKm: 15000,
         lastServiceOdometer: 0,
         freeServicesUntilKm: 45000,
-        maintenanceHistory: []
+        maintenanceHistory: [],
+        defaultServiceProviderId: 'sp4', // Kia Service Center
+        warrantyServiceProviderId: 'sp4'
     },
     {
         id: 'v3',
@@ -217,7 +261,9 @@ export let mockVehicles: Vehicle[] = [
         batteryCapacityKwh: 64,
         baselineEnergyConsumption: 16.8, // kWh/100km - Hyundai Kona EV baseline
         currentOdometer: 32000,
-        maintenanceHistory: []
+        maintenanceHistory: [],
+        defaultServiceProviderId: 'sp2', // Green Power EV Services
+        warrantyServiceProviderId: 'sp2'
     },
     {
         id: 'v4',
@@ -246,7 +292,9 @@ export let mockVehicles: Vehicle[] = [
         batteryCapacityKwh: 77,
         baselineEnergyConsumption: 19.2, // kWh/100km - VW ID.4 baseline (larger EV, higher consumption)
         currentOdometer: 15000,
-        maintenanceHistory: []
+        maintenanceHistory: [],
+        defaultServiceProviderId: 'sp2', // Green Power EV Services
+        warrantyServiceProviderId: 'sp2'
     },
 ];
 
@@ -597,6 +645,92 @@ let mockSettings: AppSettings = {
     createdBy: 'admin1',
     lastModified: new Date()
 };
+
+let mockServiceProviders: ServiceProvider[] = [
+    {
+        id: 'sp1',
+        name: 'City Motors Workshop',
+        contactPerson: 'John Smith',
+        primaryPhone: '021-555-0001',
+        secondaryPhone: '082-555-0001',
+        email: 'service@citymotors.co.za',
+        address: '123 Main Road',
+        city: 'Cape Town',
+        province: 'Western Cape',
+        postalCode: '8001',
+        specializations: ['ICE', 'General', 'Warranty'],
+        isActive: true,
+        notes: 'Authorized Toyota and Ford dealer service center',
+        createdDate: '2023-01-15',
+        lastModified: new Date()
+    },
+    {
+        id: 'sp2',
+        name: 'Green Power EV Services',
+        contactPerson: 'Sarah Johnson',
+        primaryPhone: '011-555-0002',
+        secondaryPhone: '083-555-0002',
+        email: 'info@greenpower.co.za',
+        address: '456 Innovation Drive',
+        city: 'Johannesburg',
+        province: 'Gauteng',
+        postalCode: '2000',
+        specializations: ['EV', 'General'],
+        isActive: true,
+        notes: 'Specializes in electric vehicle maintenance and repairs',
+        createdDate: '2023-02-20',
+        lastModified: new Date()
+    },
+    {
+        id: 'sp3',
+        name: 'AutoFix Mobile Services',
+        contactPerson: 'Mike Williams',
+        primaryPhone: '031-555-0003',
+        email: 'contact@autofix.co.za',
+        address: '789 Workshop Street',
+        city: 'Durban',
+        province: 'KwaZulu-Natal',
+        postalCode: '4001',
+        specializations: ['ICE', 'General', 'Emergency'],
+        isActive: true,
+        notes: 'Mobile service available for emergencies',
+        createdDate: '2023-03-10',
+        lastModified: new Date()
+    },
+    {
+        id: 'sp4',
+        name: 'Kia Service Center',
+        contactPerson: 'Lisa Chen',
+        primaryPhone: '012-555-0004',
+        secondaryPhone: '084-555-0004',
+        email: 'service@kiaservice.co.za',
+        address: '321 Dealer Avenue',
+        city: 'Pretoria',
+        province: 'Gauteng',
+        postalCode: '0002',
+        specializations: ['ICE', 'Warranty', 'Kia'],
+        isActive: true,
+        notes: 'Official Kia authorized service center',
+        createdDate: '2023-01-25',
+        lastModified: new Date()
+    },
+    {
+        id: 'sp5',
+        name: 'Quick Lube Express',
+        contactPerson: 'David Brown',
+        primaryPhone: '021-555-0005',
+        email: 'info@quicklube.co.za',
+        address: '654 Service Road',
+        city: 'Cape Town',
+        province: 'Western Cape',
+        postalCode: '7500',
+        specializations: ['ICE', 'General'],
+        isActive: false,
+        notes: 'Currently not accepting new clients',
+        createdDate: '2023-04-05',
+        lastModified: new Date()
+    }
+];
 
 let mockFuelEconomyAlerts: FuelEconomyAlert[] = [
     {
@@ -1566,7 +1700,16 @@ const api = {
     // Scheduled Services Management
     getScheduledServices: async (): Promise<ScheduledService[]> => {
         await new Promise(res => setTimeout(res, 200));
-        return [...mockScheduledServices].sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+        // Show all services that are not completed (including those in progress)
+        const activeServices = mockScheduledServices.filter(s => !s.returnedFromService);
+        return activeServices
+            .sort((a, b) => {
+                // Sort by priority: sent for service first, then by due date
+                if (a.sentForService && !b.sentForService) return -1;
+                if (!a.sentForService && b.sentForService) return 1;
+                return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+            })
+            .slice(0, 6); // Show up to 6 services including those in progress
     },
 
     updateScheduledService: async (serviceId: string, updates: Partial<ScheduledService>): Promise<ScheduledService> => {
@@ -1715,6 +1858,187 @@ const api = {
         }
 
         return result.sort((a, b) => a.kmUntilBookingDeadline - b.kmUntilBookingDeadline);
+    },
+
+    // Send vehicle for service
+    sendVehicleForService: async (serviceId: string, sentDate: string): Promise<ScheduledService> => {
+        await new Promise(res => setTimeout(res, 300));
+        const serviceIndex = mockScheduledServices.findIndex(s => s.id === serviceId);
+        if (serviceIndex === -1) {
+            throw new Error('Scheduled service not found');
+        }
+
+        mockScheduledServices[serviceIndex] = {
+            ...mockScheduledServices[serviceIndex],
+            sentForService: true,
+            sentDate
+        };
+
+        // Update vehicle status to InService
+        const vehicleIndex = mockVehicles.findIndex(v => v.id === mockScheduledServices[serviceIndex].vehicleId);
+        if (vehicleIndex !== -1) {
+            mockVehicles[vehicleIndex] = {
+                ...mockVehicles[vehicleIndex],
+                status: VehicleStatus.InService,
+                statusDate: sentDate,
+                statusNotes: `Sent for ${mockScheduledServices[serviceIndex].serviceType} at ${mockScheduledServices[serviceIndex].serviceProvider}`
+            };
+        }
+
+        return mockScheduledServices[serviceIndex];
+    },
+
+    // Return vehicle from service
+    returnVehicleFromService: async (serviceId: string, returnData: {
+        returnDate: string;
+        actualCost: number;
+        serviceNotes: string;
+    }): Promise<ScheduledService> => {
+        await new Promise(res => setTimeout(res, 300));
+        const serviceIndex = mockScheduledServices.findIndex(s => s.id === serviceId);
+        if (serviceIndex === -1) {
+            throw new Error('Scheduled service not found');
+        }
+
+        mockScheduledServices[serviceIndex] = {
+            ...mockScheduledServices[serviceIndex],
+            returnedFromService: true,
+            returnDate: returnData.returnDate,
+            actualCost: returnData.actualCost,
+            serviceNotes: returnData.serviceNotes
+        };
+
+        // Update vehicle status back to Active
+        const vehicleIndex = mockVehicles.findIndex(v => v.id === mockScheduledServices[serviceIndex].vehicleId);
+        if (vehicleIndex !== -1) {
+            mockVehicles[vehicleIndex] = {
+                ...mockVehicles[vehicleIndex],
+                status: VehicleStatus.Active,
+                statusDate: returnData.returnDate,
+                statusNotes: 'Returned from service'
+            };
+        }
+
+        // Add to maintenance history
+        const newMaintenanceRecord: MaintenanceRecord = {
+            id: `m${mockMaintenanceRecords.length + 1}`,
+            vehicleId: mockScheduledServices[serviceIndex].vehicleId,
+            date: returnData.returnDate,
+            odometer: mockScheduledServices[serviceIndex].dueOdometer, // Use due odometer as approximation
+            serviceType: mockScheduledServices[serviceIndex].serviceType,
+            cost: returnData.actualCost,
+            notes: returnData.serviceNotes
+        };
+
+        mockMaintenanceRecords.push(newMaintenanceRecord);
+
+        if (vehicleIndex !== -1) {
+            if (!mockVehicles[vehicleIndex].maintenanceHistory) {
+                mockVehicles[vehicleIndex].maintenanceHistory = [];
+            }
+            mockVehicles[vehicleIndex].maintenanceHistory!.push(newMaintenanceRecord);
+            mockVehicles[vehicleIndex].maintenanceHistory!.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+            // Update last service odometer
+            if (newMaintenanceRecord.odometer > (mockVehicles[vehicleIndex].lastServiceOdometer || 0)) {
+                mockVehicles[vehicleIndex].lastServiceOdometer = newMaintenanceRecord.odometer;
+            }
+        }
+
+        return mockScheduledServices[serviceIndex];
+    },
+
+    // Get services currently in progress (sent but not returned)
+    getServicesInProgress: async (): Promise<ScheduledService[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        return mockScheduledServices.filter(s => s.sentForService && !s.returnedFromService);
+    },
+
+    // Service Provider Management
+    getServiceProviders: async (activeOnly: boolean = false): Promise<ServiceProvider[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        const providers = activeOnly
+            ? mockServiceProviders.filter(sp => sp.isActive)
+            : mockServiceProviders;
+        return [...providers].sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    addServiceProvider: async (providerData: Omit<ServiceProvider, 'id' | 'createdDate' | 'lastModified'>): Promise<ServiceProvider> => {
+        await new Promise(res => setTimeout(res, 300));
+        const newProvider: ServiceProvider = {
+            ...providerData,
+            id: `sp${mockServiceProviders.length + 1}`,
+            createdDate: new Date().toISOString().split('T')[0],
+            lastModified: new Date()
+        };
+        mockServiceProviders.push(newProvider);
+        return newProvider;
+    },
+
+    updateServiceProvider: async (providerId: string, updates: Partial<ServiceProvider>): Promise<ServiceProvider> => {
+        await new Promise(res => setTimeout(res, 300));
+        const providerIndex = mockServiceProviders.findIndex(sp => sp.id === providerId);
+        if (providerIndex === -1) {
+            throw new Error('Service provider not found');
+        }
+
+        mockServiceProviders[providerIndex] = {
+            ...mockServiceProviders[providerIndex],
+            ...updates,
+            lastModified: new Date()
+        };
+
+        return mockServiceProviders[providerIndex];
+    },
+
+    deleteServiceProvider: async (providerId: string): Promise<{ success: boolean }> => {
+        await new Promise(res => setTimeout(res, 300));
+
+        // Check if provider is being used by any vehicles
+        const vehiclesUsingProvider = mockVehicles.filter(v =>
+            v.defaultServiceProviderId === providerId || v.warrantyServiceProviderId === providerId
+        );
+
+        if (vehiclesUsingProvider.length > 0) {
+            throw new Error(`Cannot delete service provider. It is assigned to ${vehiclesUsingProvider.length} vehicle(s).`);
+        }
+
+        // Check if provider is being used by any scheduled services
+        const servicesUsingProvider = mockScheduledServices.filter(s =>
+            s.serviceProvider === mockServiceProviders.find(sp => sp.id === providerId)?.name
+        );
+
+        if (servicesUsingProvider.length > 0) {
+            throw new Error(`Cannot delete service provider. It has ${servicesUsingProvider.length} scheduled service(s).`);
+        }
+
+        const initialLength = mockServiceProviders.length;
+        mockServiceProviders = mockServiceProviders.filter(sp => sp.id !== providerId);
+
+        if (mockServiceProviders.length === initialLength) {
+            throw new Error('Service provider not found');
+        }
+
+        return { success: true };
+    },
+
+    getServiceProvider: async (providerId: string): Promise<ServiceProvider | null> => {
+        await new Promise(res => setTimeout(res, 100));
+        return mockServiceProviders.find(sp => sp.id === providerId) || null;
+    },
+
+    // Get service providers suitable for a specific vehicle type
+    getServiceProvidersForVehicle: async (vehicleType: VehicleType, activeOnly: boolean = true): Promise<ServiceProvider[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        const providers = mockServiceProviders.filter(sp => {
+            if (activeOnly && !sp.isActive) return false;
+
+            // Check if provider handles this vehicle type
+            const typeSpecialization = vehicleType === VehicleType.EV ? 'EV' : 'ICE';
+            return sp.specializations.includes(typeSpecialization) || sp.specializations.includes('General');
+        });
+
+        return providers.sort((a, b) => a.name.localeCompare(b.name));
     }
 };
 

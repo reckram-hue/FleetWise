@@ -1,16 +1,20 @@
-
-
 import React, { useState, useEffect, useRef } from 'react';
-import { Vehicle, VehicleType, VehicleStatus, MaintenanceRecord } from '../../types';
+import { Vehicle, VehicleType, VehicleStatus, MaintenanceRecord, BodyStyle, FuelType } from '../../types';
 import api from '../../services/mockApi';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
-import { Plus, Edit, Trash2, X, Wrench, QrCode } from 'lucide-react';
+import { Plus, Edit, Trash2, X, Wrench, QrCode, ChevronDown } from 'lucide-react';
 
 const emptyVehicle: Omit<Vehicle, 'id'> = {
     registration: '',
+    alias: '',
     make: '',
     model: '',
+    vin: '',
+    engineNumber: '',
+    bodyStyle: undefined,
+    colour: '',
+    fuelType: undefined,
     vehicleType: VehicleType.ICE,
     status: VehicleStatus.Active,
     statusDate: new Date().toISOString().split('T')[0],
@@ -32,12 +36,30 @@ const emptyVehicle: Omit<Vehicle, 'id'> = {
     financeCost: 0,
     financeEndDate: '',
     balloonPayment: 0,
+    financeContactName: '',
+    financeContactEmail: '',
+    financeContactPhone: '',
     insuranceCompany: '',
     insurancePolicyNumber: '',
     insuranceFee: 0,
+    insuranceContactName: '',
+    insuranceContactEmail: '',
+    insuranceContactPhone: '',
     trackingCompany: '',
     trackingAccountNumber: '',
     trackingFee: 0,
+    trackingContactName: '',
+    trackingContactEmail: '',
+    trackingContactPhone: '',
+    // Third Party Warranty Insurance
+    warrantyInsurer: '',
+    warrantyPolicyNumber: '',
+    warrantyInceptionDate: '',
+    warrantyExpiryDate: '',
+    warrantyMileageTo: 0,
+    warrantyContactName: '',
+    warrantyContactEmail: '',
+    warrantyContactPhone: '',
 };
 
 const emptyRecord: Omit<MaintenanceRecord, 'id' | 'vehicleId'> = {
@@ -64,7 +86,7 @@ const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, o
     useEffect(() => {
         setNewRecord(prev => ({ ...prev, odometer: vehicle.currentOdometer || 0 }));
     }, [vehicle]);
-    
+
     const handleRecordChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
         const parsedValue = (name === 'cost' || name === 'odometer') ? parseFloat(value) || 0 : value;
@@ -81,18 +103,18 @@ const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, o
         try {
             const recordData = { ...newRecord, vehicleId: vehicle.id };
             const addedRecord = await api.addMaintenanceRecord(recordData);
-            
+
             const updatedHistory = [addedRecord, ...(vehicle.maintenanceHistory || [])];
             updatedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            
-            const updatedVehicle = { 
-                ...vehicle, 
-                maintenanceHistory: updatedHistory, 
+
+            const updatedVehicle = {
+                ...vehicle,
+                maintenanceHistory: updatedHistory,
                 lastServiceOdometer: Math.max(vehicle.lastServiceOdometer || 0, addedRecord.odometer)
             };
-            
+
             onRecordAdded(updatedVehicle);
-            
+
             setNewRecord({ ...emptyRecord, odometer: updatedVehicle.currentOdometer || 0 });
         } catch (error) {
             console.error("Failed to add maintenance record:", error);
@@ -103,7 +125,7 @@ const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, o
     };
 
     const isPotentiallyFreeService = vehicle.freeServicesUntilKm && (vehicle.currentOdometer || 0) <= vehicle.freeServicesUntilKm;
-    
+
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
             <Card className="w-full max-w-4xl max-h-[90vh] flex flex-col">
@@ -111,7 +133,7 @@ const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, o
                     <h3 className="text-xl font-bold">Maintenance Log: {vehicle.make} {vehicle.model} ({vehicle.registration})</h3>
                     <button onClick={onClose} className="p-1 rounded-full hover:bg-gray-200"><X size={20}/></button>
                 </div>
-                
+
                 {isPotentiallyFreeService && (
                     <div className="mb-4 p-3 border-l-4 border-teal-500 bg-teal-50 text-teal-700 rounded-r-lg" role="alert">
                         <p className="font-bold">Service Plan Active</p>
@@ -138,7 +160,7 @@ const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, o
                         </div>
                     </form>
                 </div>
-                
+
                 <div className="flex-grow overflow-y-auto">
                     <h4 className="text-lg font-semibold mb-2">History</h4>
                     {(!vehicle.maintenanceHistory || vehicle.maintenanceHistory.length === 0) ? (
@@ -295,14 +317,14 @@ const QRModal: React.FC<QRModalProps> = ({ vehicle, onClose }) => {
                 <Card className="text-center">
                     <h3 className="text-2xl font-bold">{vehicle.make} {vehicle.model}</h3>
                     <p className="text-lg font-semibold text-gray-700">{vehicle.registration}</p>
-                    
+
                     <div className="relative w-[256px] h-[256px] mx-auto my-4 bg-gray-100 flex items-center justify-center rounded-lg overflow-hidden">
                         {qrStatus === 'loading' && <p className="text-gray-500">Generating QR Code...</p>}
                         {qrStatus === 'error' && <p className="text-red-500 p-4">{errorMessage}</p>}
                         {/* The library will insert a canvas or img tag here */}
                         <div id="qr-code-container" className={qrStatus === 'generated' ? 'block' : 'hidden'}></div>
                     </div>
-                    
+
                     <p className="mt-2 text-sm text-gray-500">Scan to start/end shift</p>
                     <div className="mt-6 flex justify-center gap-4 no-print">
                         <button onClick={() => window.print()} className="bg-blue-500 text-white font-bold py-2 px-6 rounded-lg hover:bg-blue-600 transition">Print</button>
@@ -324,11 +346,14 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
+    const [isEditMode, setIsEditMode] = useState(false); // Controls whether form is in edit mode or view mode
     const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | Omit<Vehicle, 'id'>>(emptyVehicle);
     const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
     const [vehicleForMaintenance, setVehicleForMaintenance] = useState<Vehicle | null>(null);
     const [showQRModal, setShowQRModal] = useState(false);
     const [vehicleForQR, setVehicleForQR] = useState<Vehicle | null>(null);
+    type StatusSortOrder = 'default' | 'active-first' | 'service-first' | 'repairs-first' | 'sold-first';
+    const [statusSortOrder, setStatusSortOrder] = useState<StatusSortOrder>('default');
 
     const fetchVehicles = async () => {
         setLoading(true);
@@ -340,19 +365,25 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
     useEffect(() => {
         fetchVehicles();
     }, []);
-    
+
     const handleAddClick = () => {
         setIsEditing(false);
+        setIsEditMode(true); // New vehicles start in edit mode
         setSelectedVehicle(emptyVehicle);
         setShowForm(true);
     };
 
     const handleEditClick = (vehicle: Vehicle) => {
         setIsEditing(true);
+        setIsEditMode(false); // Start in view mode for existing vehicles
         setSelectedVehicle(vehicle);
         setShowForm(true);
     };
-    
+
+    const handleEditToggle = () => {
+        setIsEditMode(!isEditMode);
+    };
+
     const handleQRClick = (vehicle: Vehicle) => {
         setVehicleForQR(vehicle);
         setShowQRModal(true);
@@ -374,7 +405,75 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
         setVehicleForMaintenance(vehicle);
         setShowMaintenanceModal(true);
     };
-    
+
+    const handleViewVehicleDetails = (vehicle: Vehicle) => {
+        setIsEditing(true);
+        setIsEditMode(false); // Start in view mode
+        setSelectedVehicle(vehicle);
+        setShowForm(true);
+    };
+
+    const handleStatusSort = () => {
+        const sortOrders: StatusSortOrder[] = ['default', 'active-first', 'service-first', 'repairs-first', 'sold-first'];
+        const currentIndex = sortOrders.indexOf(statusSortOrder);
+        const nextIndex = (currentIndex + 1) % sortOrders.length;
+        setStatusSortOrder(sortOrders[nextIndex]);
+    };
+
+    const getSortOrderLabel = (order: StatusSortOrder): string => {
+        switch (order) {
+            case 'active-first': return 'Active First';
+            case 'service-first': return 'In Service First';
+            case 'repairs-first': return 'Repairs First';
+            case 'sold-first': return 'Sold First';
+            default: return 'Default Order';
+        }
+    };
+
+    const getSortOrderPriority = (status: VehicleStatus, order: StatusSortOrder): number => {
+        switch (order) {
+            case 'active-first':
+                return status === VehicleStatus.Active ? 0 :
+                       status === VehicleStatus.InService ? 1 :
+                       status === VehicleStatus.Repairs ? 2 :
+                       status === VehicleStatus.Sold ? 3 : 4;
+            case 'service-first':
+                return status === VehicleStatus.InService ? 0 :
+                       status === VehicleStatus.Active ? 1 :
+                       status === VehicleStatus.Repairs ? 2 :
+                       status === VehicleStatus.Sold ? 3 : 4;
+            case 'repairs-first':
+                return status === VehicleStatus.Repairs ? 0 :
+                       status === VehicleStatus.InService ? 1 :
+                       status === VehicleStatus.Active ? 2 :
+                       status === VehicleStatus.Sold ? 3 : 4;
+            case 'sold-first':
+                return status === VehicleStatus.Sold ? 0 :
+                       status === VehicleStatus.EndOfLife ? 1 :
+                       status === VehicleStatus.Active ? 2 :
+                       status === VehicleStatus.InService ? 3 : 4;
+            default:
+                return 0; // Default alphabetical/original order
+        }
+    };
+
+    const sortedVehicles = [...vehicles].sort((a, b) => {
+        if (statusSortOrder === 'default') {
+            // Default sort by registration
+            return a.registration.localeCompare(b.registration);
+        }
+
+        const priorityA = getSortOrderPriority(a.status, statusSortOrder);
+        const priorityB = getSortOrderPriority(b.status, statusSortOrder);
+
+        if (priorityA !== priorityB) {
+            return priorityA - priorityB;
+        }
+
+        // Secondary sort by registration within same status
+        return a.registration.localeCompare(b.registration);
+    });
+
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         const { name, value } = e.target;
         const numericFields = [
@@ -392,6 +491,10 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!isEditMode && isEditing) {
+            // If viewing an existing vehicle and not in edit mode, don't submit
+            return;
+        }
         try {
             if (isEditing) {
                 await api.updateVehicle(selectedVehicle as Vehicle);
@@ -399,6 +502,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                 await api.addVehicle(selectedVehicle as Omit<Vehicle, 'id'>);
             }
             setShowForm(false);
+            setIsEditMode(false);
             fetchVehicles();
         } catch (error) {
             console.error("Failed to save vehicle:", error);
@@ -410,7 +514,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
         if (vehicle.vehicleType === VehicleType.EV || !vehicle.serviceIntervalKm || vehicle.serviceIntervalKm <= 0) {
             return 'N/A';
         }
-        
+
         const lastService = vehicle.lastServiceOdometer || 0;
         const nextServiceOdo = lastService + vehicle.serviceIntervalKm;
         const dueIn = nextServiceOdo - (vehicle.currentOdometer || 0);
@@ -428,17 +532,36 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
         } else {
             dueText = `In ${dueIn.toLocaleString()} km`;
         }
-        
+
         return <div className="flex items-center">{dueText}{freeServiceTag}</div>;
     };
+
 
 
     const renderVehicleForm = () => (
          <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
             <Card className="w-full max-w-3xl max-h-[90vh] overflow-y-auto">
                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-xl font-bold">{isEditing ? 'Edit Vehicle' : 'Add New Vehicle'}</h3>
-                    <button onClick={() => setShowForm(false)} className="p-1 rounded-full hover:bg-gray-200"><X size={20}/></button>
+                    {!isEditing ? (
+                        <h3 className="text-xl font-bold">Add New Vehicle</h3>
+                    ) : (
+                        <div className="flex items-center justify-between w-full">
+                            <h3 className="text-xl font-bold">{selectedVehicle.make} {selectedVehicle.model} ({(selectedVehicle as Vehicle).registration})</h3>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={handleEditToggle}
+                                    className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition flex items-center gap-2"
+                                >
+                                    <Edit size={16} />
+                                    {isEditMode ? 'Cancel Edit' : 'Edit Vehicle'}
+                                </button>
+                                <button onClick={() => { setShowForm(false); setIsEditMode(false); }} className="p-1 rounded-full hover:bg-gray-200"><X size={20}/></button>
+                            </div>
+                        </div>
+                    )}
+                    {!isEditing && (
+                        <button onClick={() => { setShowForm(false); setIsEditMode(false); }} className="p-1 rounded-full hover:bg-gray-200"><X size={20}/></button>
+                    )}
                  </div>
                  <form onSubmit={handleSubmit} className="space-y-6">
                     <div>
@@ -446,26 +569,73 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Registration</label>
-                                <input name="registration" value={selectedVehicle.registration} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required />
+                                <input name="registration" value={selectedVehicle.registration} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Alias/Friendly Name</label>
+                                <input name="alias" value={selectedVehicle.alias || ''} onChange={handleFormChange} placeholder="e.g., Fleet Car 1, Delivery Van" className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Make</label>
-                                <input name="make" value={selectedVehicle.make} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required />
+                                <input name="make" value={selectedVehicle.make} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={!isEditMode} />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Model</label>
-                                <input name="model" value={selectedVehicle.model} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required />
+                                <input name="model" value={selectedVehicle.model} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={!isEditMode} />
                             </div>
                             <div>
-                                <label  className="block text-sm font-medium text-gray-700">Vehicle Type</label>
-                                <select name="vehicleType" value={selectedVehicle.vehicleType} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required>
-                                    <option value={VehicleType.ICE}>ICE</option>
-                                    <option value={VehicleType.EV}>EV</option>
+                                <label className="block text-sm font-medium text-gray-700">VIN (Vehicle Identification Number)</label>
+                                <input name="vin" value={selectedVehicle.vin || ''} onChange={handleFormChange} placeholder="17-character VIN" className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Engine Number</label>
+                                <input name="engineNumber" value={selectedVehicle.engineNumber || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Body Style</label>
+                                <select name="bodyStyle" value={selectedVehicle.bodyStyle || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode}>
+                                    <option value="">Select body style</option>
+                                    <option value={BodyStyle.Sedan}>Sedan</option>
+                                    <option value={BodyStyle.Hatchback}>Hatchback</option>
+                                    <option value={BodyStyle.SUV}>SUV</option>
+                                    <option value={BodyStyle.PanelVan}>Panel Van</option>
+                                    <option value={BodyStyle.Truck}>Truck</option>
+                                    <option value={BodyStyle.Bakkie}>Bakkie</option>
+                                    <option value={BodyStyle.Coupe}>Coupe</option>
+                                    <option value={BodyStyle.Convertible}>Convertible</option>
+                                    <option value={BodyStyle.Wagon}>Wagon</option>
+                                    <option value={BodyStyle.MiniBus}>Mini Bus</option>
+                                    <option value={BodyStyle.Bus}>Bus</option>
+                                    <option value={BodyStyle.Other}>Other</option>
                                 </select>
                             </div>
                             <div>
+                                <label className="block text-sm font-medium text-gray-700">Colour</label>
+                                <input name="colour" value={selectedVehicle.colour || ''} onChange={handleFormChange} placeholder="e.g., White, Blue, Silver" className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Vehicle Type</label>
+                                <select name="vehicleType" value={selectedVehicle.vehicleType} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={!isEditMode}>
+                                    <option value={VehicleType.ICE}>ICE (Internal Combustion Engine)</option>
+                                    <option value={VehicleType.EV}>EV (Electric Vehicle)</option>
+                                </select>
+                            </div>
+                            {selectedVehicle.vehicleType === VehicleType.ICE && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700">Fuel Type</label>
+                                    <select name="fuelType" value={selectedVehicle.fuelType || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode}>
+                                        <option value="">Select fuel type</option>
+                                        <option value={FuelType.Petrol}>Petrol</option>
+                                        <option value={FuelType.Diesel}>Diesel</option>
+                                        <option value={FuelType.LPG}>LPG</option>
+                                        <option value={FuelType.CNG}>CNG</option>
+                                        <option value={FuelType.Hybrid}>Hybrid</option>
+                                    </select>
+                                </div>
+                            )}
+                            <div>
                                 <label className="block text-sm font-medium text-gray-700">Status</label>
-                                <select name="status" value={selectedVehicle.status} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required>
+                                <select name="status" value={selectedVehicle.status} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={!isEditMode}>
                                     <option value={VehicleStatus.Active}>Active</option>
                                     <option value={VehicleStatus.InService}>In Service</option>
                                     <option value={VehicleStatus.Repairs}>Repairs</option>
@@ -475,31 +645,31 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Status Date</label>
-                                <input type="date" name="statusDate" value={selectedVehicle.statusDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
+                                <input type="date" name="statusDate" value={selectedVehicle.statusDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Status Notes</label>
-                                <input name="statusNotes" value={selectedVehicle.statusNotes || ''} onChange={handleFormChange} placeholder="Reason for status change, expected return date, etc." className="mt-1 p-2 border rounded w-full" />
+                                <input name="statusNotes" value={selectedVehicle.statusNotes || ''} onChange={handleFormChange} placeholder="Reason for status change, expected return date, etc." className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Current Odometer (km)</label>
-                                <input type="number" name="currentOdometer" value={selectedVehicle.currentOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required />
+                                <input type="number" name="currentOdometer" value={selectedVehicle.currentOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={!isEditMode} />
                             </div>
-                            
+
                             {selectedVehicle.vehicleType === VehicleType.ICE && (
                                 <>
                                     <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4">
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700">Service Interval (km)</label>
-                                            <input type="number" name="serviceIntervalKm" value={selectedVehicle.serviceIntervalKm || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
+                                            <input type="number" name="serviceIntervalKm" value={selectedVehicle.serviceIntervalKm || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
                                         </div>
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700">Last Service Odo (km)</label>
-                                            <input type="number" name="lastServiceOdometer" value={selectedVehicle.lastServiceOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
+                                            <input type="number" name="lastServiceOdometer" value={selectedVehicle.lastServiceOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
                                         </div>
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700">Free Services Until (km)</label>
-                                            <input type="number" name="freeServicesUntilKm" value={selectedVehicle.freeServicesUntilKm || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
+                                            <input type="number" name="freeServicesUntilKm" value={selectedVehicle.freeServicesUntilKm || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
                                         </div>
                                     </div>
                                 </>
@@ -507,7 +677,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                             {selectedVehicle.vehicleType === VehicleType.EV && (
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700">Battery Capacity (kWh)</label>
-                                    <input type="number" name="batteryCapacityKwh" value={selectedVehicle.batteryCapacityKwh || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
+                                    <input type="number" name="batteryCapacityKwh" value={selectedVehicle.batteryCapacityKwh || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
                                 </div>
                             )}
                         </div>
@@ -532,6 +702,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                             onChange={handleFormChange}
                                             className="mt-1 p-2 border rounded w-full"
                                             placeholder="e.g., 8.5"
+                                            disabled={!isEditMode}
                                         />
                                     </div>
                                     <div>
@@ -547,6 +718,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                             onChange={handleFormChange}
                                             className="mt-1 p-2 border rounded w-full"
                                             placeholder="e.g., 9.2"
+                                            disabled={!isEditMode}
                                         />
                                     </div>
                                 </>
@@ -565,6 +737,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                             onChange={handleFormChange}
                                             className="mt-1 p-2 border rounded w-full"
                                             placeholder="e.g., 18.5"
+                                            disabled={!isEditMode}
                                         />
                                     </div>
                                     <div>
@@ -579,230 +752,351 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                             value={selectedVehicle.baselineEnergyConsumption || ''}
                                             onChange={handleFormChange}
                                             className="mt-1 p-2 border rounded w-full"
-                                            placeholder="e.g., 20.8"
+                                            placeholder="e.g., 19.8"
+                                            disabled={!isEditMode}
                                         />
                                     </div>
                                 </>
                             )}
-                            <div>
+                            <div className="md:col-span-2">
                                 <label className="block text-sm font-medium text-gray-700">
-                                    Economy Alert Threshold (%)
-                                    <span className="text-xs text-gray-500 block">Alert when consumption exceeds baseline by this %</span>
+                                    Performance Variance Threshold (%)
+                                    <span className="text-xs text-gray-500 block">Alert when consumption exceeds this percentage above baseline</span>
                                 </label>
                                 <input
                                     type="number"
                                     step="1"
                                     name="economyVarianceThreshold"
-                                    value={selectedVehicle.economyVarianceThreshold || 15}
+                                    value={selectedVehicle.economyVarianceThreshold || ''}
                                     onChange={handleFormChange}
-                                    className="mt-1 p-2 border rounded w-full"
-                                    min="5"
-                                    max="50"
+                                    className="mt-1 p-2 border rounded w-full max-w-xs"
                                     placeholder="15"
+                                    disabled={!isEditMode}
                                 />
                             </div>
                         </div>
-                        <div className="mt-3 p-3 bg-blue-50 rounded-md">
-                            <p className="text-sm text-blue-800">
-                                <strong>Tip:</strong> Manufacturer specifications are usually optimistic. Set realistic baselines based on actual performance.
-                                The system will alert you when current consumption significantly exceeds the baseline, indicating potential maintenance needs.
-                            </p>
+                    </div>
+
+                    {/* Financial Information */}
+                    <div>
+                        <h4 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">Financial Information</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Finance Company</label>
+                                <input name="financeCompany" value={selectedVehicle.financeCompany || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Finance Account Number</label>
+                                <input name="financeAccountNumber" value={selectedVehicle.financeAccountNumber || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Finance Cost (R)</label>
+                                <input type="number" name="financeCost" value={selectedVehicle.financeCost || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Finance End Date</label>
+                                <input type="date" name="financeEndDate" value={selectedVehicle.financeEndDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Balloon Payment (R)</label>
+                                <input type="number" name="balloonPayment" value={selectedVehicle.balloonPayment || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Name</label>
+                                <input name="financeContactName" value={selectedVehicle.financeContactName || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Email</label>
+                                <input type="email" name="financeContactEmail" value={selectedVehicle.financeContactEmail || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Phone</label>
+                                <input type="tel" name="financeContactPhone" value={selectedVehicle.financeContactPhone || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
                         </div>
                     </div>
 
-                    <div className="space-y-4">
-                        <h4 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">Financial Details</h4>
-                        
-                        {/* Vehicle Finance Section */}
-                        <div className="p-4 border rounded-md bg-gray-50/50">
-                            <h5 className="font-semibold text-md text-gray-700 mb-3">Vehicle Finance</h5>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Finance Company</label>
-                                    <input name="financeCompany" value={selectedVehicle.financeCompany || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Account Number</label>
-                                    <input name="financeAccountNumber" value={selectedVehicle.financeAccountNumber || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Monthly Cost (R)</label>
-                                    <input type="number" step="0.01" name="financeCost" value={selectedVehicle.financeCost || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Finance End Date</label>
-                                    <input type="date" name="financeEndDate" value={selectedVehicle.financeEndDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                                 <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700">Balloon Payment (R)</label>
-                                    <input type="number" step="0.01" name="balloonPayment" value={selectedVehicle.balloonPayment || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
+                    {/* Insurance Information */}
+                    <div>
+                        <h4 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">Insurance Information</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Insurance Company</label>
+                                <input name="insuranceCompany" value={selectedVehicle.insuranceCompany || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Insurance Policy Number</label>
+                                <input name="insurancePolicyNumber" value={selectedVehicle.insurancePolicyNumber || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Insurance Fee (R)</label>
+                                <input type="number" name="insuranceFee" value={selectedVehicle.insuranceFee || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Name</label>
+                                <input name="insuranceContactName" value={selectedVehicle.insuranceContactName || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Email</label>
+                                <input type="email" name="insuranceContactEmail" value={selectedVehicle.insuranceContactEmail || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Phone</label>
+                                <input type="tel" name="insuranceContactPhone" value={selectedVehicle.insuranceContactPhone || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
                             </div>
                         </div>
-
-                        {/* Insurance Section */}
-                        <div className="p-4 border rounded-md bg-gray-50/50">
-                            <h5 className="font-semibold text-md text-gray-700 mb-3">Insurance</h5>
-                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Insurance Company</label>
-                                    <input name="insuranceCompany" value={selectedVehicle.insuranceCompany || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Policy Number</label>
-                                    <input name="insurancePolicyNumber" value={selectedVehicle.insurancePolicyNumber || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                                 <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700">Monthly Fee (R)</label>
-                                    <input type="number" step="0.01" name="insuranceFee" value={selectedVehicle.insuranceFee || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                            </div>
-                        </div>
-
-                         {/* Tracking Section */}
-                        <div className="p-4 border rounded-md bg-gray-50/50">
-                            <h5 className="font-semibold text-md text-gray-700 mb-3">Tracking</h5>
-                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Tracking Company</label>
-                                    <input name="trackingCompany" value={selectedVehicle.trackingCompany || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700">Account Number</label>
-                                    <input name="trackingAccountNumber" value={selectedVehicle.trackingAccountNumber || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                                 <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700">Monthly Fee (R)</label>
-                                    <input type="number" step="0.01" name="trackingFee" value={selectedVehicle.trackingFee || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" />
-                                </div>
-                            </div>
-                        </div>
-
                     </div>
 
-                     <div className="flex justify-end space-x-3 pt-4">
-                         <button type="button" onClick={() => setShowForm(false)} className="bg-gray-200 text-gray-800 font-bold py-2 px-4 rounded-lg hover:bg-gray-300">Cancel</button>
-                         <button type="submit" className="bg-blue-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-600">{isEditing ? 'Save Changes' : 'Add Vehicle'}</button>
-                     </div>
-                 </form>
+                    {/* Tracking Information */}
+                    <div>
+                        <h4 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">Tracking Information</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Tracking Company</label>
+                                <input name="trackingCompany" value={selectedVehicle.trackingCompany || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Tracking Account Number</label>
+                                <input name="trackingAccountNumber" value={selectedVehicle.trackingAccountNumber || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Tracking Fee (R)</label>
+                                <input type="number" name="trackingFee" value={selectedVehicle.trackingFee || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Name</label>
+                                <input name="trackingContactName" value={selectedVehicle.trackingContactName || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Email</label>
+                                <input type="email" name="trackingContactEmail" value={selectedVehicle.trackingContactEmail || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Phone</label>
+                                <input type="tel" name="trackingContactPhone" value={selectedVehicle.trackingContactPhone || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Third Party Warranty Insurance */}
+                    <div>
+                        <h4 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">Third Party Warranty Insurance</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Insurer</label>
+                                <input name="warrantyInsurer" value={selectedVehicle.warrantyInsurer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Policy Number</label>
+                                <input name="warrantyPolicyNumber" value={selectedVehicle.warrantyPolicyNumber || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Date of Inception</label>
+                                <input type="date" name="warrantyInceptionDate" value={selectedVehicle.warrantyInceptionDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Date of Expiry</label>
+                                <input type="date" name="warrantyExpiryDate" value={selectedVehicle.warrantyExpiryDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Mileage To (km)</label>
+                                <input type="number" name="warrantyMileageTo" value={selectedVehicle.warrantyMileageTo || ''} onChange={handleFormChange} placeholder="Mileage when warranty lapses" className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Name</label>
+                                <input name="warrantyContactName" value={selectedVehicle.warrantyContactName || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Email</label>
+                                <input type="email" name="warrantyContactEmail" value={selectedVehicle.warrantyContactEmail || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Contact Phone</label>
+                                <input type="tel" name="warrantyContactPhone" value={selectedVehicle.warrantyContactPhone || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                        </div>
+                    </div>
+
+                    {(isEditMode || !isEditing) && (
+                        <div className="flex justify-end space-x-4">
+                            <button type="button" onClick={() => {
+                                if (isEditing) {
+                                    setIsEditMode(false);
+                                } else {
+                                    setShowForm(false);
+                                    setIsEditMode(false);
+                                }
+                            }} className="bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-400 transition">
+                                {isEditing ? 'Cancel Edit' : 'Cancel'}
+                            </button>
+                            <button type="submit" className="bg-blue-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-600 transition">
+                                {isEditing ? 'Update Vehicle' : 'Add Vehicle'}
+                            </button>
+                        </div>
+                    )}
+                </form>
             </Card>
         </div>
     );
 
-    const handleCloseMaintenanceModal = () => {
-        setShowMaintenanceModal(false);
-        setVehicleForMaintenance(null);
-    };
-
-    const handleRecordAdded = (updatedVehicle: Vehicle) => {
-        setVehicleForMaintenance(updatedVehicle);
-        setVehicles(prevVehicles => prevVehicles.map(v => v.id === updatedVehicle.id ? updatedVehicle : v));
-    };
-
-    const VehicleCard = ({ vehicle }: { vehicle: Vehicle }) => (
-        <Card className="grid grid-cols-1 md:grid-cols-4 gap-6 items-start">
-            {/* Column 1: Basic Info */}
-            <div className="md:col-span-1">
-                <h3 className="text-lg font-bold text-gray-900">{vehicle.make} {vehicle.model}</h3>
-                <p className="text-sm font-medium text-blue-600">{vehicle.registration}</p>
-                <div className="flex flex-wrap gap-2 mt-2">
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${vehicle.vehicleType === VehicleType.EV ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>{vehicle.vehicleType}</span>
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        vehicle.status === VehicleStatus.Active ? 'bg-green-100 text-green-800' :
-                        vehicle.status === VehicleStatus.InService ? 'bg-yellow-100 text-yellow-800' :
-                        vehicle.status === VehicleStatus.Repairs ? 'bg-red-100 text-red-800' :
-                        vehicle.status === VehicleStatus.Sold ? 'bg-gray-100 text-gray-800' :
-                        'bg-gray-100 text-gray-800'
-                    }`}>{vehicle.status}</span>
-                </div>
-                {vehicle.status !== VehicleStatus.Active && vehicle.statusNotes && (
-                    <p className="text-xs text-gray-600 mt-1">{vehicle.statusNotes}</p>
-                )}
-            </div>
-            {/* Column 2: Odometer & Service */}
-            <div className="md:col-span-1">
-                <p className="text-sm text-gray-500">Odometer</p>
-                <p className="font-semibold">{(vehicle.currentOdometer || 0).toLocaleString()} km</p>
-                <p className="text-sm text-gray-500 mt-2">Next Service</p>
-                <div className="font-semibold">{getNextServiceKm(vehicle)}</div>
-            </div>
-            {/* Column 3: Financials */}
-            <div className="md:col-span-1 space-y-3">
-                <FinancialInfoItem label="Finance" value={vehicle.financeCost} provider={vehicle.financeCompany} />
-                <FinancialInfoItem label="Insurance" value={vehicle.insuranceFee} provider={vehicle.insuranceCompany} />
-                <FinancialInfoItem label="Tracking" value={vehicle.trackingFee} provider={vehicle.trackingCompany} />
-                 {(vehicle.financeEndDate || (vehicle.balloonPayment || 0) > 0) && <div className="mt-2 pt-2 border-t">
-                    {vehicle.financeEndDate && <>
-                        <p className="text-xs text-gray-500">Finance Ends</p>
-                        <p className="text-sm font-semibold">{vehicle.financeEndDate}</p>
-                    </>}
-                    {(vehicle.balloonPayment || 0) > 0 && <>
-                        <p className="text-xs text-gray-500 mt-1">Balloon Pmt</p>
-                        <p className="text-sm font-semibold">R {(vehicle.balloonPayment || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
-                    </>}
-                 </div>}
-            </div>
-            {/* Column 4: Actions */}
-            <div className="md:col-span-1 flex flex-wrap md:flex-col md:items-end md:justify-start gap-2 pt-2">
-                 <button onClick={() => handleQRClick(vehicle)} className="w-full md:w-auto flex items-center justify-center text-sm text-gray-600 hover:text-gray-900 p-2 rounded-md hover:bg-gray-200 transition" title="Show QR Code"><QrCode className="h-4 w-4 mr-2" />QR Code</button>
-                 <button onClick={() => handleMaintenanceClick(vehicle)} className="w-full md:w-auto flex items-center justify-center text-sm text-gray-600 hover:text-gray-900 p-2 rounded-md hover:bg-gray-200 transition" title="Maintenance Log"><Wrench className="h-4 w-4 mr-2" />Maintenance</button>
-                 <button onClick={() => handleEditClick(vehicle)} className="w-full md:w-auto flex items-center justify-center text-sm text-indigo-600 hover:text-indigo-900 p-2 rounded-md hover:bg-indigo-100 transition" title="Edit"><Edit className="h-4 w-4 mr-2" />Edit</button>
-                 <button onClick={() => handleDeleteClick(vehicle.id)} className="w-full md:w-auto flex items-center justify-center text-sm text-red-600 hover:text-red-900 p-2 rounded-md hover:bg-red-100 transition" title="Delete"><Trash2 className="h-4 w-4 mr-2" />Delete</button>
-            </div>
-        </Card>
-    );
-
-    const FinancialInfoItem = ({ label, value, provider }: { label: string, value?: number, provider?: string }) => {
-        if (!value || value <= 0) return null;
-        return (
-            <div>
-                <p className="text-sm font-semibold">
-                    {label}: <span className="text-gray-800">R {value.toFixed(2)} /mo</span>
-                </p>
-                {provider && <p className="text-xs text-gray-500">Provider: {provider}</p>}
-            </div>
-        );
-    }
-
     return (
-        <div className="min-h-screen bg-gray-100">
-            <Header title="Manage Vehicles" />
-            <main className="max-w-7xl mx-auto p-6">
-                 {showForm && renderVehicleForm()}
-                 {showMaintenanceModal && vehicleForMaintenance && (
-                    <MaintenanceModal
-                        vehicle={vehicleForMaintenance}
-                        onClose={handleCloseMaintenanceModal}
-                        onRecordAdded={handleRecordAdded}
-                    />
-                 )}
-                 {showQRModal && vehicleForQR && (
-                     <QRModal vehicle={vehicleForQR} onClose={() => setShowQRModal(false)} />
-                 )}
-                <Card>
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-2xl font-bold text-gray-800">Vehicle Fleet</h2>
-                        <button onClick={handleAddClick} className="flex items-center bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                            <Plus className="h-5 w-5 mr-2" />
+        <div className="container mx-auto p-4">
+            <Header title="Manage Vehicles" onBack={onBack} />
+            {loading ? (
+                <p>Loading vehicles...</p>
+            ) : (
+                <>
+                    <div className="mb-4 flex justify-between items-center">
+                        <button onClick={handleAddClick} className="bg-blue-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-600 transition flex items-center gap-2">
+                            <Plus size={16} />
                             Add Vehicle
                         </button>
+                        <div className="flex items-center gap-3">
+                            <span className="text-sm text-gray-600">Sort by Status:</span>
+                            <button
+                                onClick={handleStatusSort}
+                                className={`px-4 py-2 border rounded-lg transition-colors flex items-center gap-2 ${
+                                    statusSortOrder !== 'default'
+                                        ? 'border-blue-400 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                                        : 'border-gray-300 bg-white hover:bg-gray-50'
+                                }`}
+                                title="Click to cycle through status sort orders"
+                            >
+                                {getSortOrderLabel(statusSortOrder)}
+                                <ChevronDown size={16} />
+                            </button>
+                        </div>
                     </div>
 
-                    <button onClick={onBack} className="mb-4 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                        Back to Dashboard
-                    </button>
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full bg-white border border-gray-300 rounded-lg shadow-md">
+                            <thead className="bg-gray-50 border-b">
+                                <tr>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Registration</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Alias</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Make & Model</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Status
+                                        {statusSortOrder !== 'default' && (
+                                            <div className="text-xs text-blue-600 font-normal mt-1">
+                                                {getSortOrderLabel(statusSortOrder)}
+                                            </div>
+                                        )}
+                                    </th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Odometer</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Next Service</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                                {sortedVehicles.map((vehicle, index) => {
+                                    const isFirstOfStatus = index === 0 || sortedVehicles[index - 1].status !== vehicle.status;
+                                    const shouldShowStatusDivider = statusSortOrder !== 'default' && isFirstOfStatus && index > 0;
 
-                    {loading ? (
-                        <p>Loading vehicles...</p>
-                    ) : (
-                        <div className="space-y-4">
-                            {vehicles.map((vehicle) => (
-                               <VehicleCard key={vehicle.id} vehicle={vehicle} />
-                            ))}
-                        </div>
-                    )}
-                </Card>
-            </main>
+                                    return (
+                                        <React.Fragment key={vehicle.id}>
+                                            {shouldShowStatusDivider && (
+                                                <tr>
+                                                    <td colSpan={8} className="px-6 py-2 bg-gray-100 border-t border-gray-300">
+                                                        <div className="text-xs font-medium text-gray-600 uppercase tracking-wider">
+                                                            {vehicle.status} Vehicles
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                            <tr className={`hover:bg-gray-50 ${isFirstOfStatus && statusSortOrder !== 'default' ? 'border-t-2 border-blue-200' : ''}`}>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                            <button
+                                                onClick={() => handleViewVehicleDetails(vehicle)}
+                                                className="flex items-center gap-2 text-blue-600 hover:text-blue-800 font-medium"
+                                            >
+                                                {vehicle.registration}
+                                                <ChevronDown size={16} />
+                                            </button>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                            {vehicle.alias || '-'}
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{vehicle.make} {vehicle.model}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                                                vehicle.vehicleType === VehicleType.EV
+                                                    ? 'bg-green-100 text-green-800'
+                                                    : 'bg-blue-100 text-blue-800'
+                                            }`}>
+                                                {vehicle.vehicleType}
+                                            </span>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                                                vehicle.status === VehicleStatus.Active ? 'bg-green-100 text-green-800' :
+                                                vehicle.status === VehicleStatus.InService ? 'bg-yellow-100 text-yellow-800' :
+                                                vehicle.status === VehicleStatus.Repairs ? 'bg-red-100 text-red-800' :
+                                                'bg-gray-100 text-gray-800'
+                                            }`}>
+                                                {vehicle.status}
+                                            </span>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{(vehicle.currentOdometer || 0).toLocaleString()} km</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{getNextServiceKm(vehicle)}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                                            <button onClick={() => handleEditClick(vehicle)} className="text-blue-600 hover:text-blue-900" title="Edit">
+                                                <Edit size={16} />
+                                            </button>
+                                            <button onClick={() => handleMaintenanceClick(vehicle)} className="text-green-600 hover:text-green-900" title="Maintenance">
+                                                <Wrench size={16} />
+                                            </button>
+                                            <button onClick={() => handleQRClick(vehicle)} className="text-purple-600 hover:text-purple-900" title="QR Code">
+                                                <QrCode size={16} />
+                                            </button>
+                                            <button onClick={() => handleDeleteClick(vehicle.id)} className="text-red-600 hover:text-red-900" title="Delete">
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </React.Fragment>
+                            );
+                        })}
+                                {sortedVehicles.length === 0 && (
+                                    <tr>
+                                        <td colSpan={8} className="px-6 py-4 text-center text-gray-500">
+                                            No vehicles found.
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            )}
+
+            {showForm && renderVehicleForm()}
+
+            {showMaintenanceModal && vehicleForMaintenance && (
+                <MaintenanceModal
+                    vehicle={vehicleForMaintenance}
+                    onClose={() => {
+                        setShowMaintenanceModal(false);
+                        setVehicleForMaintenance(null);
+                    }}
+                    onRecordAdded={(updatedVehicle) => {
+                        // Update the vehicle in the list
+                        setVehicles(prev => prev.map(v => v.id === updatedVehicle.id ? updatedVehicle : v));
+                        setVehicleForMaintenance(updatedVehicle);
+                    }}
+                />
+            )}
+
+            {showQRModal && vehicleForQR && (
+                <QRModal
+                    vehicle={vehicleForQR}
+                    onClose={() => {
+                        setShowQRModal(false);
+                        setVehicleForQR(null);
+                    }}
+                />
+            )}
         </div>
     );
 };

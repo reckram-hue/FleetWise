@@ -40,6 +40,29 @@ export enum VehicleStatus {
     EndOfLife = 'End of Life' // Vehicle retired/disposed
 }
 
+export enum BodyStyle {
+    Sedan = 'Sedan',
+    Hatchback = 'Hatchback',
+    SUV = 'SUV',
+    PanelVan = 'Panel Van',
+    Truck = 'Truck',
+    Bakkie = 'Bakkie',
+    Coupe = 'Coupe',
+    Convertible = 'Convertible',
+    Wagon = 'Wagon',
+    MiniBus = 'Mini Bus',
+    Bus = 'Bus',
+    Other = 'Other'
+}
+
+export enum FuelType {
+    Petrol = 'Petrol',
+    Diesel = 'Diesel',
+    LPG = 'LPG',
+    CNG = 'CNG',
+    Hybrid = 'Hybrid'
+}
+
 export interface MaintenanceRecord {
   id: string;
   vehicleId: string;
@@ -62,13 +85,26 @@ export interface ScheduledService {
   serviceProvider?: string; // Workshop/service center name
   reminderSent?: boolean; // Whether day-before reminder has been sent
   notes?: string;
+  // Service completion tracking
+  sentForService?: boolean; // Vehicle sent to service center
+  sentDate?: string; // YYYY-MM-DD when vehicle was sent
+  returnedFromService?: boolean; // Vehicle returned from service
+  returnDate?: string; // YYYY-MM-DD when vehicle was returned
+  actualCost?: number; // Actual cost of service
+  serviceNotes?: string; // Notes from service completion
 }
 
 export interface Vehicle {
   id: string;
   registration: string;
+  alias?: string; // Friendly name/alias for the vehicle
   make: string;
   model: string;
+  vin?: string; // Vehicle Identification Number
+  engineNumber?: string;
+  bodyStyle?: BodyStyle;
+  colour?: string;
+  fuelType?: FuelType; // Only for ICE vehicles
   vehicleType: VehicleType;
   status: VehicleStatus;
   statusDate?: string; // YYYY-MM-DD when status was last changed
@@ -101,14 +137,37 @@ export interface Vehicle {
   financeCost?: number;
   financeEndDate?: string; // YYYY-MM-DD
   balloonPayment?: number;
+  financeContactName?: string;
+  financeContactEmail?: string;
+  financeContactPhone?: string;
 
   insuranceCompany?: string;
   insurancePolicyNumber?: string;
   insuranceFee?: number;
+  insuranceContactName?: string;
+  insuranceContactEmail?: string;
+  insuranceContactPhone?: string;
 
   trackingCompany?: string;
   trackingAccountNumber?: string;
   trackingFee?: number;
+  trackingContactName?: string;
+  trackingContactEmail?: string;
+  trackingContactPhone?: string;
+
+  // Third Party Warranty Insurance
+  warrantyInsurer?: string;
+  warrantyPolicyNumber?: string;
+  warrantyInceptionDate?: string; // YYYY-MM-DD
+  warrantyExpiryDate?: string; // YYYY-MM-DD
+  warrantyMileageTo?: number; // Mileage when warranty lapses
+  warrantyContactName?: string;
+  warrantyContactEmail?: string;
+  warrantyContactPhone?: string;
+
+  // Default Service Provider
+  defaultServiceProviderId?: string; // ID of preferred service provider
+  warrantyServiceProviderId?: string; // Service provider for warranty work
 }
 
 export enum ShiftStatus {
@@ -355,6 +414,24 @@ export interface FuelEconomyAlert {
     isResolved: boolean;
     resolvedDate?: string;
     notes?: string;
+}
+
+export interface ServiceProvider {
+    id: string;
+    name: string;
+    contactPerson: string;
+    primaryPhone: string;
+    secondaryPhone?: string;
+    email: string;
+    address: string;
+    city: string;
+    province: string;
+    postalCode: string;
+    specializations: string[]; // e.g., ['ICE', 'EV', 'Warranty', 'General']
+    isActive: boolean;
+    notes?: string;
+    createdDate: string; // YYYY-MM-DD
+    lastModified: Date;
 }
 
 export interface AppSettings {

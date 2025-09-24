@@ -2,19 +2,25 @@ import React, { useState, useEffect } from 'react';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { DefectReport, Cost, DefectUrgency, CostCategory, UserRole, ScheduledService, Vehicle } from '../../types';
+import { DefectReport, Cost, DefectUrgency, CostCategory, UserRole, ScheduledService, Vehicle, ServiceProvider } from '../../types';
 import api from '../../services/mockApi';
-import { AlertTriangle, Fuel, Users, Truck, Settings as SettingsIcon } from 'lucide-react';
+import { AlertTriangle, Fuel, Users, Truck, Settings as SettingsIcon, Wrench } from 'lucide-react';
 import ManageDrivers from './ManageDrivers';
 import ManageVehicles from './ManageVehicles';
 import Reports from './Reports';
 import Settings from './Settings';
+import ManageServiceProviders from './ManageServiceProviders';
 
 
 const AdminDashboard: React.FC = () => {
     const [view, setView] = useState('dashboard');
     const [totalDrivers, setTotalDrivers] = useState(0);
     const [totalVehicles, setTotalVehicles] = useState(0);
+    const [showBookingModal, setShowBookingModal] = useState(false);
+    const [showSendModal, setShowSendModal] = useState(false);
+    const [showReturnModal, setShowReturnModal] = useState(false);
+    const [selectedService, setSelectedService] = useState<ScheduledService | null>(null);
+    const [refreshTrigger, setRefreshTrigger] = useState(0);
 
     useEffect(() => {
         api.getUsers().then(users => {
@@ -42,6 +48,10 @@ const AdminDashboard: React.FC = () => {
         return <Settings onBack={() => setView('dashboard')} />;
     }
 
+    if (view === 'service-providers') {
+        return <ManageServiceProviders onBack={() => setView('dashboard')} />;
+    }
+
   return (
     <div className="min-h-screen bg-gray-100">
       <Header title="Admin Dashboard" />
@@ -62,6 +72,10 @@ const AdminDashboard: React.FC = () => {
                 <Truck className="h-5 w-5 mr-2 inline" />
                 Vehicles
             </button>
+            <button onClick={() => setView('service-providers')} className="bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600 transition duration-300 shadow-lg">
+                <Wrench className="h-5 w-5 mr-2 inline" />
+                Service Providers
+            </button>
             <button onClick={() => setView('reports')} className="bg-purple-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-purple-600 transition duration-300 shadow-lg">
                 <AlertTriangle className="h-5 w-5 mr-2 inline" />
                 Reports
@@ -76,8 +90,71 @@ const AdminDashboard: React.FC = () => {
         <div className="grid grid-cols-1 gap-6">
           <CriticalDefects />
         </div>
-        
-        <UpcomingServices />
+
+        <UpcomingServices
+          onBookService={(service) => {
+            setSelectedService(service);
+            setShowBookingModal(true);
+          }}
+          onSendService={(service) => {
+            setSelectedService(service);
+            setShowSendModal(true);
+          }}
+          onReturnService={(service) => {
+            setSelectedService(service);
+            setShowReturnModal(true);
+          }}
+          refreshTrigger={refreshTrigger}
+        />
+
+        {/* Service Booking Modal */}
+        {showBookingModal && selectedService && (
+          <ServiceBookingModal
+            service={selectedService}
+            onClose={() => {
+              setShowBookingModal(false);
+              setSelectedService(null);
+            }}
+            onSave={() => {
+              setShowBookingModal(false);
+              setSelectedService(null);
+              // Trigger refresh of services data
+              setRefreshTrigger(prev => prev + 1);
+            }}
+          />
+        )}
+
+        {/* Send for Service Modal */}
+        {showSendModal && selectedService && (
+          <SendServiceModal
+            service={selectedService}
+            onClose={() => {
+              setShowSendModal(false);
+              setSelectedService(null);
+            }}
+            onSave={() => {
+              setShowSendModal(false);
+              setSelectedService(null);
+              setRefreshTrigger(prev => prev + 1);
+            }}
+          />
+        )}
+
+        {/* Return from Service Modal */}
+        {showReturnModal && selectedService && (
+          <ReturnServiceModal
+            service={selectedService}
+            onClose={() => {
+              setShowReturnModal(false);
+              setSelectedService(null);
+            }}
+            onSave={() => {
+              setShowReturnModal(false);
+              setSelectedService(null);
+              setRefreshTrigger(prev => prev + 1);
+            }}
+          />
+        )}
         
       </main>
     </div>
@@ -165,48 +242,37 @@ const CriticalDefects: React.FC = () => {
 };
 
 
-const UpcomingServices: React.FC = () => {
+interface UpcomingServicesProps {
+    onBookService: (service: ScheduledService) => void;
+    onSendService: (service: ScheduledService) => void;
+    onReturnService: (service: ScheduledService) => void;
+    refreshTrigger: number;
+}
+
+const UpcomingServices: React.FC<UpcomingServicesProps> = ({ onBookService, onSendService, onReturnService, refreshTrigger }) => {
     const [scheduledServices, setScheduledServices] = useState<ScheduledService[]>([]);
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
     const [servicesNeedingReminders, setServicesNeedingReminders] = useState<ScheduledService[]>([]);
 
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [services, vehicleData, reminders] = await Promise.all([
-                    api.getScheduledServices(),
-                    api.getVehicles(),
-                    api.getServicesNeedingReminders()
-                ]);
-                setScheduledServices(services);
-                setVehicles(vehicleData);
-                setServicesNeedingReminders(reminders);
-            } catch (error) {
-                console.error('Failed to fetch service data:', error);
-            }
-        };
-        fetchData();
-    }, []);
-
-    const handleBookingToggle = async (serviceId: string, isBooked: boolean) => {
+    const fetchData = async () => {
         try {
-            const updates: Partial<ScheduledService> = { isBooked };
-            if (!isBooked) {
-                // Clear booking details if unchecking
-                updates.bookedDate = undefined;
-                updates.bookedTime = undefined;
-                updates.serviceProvider = undefined;
-                updates.reminderSent = false;
-            }
-
-            const updatedService = await api.updateScheduledService(serviceId, updates);
-            setScheduledServices(prev =>
-                prev.map(s => s.id === serviceId ? updatedService : s)
-            );
+            const [services, vehicleData, reminders] = await Promise.all([
+                api.getScheduledServices(),
+                api.getVehicles(),
+                api.getServicesNeedingReminders()
+            ]);
+            setScheduledServices(services);
+            setVehicles(vehicleData);
+            setServicesNeedingReminders(reminders);
         } catch (error) {
-            console.error('Failed to update booking status:', error);
+            console.error('Failed to fetch service data:', error);
         }
     };
+
+    useEffect(() => {
+        fetchData();
+    }, [refreshTrigger]);
+
 
     const getVehicleRegistration = (vehicleId: string) => {
         const vehicle = vehicles.find(v => v.id === vehicleId);
@@ -247,16 +313,17 @@ const UpcomingServices: React.FC = () => {
             )}
 
             <Card>
-                <h2 className="text-xl font-bold text-gray-800 mb-4">Upcoming Services</h2>
+                <h2 className="text-xl font-bold text-gray-800 mb-4">Service Management</h2>
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                             <tr>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vehicle Reg</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service Type</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Booked</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Details</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vehicle</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service Type</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Details</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
@@ -266,38 +333,75 @@ const UpcomingServices: React.FC = () => {
 
                                 return (
                                     <tr key={service.id} className={isOverdue ? 'bg-red-50' : ''}>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                                             {getVehicleRegistration(service.vehicleId)}
                                         </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                                             {service.serviceType}
                                         </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm">
                                             <span className={`font-bold ${isOverdue ? 'text-red-600' : 'text-orange-600'}`}>
                                                 {daysUntilDue}
                                             </span>
                                             <div className="text-xs text-gray-500">{service.dueDate}</div>
                                         </td>
-                                        <td className="px-6 py-4 whitespace-nowrap">
-                                            <input
-                                                type="checkbox"
-                                                checked={service.isBooked}
-                                                onChange={(e) => handleBookingToggle(service.id, e.target.checked)}
-                                                className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                                            />
-                                            {service.isBooked && (
-                                                <span className="ml-2 text-xs text-green-600">✓ Booked</span>
+                                        <td className="px-4 py-4 whitespace-nowrap">
+                                            {service.sentForService ? (
+                                                <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                                                    In Service
+                                                </span>
+                                            ) : service.isBooked ? (
+                                                <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                                                    Booked
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800">
+                                                    Not Booked
+                                                </span>
                                             )}
                                         </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-xs text-gray-500">
-                                            {service.isBooked ? (
+                                        <td className="px-4 py-4 text-xs text-gray-500">
+                                            {service.sentForService ? (
+                                                <div>
+                                                    <div>Sent: {service.sentDate}</div>
+                                                    <div className="text-gray-400">{service.serviceProvider}</div>
+                                                </div>
+                                            ) : service.isBooked ? (
                                                 <div>
                                                     <div>{service.bookedDate} at {service.bookedTime}</div>
                                                     <div className="text-gray-400">{service.serviceProvider}</div>
                                                 </div>
                                             ) : (
-                                                <span className="text-red-500">Not booked</span>
+                                                <span className="text-red-500">Not scheduled</span>
                                             )}
+                                        </td>
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm">
+                                            <div className="flex space-x-2">
+                                                {!service.isBooked && (
+                                                    <button
+                                                        onClick={() => onBookService(service)}
+                                                        className="text-blue-600 hover:text-blue-900 text-xs"
+                                                    >
+                                                        Book Service
+                                                    </button>
+                                                )}
+                                                {service.isBooked && !service.sentForService && (
+                                                    <button
+                                                        onClick={() => onSendService(service)}
+                                                        className="text-orange-600 hover:text-orange-900 text-xs"
+                                                    >
+                                                        Send for Service
+                                                    </button>
+                                                )}
+                                                {service.sentForService && !service.returnedFromService && (
+                                                    <button
+                                                        onClick={() => onReturnService(service)}
+                                                        className="text-green-600 hover:text-green-900 text-xs"
+                                                    >
+                                                        Return from Service
+                                                    </button>
+                                                )}
+                                            </div>
                                         </td>
                                     </tr>
                                 );
@@ -306,6 +410,352 @@ const UpcomingServices: React.FC = () => {
                     </table>
                 </div>
             </Card>
+        </div>
+    );
+};
+
+// Service Booking Modal
+interface ServiceBookingModalProps {
+    service: ScheduledService;
+    onClose: () => void;
+    onSave: () => void;
+}
+
+const ServiceBookingModal: React.FC<ServiceBookingModalProps> = ({ service, onClose, onSave }) => {
+    const [bookedDate, setBookedDate] = useState(service.bookedDate || '');
+    const [bookedTime, setBookedTime] = useState(service.bookedTime || '');
+    const [serviceProviderId, setServiceProviderId] = useState('');
+    const [notes, setNotes] = useState(service.notes || '');
+    const [loading, setLoading] = useState(false);
+    const [serviceProviders, setServiceProviders] = useState<ServiceProvider[]>([]);
+    const [vehicle, setVehicle] = useState<Vehicle | null>(null);
+
+    useEffect(() => {
+        const fetchData = async () => {
+            try {
+                const [vehicleData, providers] = await Promise.all([
+                    api.getVehicle(service.vehicleId),
+                    api.getServiceProviders(true) // Only active providers
+                ]);
+
+                setVehicle(vehicleData);
+                setServiceProviders(providers);
+
+                // Set default service provider based on vehicle preferences or current service provider
+                if (service.serviceProvider) {
+                    // Find existing provider by name
+                    const existingProvider = providers.find(p => p.name === service.serviceProvider);
+                    if (existingProvider) {
+                        setServiceProviderId(existingProvider.id);
+                    }
+                } else if (vehicleData?.defaultServiceProviderId) {
+                    setServiceProviderId(vehicleData.defaultServiceProviderId);
+                }
+            } catch (error) {
+                console.error('Failed to fetch data for service booking:', error);
+            }
+        };
+        fetchData();
+    }, [service.vehicleId, service.serviceProvider]);
+
+    const handleSave = async () => {
+        if (!bookedDate || !bookedTime || !serviceProviderId) {
+            alert('Please fill in all required fields');
+            return;
+        }
+
+        const selectedProvider = serviceProviders.find(p => p.id === serviceProviderId);
+        if (!selectedProvider) {
+            alert('Please select a valid service provider');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            await api.updateScheduledService(service.id, {
+                isBooked: true,
+                bookedDate,
+                bookedTime,
+                serviceProvider: selectedProvider.name,
+                notes,
+                reminderSent: false
+            });
+            onSave();
+        } catch (error) {
+            console.error('Failed to book service:', error);
+            alert('Failed to book service. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+                <h3 className="text-lg font-semibold mb-4">Book Service</h3>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Service Date *
+                        </label>
+                        <input
+                            type="date"
+                            value={bookedDate}
+                            onChange={(e) => setBookedDate(e.target.value)}
+                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Service Time *
+                        </label>
+                        <input
+                            type="time"
+                            value={bookedTime}
+                            onChange={(e) => setBookedTime(e.target.value)}
+                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Service Provider *
+                        </label>
+                        <select
+                            value={serviceProviderId}
+                            onChange={(e) => setServiceProviderId(e.target.value)}
+                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                        >
+                            <option value="">Select a service provider...</option>
+                            {serviceProviders.map((provider) => (
+                                <option key={provider.id} value={provider.id}>
+                                    {provider.name} - {provider.city}
+                                    {vehicle?.defaultServiceProviderId === provider.id && ' (Default)'}
+                                    {vehicle?.warrantyServiceProviderId === provider.id && ' (Warranty)'}
+                                </option>
+                            ))}
+                        </select>
+                        {serviceProviderId && (
+                            <div className="mt-2 p-2 bg-gray-50 rounded text-sm">
+                                {(() => {
+                                    const selected = serviceProviders.find(p => p.id === serviceProviderId);
+                                    return selected ? (
+                                        <div>
+                                            <div><strong>{selected.name}</strong></div>
+                                            <div>Contact: {selected.contactPerson} - {selected.primaryPhone}</div>
+                                            <div>Specializes in: {selected.specializations.join(', ')}</div>
+                                        </div>
+                                    ) : null;
+                                })()}
+                            </div>
+                        )}
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Notes
+                        </label>
+                        <textarea
+                            value={notes}
+                            onChange={(e) => setNotes(e.target.value)}
+                            placeholder="Any additional notes"
+                            className="w-full border border-gray-300 rounded-md px-3 py-2 h-20"
+                        />
+                    </div>
+                </div>
+                <div className="flex justify-end space-x-3 mt-6">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        disabled={loading}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                    >
+                        {loading ? 'Saving...' : 'Book Service'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Send for Service Modal
+interface SendServiceModalProps {
+    service: ScheduledService;
+    onClose: () => void;
+    onSave: () => void;
+}
+
+const SendServiceModal: React.FC<SendServiceModalProps> = ({ service, onClose, onSave }) => {
+    const [sentDate, setSentDate] = useState(new Date().toISOString().split('T')[0]);
+    const [loading, setLoading] = useState(false);
+
+    const handleSave = async () => {
+        setLoading(true);
+        try {
+            await api.sendVehicleForService(service.id, sentDate);
+            onSave();
+        } catch (error) {
+            console.error('Failed to send vehicle for service:', error);
+            alert('Failed to send vehicle for service. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+                <h3 className="text-lg font-semibold mb-4">Send Vehicle for Service</h3>
+                <div className="mb-4">
+                    <p className="text-sm text-gray-600 mb-2">
+                        Vehicle: <strong>{service.vehicleId}</strong><br/>
+                        Service: <strong>{service.serviceType}</strong><br/>
+                        Provider: <strong>{service.serviceProvider}</strong>
+                    </p>
+                </div>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Date Sent
+                        </label>
+                        <input
+                            type="date"
+                            value={sentDate}
+                            onChange={(e) => setSentDate(e.target.value)}
+                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                        />
+                    </div>
+                </div>
+                <div className="flex justify-end space-x-3 mt-6">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        disabled={loading}
+                        className="px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50"
+                    >
+                        {loading ? 'Sending...' : 'Send for Service'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Return from Service Modal
+interface ReturnServiceModalProps {
+    service: ScheduledService;
+    onClose: () => void;
+    onSave: () => void;
+}
+
+const ReturnServiceModal: React.FC<ReturnServiceModalProps> = ({ service, onClose, onSave }) => {
+    const [returnDate, setReturnDate] = useState(new Date().toISOString().split('T')[0]);
+    const [actualCost, setActualCost] = useState('');
+    const [serviceNotes, setServiceNotes] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const handleSave = async () => {
+        if (!actualCost || !serviceNotes) {
+            alert('Please fill in the service cost and notes');
+            return;
+        }
+
+        const cost = parseFloat(actualCost);
+        if (isNaN(cost) || cost < 0) {
+            alert('Please enter a valid cost');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            await api.returnVehicleFromService(service.id, {
+                returnDate,
+                actualCost: cost,
+                serviceNotes
+            });
+            onSave();
+        } catch (error) {
+            console.error('Failed to return vehicle from service:', error);
+            alert('Failed to return vehicle from service. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+                <h3 className="text-lg font-semibold mb-4">Return Vehicle from Service</h3>
+                <div className="mb-4">
+                    <p className="text-sm text-gray-600 mb-2">
+                        Vehicle: <strong>{service.vehicleId}</strong><br/>
+                        Service: <strong>{service.serviceType}</strong><br/>
+                        Provider: <strong>{service.serviceProvider}</strong><br/>
+                        Sent: <strong>{service.sentDate}</strong>
+                    </p>
+                </div>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Return Date
+                        </label>
+                        <input
+                            type="date"
+                            value={returnDate}
+                            onChange={(e) => setReturnDate(e.target.value)}
+                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Actual Service Cost *
+                        </label>
+                        <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={actualCost}
+                            onChange={(e) => setActualCost(e.target.value)}
+                            placeholder="0.00"
+                            className="w-full border border-gray-300 rounded-md px-3 py-2"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Service Notes *
+                        </label>
+                        <textarea
+                            value={serviceNotes}
+                            onChange={(e) => setServiceNotes(e.target.value)}
+                            placeholder="What work was completed, any issues found, etc."
+                            className="w-full border border-gray-300 rounded-md px-3 py-2 h-24"
+                        />
+                    </div>
+                </div>
+                <div className="flex justify-end space-x-3 mt-6">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        disabled={loading}
+                        className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                    >
+                        {loading ? 'Saving...' : 'Return from Service'}
+                    </button>
+                </div>
+            </div>
         </div>
     );
 };
