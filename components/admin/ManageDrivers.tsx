@@ -330,7 +330,12 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
                                         return (
                                             <tr key={driver.id} className={driver.employmentStatus !== EmploymentStatus.Active ? 'bg-gray-50' : ''}>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                                    {driver.firstName} {driver.surname}
+                                                    <button
+                                                        onClick={() => handleEditClick(driver)}
+                                                        className="text-left hover:text-blue-600 hover:underline cursor-pointer transition-colors duration-200"
+                                                    >
+                                                        {driver.firstName} {driver.surname}
+                                                    </button>
                                                     <br />
                                                     <span className="text-xs text-gray-500">{driver.department}</span>
                                                 </td>

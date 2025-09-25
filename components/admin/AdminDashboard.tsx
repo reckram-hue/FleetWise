@@ -3,6 +3,7 @@ import Header from '../shared/Header';
 import Card from '../shared/Card';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { DefectReport, Cost, DefectUrgency, CostCategory, UserRole, ScheduledService, Vehicle, ServiceProvider } from '../../types';
+import { VehicleStatus } from '../../types';
 import api from '../../services/mockApi';
 import { AlertTriangle, Fuel, Users, Truck, Settings as SettingsIcon, Wrench } from 'lucide-react';
 import ManageDrivers from './ManageDrivers';
@@ -10,12 +11,15 @@ import ManageVehicles from './ManageVehicles';
 import Reports from './Reports';
 import Settings from './Settings';
 import ManageServiceProviders from './ManageServiceProviders';
+import ManageDefects from './ManageDefects';
 
 
 const AdminDashboard: React.FC = () => {
     const [view, setView] = useState('dashboard');
     const [totalDrivers, setTotalDrivers] = useState(0);
     const [totalVehicles, setTotalVehicles] = useState(0);
+    const [activeVehicles, setActiveVehicles] = useState(0);
+    const [selectedDefectId, setSelectedDefectId] = useState<string | null>(null);
     const [showBookingModal, setShowBookingModal] = useState(false);
     const [showSendModal, setShowSendModal] = useState(false);
     const [showReturnModal, setShowReturnModal] = useState(false);
@@ -27,9 +31,17 @@ const AdminDashboard: React.FC = () => {
             setTotalDrivers(users.filter(u => u.role === UserRole.Driver).length);
         });
         api.getVehicles().then(vehicles => {
-            setTotalVehicles(vehicles.length);
+            // Exclude sold and end-of-life vehicles from total count
+            const operationalVehicles = vehicles.filter(v =>
+                v.status !== 'Sold' && v.status !== 'End of Life'
+            );
+            // Count only active vehicles
+            const activeVehicleCount = vehicles.filter(v => v.status === 'Active').length;
+
+            setTotalVehicles(operationalVehicles.length);
+            setActiveVehicles(activeVehicleCount);
         });
-    }, []);
+    }, [refreshTrigger]);
 
 
     if (view === 'drivers') {
@@ -52,12 +64,24 @@ const AdminDashboard: React.FC = () => {
         return <ManageServiceProviders onBack={() => setView('dashboard')} />;
     }
 
+    if (view === 'defects') {
+        return (
+            <ManageDefects
+                onBack={() => {
+                    setView('dashboard');
+                    setSelectedDefectId(null);
+                }}
+                selectedDefectId={selectedDefectId || undefined}
+            />
+        );
+    }
+
   return (
     <div className="min-h-screen bg-gray-100">
       <Header title="Admin Dashboard" />
       <main className="max-w-7xl mx-auto p-6 space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <StatCard title="Total Vehicles" value={totalVehicles.toString()} icon={<Truck className="h-8 w-8 text-cyan-500"/>} />
+            <StatCard title="Total Vehicles" value={`${activeVehicles}/${totalVehicles}`} icon={<Truck className="h-8 w-8 text-cyan-500"/>} />
             <StatCard title="Total Drivers" value={totalDrivers.toString()} icon={<Users className="h-8 w-8 text-purple-500"/>} />
             <StatCard title="Active Defects" value="5" icon={<AlertTriangle className="h-8 w-8 text-red-500"/>} />
             <StatCard title="Total Costs This Month" value="R 25,750" icon={<Fuel className="h-8 w-8 text-green-500"/>} />
@@ -88,7 +112,10 @@ const AdminDashboard: React.FC = () => {
 
 
         <div className="grid grid-cols-1 gap-6">
-          <CriticalDefects />
+          <CriticalDefects onDefectClick={(defectId) => {
+            setSelectedDefectId(defectId);
+            setView('defects');
+          }} />
         </div>
 
         <UpcomingServices
@@ -176,7 +203,11 @@ const StatCard = ({ title, value, icon }: { title: string, value: string, icon: 
     </Card>
 );
 
-const CriticalDefects: React.FC = () => {
+interface CriticalDefectsProps {
+  onDefectClick: (defectId: string) => void;
+}
+
+const CriticalDefects: React.FC<CriticalDefectsProps> = ({ onDefectClick }) => {
   const [defects, setDefects] = useState<DefectReport[]>([]);
 
   useEffect(() => {
@@ -218,9 +249,13 @@ const CriticalDefects: React.FC = () => {
         {defects.length > 0 ? defects.map(defect => {
           const daysSinceReported = calculateDaysSinceReported(defect.reportedDateTime);
           return (
-            <div key={defect.id} className="p-3 bg-gray-50 rounded-lg border">
+            <button
+              key={defect.id}
+              onClick={() => onDefectClick(defect.id)}
+              className="w-full p-3 bg-gray-50 rounded-lg border hover:bg-blue-50 hover:border-blue-300 transition-colors duration-200 text-left cursor-pointer"
+            >
               <div className="flex justify-between items-start">
-                <p className="font-semibold">{defect.description}</p>
+                <p className="font-semibold text-gray-900 hover:text-blue-700">{defect.description}</p>
                 <div className="flex gap-2">
                   <span className={`px-2 py-1 text-xs font-semibold rounded-full bg-gray-200 ${getDaysColor(daysSinceReported)}`}>
                     {daysSinceReported === 0 ? 'Today' :
@@ -233,7 +268,7 @@ const CriticalDefects: React.FC = () => {
                 </div>
               </div>
               <p className="text-sm text-gray-500 mt-1">Vehicle: {defect.vehicleId} | Reported: {defect.reportedDateTime.toLocaleDateString()}</p>
-            </div>
+            </button>
           );
         }) : <p className="text-gray-500">No high or critical defects reported.</p>}
       </div>

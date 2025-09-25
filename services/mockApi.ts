@@ -925,6 +925,79 @@ const api = {
             .slice(0, 3); // Return top 3 most recent similar defects
     },
 
+    // Defect Management Functions
+    getAllDefects: async (): Promise<DefectReport[]> => {
+        await new Promise(res => setTimeout(res, 300));
+        return [...mockDefects].sort((a, b) => b.reportedDateTime.getTime() - a.reportedDateTime.getTime());
+    },
+
+    updateDefectStatus: async (defectId: string, status: DefectStatus, notes?: string): Promise<DefectReport> => {
+        await new Promise(res => setTimeout(res, 300));
+        const defectIndex = mockDefects.findIndex(d => d.id === defectId);
+        if (defectIndex === -1) {
+            throw new Error('Defect not found');
+        }
+
+        const now = new Date();
+        mockDefects[defectIndex] = {
+            ...mockDefects[defectIndex],
+            status,
+            notes: notes ? `${mockDefects[defectIndex].notes || ''}\n[${now.toLocaleString()}] Admin: ${notes}`.trim() : mockDefects[defectIndex].notes,
+            ...(status === DefectStatus.Resolved && {
+                resolvedDateTime: now,
+                resolvedBy: 'admin1' // In a real app, this would be the current user
+            }),
+            ...(status === DefectStatus.Acknowledged && !mockDefects[defectIndex].acknowledgedDateTime && {
+                acknowledgedDateTime: now,
+                acknowledgedBy: 'admin1'
+            })
+        };
+
+        return mockDefects[defectIndex];
+    },
+
+    assignDefect: async (defectId: string, assignedTo: string, estimatedCost?: number): Promise<DefectReport> => {
+        await new Promise(res => setTimeout(res, 300));
+        const defectIndex = mockDefects.findIndex(d => d.id === defectId);
+        if (defectIndex === -1) {
+            throw new Error('Defect not found');
+        }
+
+        mockDefects[defectIndex] = {
+            ...mockDefects[defectIndex],
+            assignedTo,
+            estimatedCost,
+            status: DefectStatus.InProgress
+        };
+
+        return mockDefects[defectIndex];
+    },
+
+    markDefectAsDuplicate: async (defectId: string, duplicateOfId: string): Promise<DefectReport> => {
+        await new Promise(res => setTimeout(res, 300));
+        const defectIndex = mockDefects.findIndex(d => d.id === defectId);
+        const originalDefectExists = mockDefects.some(d => d.id === duplicateOfId);
+
+        if (defectIndex === -1) {
+            throw new Error('Defect not found');
+        }
+
+        if (!originalDefectExists) {
+            throw new Error('Original defect not found');
+        }
+
+        mockDefects[defectIndex] = {
+            ...mockDefects[defectIndex],
+            status: DefectStatus.Duplicate,
+            duplicateOf: duplicateOfId,
+            isVisibleToDriver: false,
+            resolvedDateTime: new Date(),
+            resolvedBy: 'admin1'
+        };
+
+        return mockDefects[defectIndex];
+    },
+
     // Get driver's current active vehicle
     getDriverActiveVehicle: async (driverId: string): Promise<Vehicle | null> => {
         await new Promise(res => setTimeout(res, 200));
