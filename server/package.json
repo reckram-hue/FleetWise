@@ -11,6 +11,11 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "tesseract.js": "^5.0.4",
+    "axios": "^1.6.0",
+    "qrcode-reader": "^1.0.4",
+    "jimp": "^0.22.10",
+    "node-fetch": "^3.3.2"
   }
 }

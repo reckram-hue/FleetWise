@@ -1,11 +1,18 @@
 [
   {
-    "id": "VEH-TEST-1",
-    "name": "Test Vehicle 1"
+    "id": "v1",
+    "name": "Toyota Hilux (CA 123-456)"
   },
   {
-    "id": "VEH-002",
-    "name": "Delivery Van 2",
-    "telegram_chat_id": 6040213534
+    "id": "v2",
+    "name": "Ford Ranger (GP 789-XYZ)"
+  },
+  {
+    "id": "v6",
+    "name": "Kia Sonet (NC 321-654)"
+  },
+  {
+    "id": "v3",
+    "name": "Hyundai Kona EV (EC 456-789)"
   }
 ]

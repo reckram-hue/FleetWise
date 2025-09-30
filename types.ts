@@ -168,6 +168,12 @@ export interface Vehicle {
   // Default Service Provider
   defaultServiceProviderId?: string; // ID of preferred service provider
   warrantyServiceProviderId?: string; // Service provider for warranty work
+
+  // License Information
+  licenseExpiryDate?: string; // YYYY-MM-DD when vehicle license expires
+  licenseRenewalReminderDays?: number; // Number of days before expiry to send reminder (admin configurable)
+  lastLicenseRenewalDate?: string; // YYYY-MM-DD when license was last renewed
+  licenseNumber?: string; // License/registration number for tracking
 }
 
 export enum ShiftStatus {
@@ -434,6 +440,17 @@ export interface ServiceProvider {
     lastModified: Date;
 }
 
+export interface LicenseRenewalReminder {
+    id: string;
+    vehicleId: string;
+    scheduledDate: string; // YYYY-MM-DD when reminder should be sent
+    reminderDaysBefore: number; // How many days before expiry this reminder is for
+    isSent: boolean;
+    sentDate?: string; // YYYY-MM-DD when reminder was actually sent
+    licenseExpiryDate: string; // YYYY-MM-DD when the license expires
+    isActive: boolean; // False if license has been renewed and reminder is no longer needed
+}
+
 export interface AppSettings {
     id: string;
     areas: string[];
@@ -443,6 +460,9 @@ export interface AppSettings {
     enableSmartBookingReminders: boolean; // Enable smart reminders based on usage
     defaultDailyUsageKm: number; // Fallback usage if vehicle has no history
     bookingReminderThresholdKm: number; // Manual override - fixed km threshold for all vehicles
+    // License renewal reminder settings
+    defaultLicenseReminderDays: number; // Default reminder period for vehicles without custom setting
+    enableLicenseReminders: boolean; // Master switch for license reminders
     createdBy: string;
     lastModified: Date;
 }
