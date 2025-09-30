@@ -29,7 +29,8 @@ import {
   AppSettings,
   EmploymentStatus,
   FuelEconomyAlert,
-  ServiceProvider
+  ServiceProvider,
+  LicenseRenewalReminder
 } from '../types';
 
 // FIX: Export mockUsers to be used in the login screen.
@@ -194,6 +195,11 @@ export let mockVehicles: Vehicle[] = [
         trackingFee: 250.00,
         defaultServiceProviderId: 'sp1', // City Motors Workshop
         warrantyServiceProviderId: 'sp1',
+        // License Information
+        licenseNumber: 'CA123456',
+        licenseExpiryDate: '2024-03-15', // Expires soon for testing
+        lastLicenseRenewalDate: '2023-03-15',
+        licenseRenewalReminderDays: 30,
     },
     {
         id: 'v2',
@@ -226,6 +232,11 @@ export let mockVehicles: Vehicle[] = [
         trackingFee: 300.00,
         defaultServiceProviderId: 'sp3', // AutoFix Mobile Services
         warrantyServiceProviderId: 'sp1', // City Motors Workshop
+        // License Information
+        licenseNumber: 'GP789XYZ',
+        licenseExpiryDate: '2024-02-28', // Expired for testing
+        lastLicenseRenewalDate: '2023-02-28',
+        licenseRenewalReminderDays: 45,
     },
     {
         id: 'v6',
@@ -247,7 +258,12 @@ export let mockVehicles: Vehicle[] = [
         freeServicesUntilKm: 45000,
         maintenanceHistory: [],
         defaultServiceProviderId: 'sp4', // Kia Service Center
-        warrantyServiceProviderId: 'sp4'
+        warrantyServiceProviderId: 'sp4',
+        // License Information
+        licenseNumber: 'NC321654',
+        licenseExpiryDate: '2025-06-15', // Valid, long time ahead
+        lastLicenseRenewalDate: '2024-06-15',
+        licenseRenewalReminderDays: 30,
     },
     {
         id: 'v3',
@@ -2112,6 +2128,63 @@ const api = {
         });
 
         return providers.sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    // License renewal functions
+    updateVehicleLicense: async (vehicleId: string, licenseData: {
+        licenseExpiryDate?: string;
+        licenseRenewalReminderDays?: number;
+        lastLicenseRenewalDate?: string;
+        licenseNumber?: string;
+    }): Promise<Vehicle> => {
+        await new Promise(res => setTimeout(res, 300));
+        const vehicleIndex = mockVehicles.findIndex(v => v.id === vehicleId);
+        if (vehicleIndex === -1) throw new Error("Vehicle not found");
+
+        mockVehicles[vehicleIndex] = {
+            ...mockVehicles[vehicleIndex],
+            ...licenseData
+        };
+
+        return mockVehicles[vehicleIndex];
+    },
+
+    getVehiclesWithExpiredLicenses: async (daysAhead: number = 30): Promise<Vehicle[]> => {
+        await new Promise(res => setTimeout(res, 200));
+        const today = new Date();
+        const futureDate = new Date(today.getTime() + daysAhead * 24 * 60 * 60 * 1000);
+
+        return mockVehicles.filter(vehicle => {
+            if (!vehicle.licenseExpiryDate) return false;
+            const expiryDate = new Date(vehicle.licenseExpiryDate);
+            return expiryDate <= futureDate;
+        }).sort((a, b) => {
+            const dateA = new Date(a.licenseExpiryDate!);
+            const dateB = new Date(b.licenseExpiryDate!);
+            return dateA.getTime() - dateB.getTime();
+        });
+    },
+
+    createLicenseRenewalReminder: async (reminderData: Omit<LicenseRenewalReminder, 'id'>): Promise<LicenseRenewalReminder> => {
+        await new Promise(res => setTimeout(res, 300));
+        // This would normally create reminders in a database
+        // For now, we'll just return the reminder data with an ID
+        const newReminder = {
+            ...reminderData,
+            id: `lr${Date.now()}`
+        };
+        return newReminder;
+    },
+
+    getActiveShifts: async (): Promise<Shift[]> => {
+        await new Promise(res => setTimeout(res, 200));
+
+        // Filter for active shifts only
+        const activeShifts = mockShifts.filter(shift =>
+            shift.status === ShiftStatus.Active
+        );
+
+        return activeShifts;
     }
 };
 

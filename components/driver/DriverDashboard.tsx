@@ -191,13 +191,47 @@ const DriverDashboard: React.FC = () => {
 };
 
 const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onBack: () => void; onShiftStarted: () => void; vehicles: Vehicle[], currentUser: User }) => {
-    const [step, setStep] = useState<'scan' | 'confirm' | 'error' | 'submitting'>('scan');
+    const [step, setStep] = useState<'choose' | 'scan' | 'manual' | 'confirm' | 'error' | 'submitting'>('choose');
     const [scannedVehicle, setScannedVehicle] = useState<Vehicle | null>(null);
-    const [startValue, setStartValue] = useState('');
+    const [selectedVehicleId, setSelectedVehicleId] = useState<string>('');
+    const [availableVehicles, setAvailableVehicles] = useState<Vehicle[]>([]);
+    const [startValue, setStartValue] = useState(''); // For ICE odometer or backward compatibility
+    const [startOdometer, setStartOdometer] = useState(''); // For EV odometer
+    const [startSoC, setStartSoC] = useState(''); // For EV State of Charge
     const [errorMessage, setErrorMessage] = useState('');
     const [lastShiftEndOdometer, setLastShiftEndOdometer] = useState<number | null>(null);
     const [validationMessage, setValidationMessage] = useState('');
+    const [socValidationMessage, setSocValidationMessage] = useState('');
     const scannerRef = useRef<any>(null);
+
+    // Load available vehicles on component mount
+    useEffect(() => {
+        const loadAvailableVehicles = async () => {
+            try {
+                // Get all vehicles and active shifts to filter out unavailable ones
+                const [allVehicles, activeShifts] = await Promise.all([
+                    api.getVehicles(),
+                    api.getActiveShifts() // This should return shifts that are currently active
+                ]);
+
+                // Get vehicle IDs that are currently in use
+                const vehiclesInUse = activeShifts.map((shift: any) => shift.vehicleId);
+
+                // Filter out vehicles that are in use, in service, or unavailable
+                const available = allVehicles.filter((vehicle: Vehicle) =>
+                    !vehiclesInUse.includes(vehicle.id) &&
+                    (vehicle.status === 'Active' || vehicle.status === VehicleStatus.Active) // Only show active/available vehicles
+                );
+
+                setAvailableVehicles(available);
+            } catch (error) {
+                console.error('Failed to load available vehicles:', error);
+                setAvailableVehicles(vehicles); // Fallback to all vehicles
+            }
+        };
+
+        loadAvailableVehicles();
+    }, [vehicles]);
 
     useEffect(() => {
         if (step !== 'scan') {
@@ -319,18 +353,121 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
         };
     }, [step, vehicles]);
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        console.log("Form submitted with:", { scannedVehicle: scannedVehicle?.id, startValue });
+    const handleManualVehicleSelect = async () => {
+        if (!selectedVehicleId) return;
 
-        if (!scannedVehicle || !startValue) {
-            console.log("Missing data - vehicle or start value");
+        const foundVehicle = availableVehicles.find(v => v.id === selectedVehicleId);
+        if (!foundVehicle) {
+            setErrorMessage('Selected vehicle not found. Please try again.');
+            setStep('error');
             return;
         }
 
-        // Final validation for ICE vehicles
+        setScannedVehicle(foundVehicle);
+        setErrorMessage('');
+
+        // Get last completed shift for this vehicle
+        try {
+            const lastShift = await api.getLastCompletedShift(foundVehicle.id);
+            if (lastShift && lastShift.endOdometer && foundVehicle.vehicleType === VehicleType.ICE) {
+                setLastShiftEndOdometer(lastShift.endOdometer);
+                setValidationMessage(`Last shift ended at ${lastShift.endOdometer.toLocaleString()} km`);
+            } else {
+                setLastShiftEndOdometer(null);
+                setValidationMessage('');
+            }
+        } catch (error) {
+            console.error("Failed to get last shift:", error);
+            setLastShiftEndOdometer(null);
+            setValidationMessage('');
+        }
+
+        setStep('confirm');
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const isEV = scannedVehicle?.vehicleType === VehicleType.EV;
+
+        console.log("Form submitted with:", {
+            scannedVehicle: scannedVehicle?.id,
+            isEV,
+            startValue,
+            startOdometer,
+            startSoC
+        });
+
+        if (!scannedVehicle) {
+            console.log("Missing vehicle data");
+            return;
+        }
+
+        // Check required fields based on vehicle type
+        if (isEV) {
+            if (!startOdometer || !startSoC) {
+                alert('Both odometer reading and State of Charge are required for electric vehicles');
+                return;
+            }
+        } else {
+            if (!startValue) {
+                alert('Odometer reading is required');
+                return;
+            }
+        }
+
+        // Enhanced validation for EVs
+        if (isEV) {
+            const odometerValue = parseFloat(startOdometer);
+            const socValue = parseFloat(startSoC);
+
+            // Odometer validation for EVs
+            if (odometerValue < 0) {
+                alert('Odometer reading cannot be negative');
+                return;
+            }
+            if (odometerValue > 999999) {
+                alert('Odometer reading seems too high. Please verify the reading.');
+                return;
+            }
+
+            // SoC validation for EVs (0-100%)
+            if (socValue < 0 || socValue > 100) {
+                alert('State of Charge must be between 0% and 100%');
+                return;
+            }
+            if (socValue < 20) {
+                const confirmed = confirm(`Starting charge is quite low (${socValue}%). Are you sure this vehicle has sufficient charge for your shift?`);
+                if (!confirmed) return;
+            }
+        } else {
+            // Validation for ICE vehicles
+            const numericValue = parseFloat(startValue);
+            if (numericValue < 0) {
+                alert('Odometer reading cannot be negative');
+                return;
+            }
+            if (numericValue > 999999) {
+                alert('Odometer reading seems too high. Please verify the reading.');
+                return;
+            }
+        }
+
+        // Final validation for ICE vehicles against last shift
         if (scannedVehicle.vehicleType === VehicleType.ICE && lastShiftEndOdometer !== null) {
             const enteredOdometer = parseInt(startValue, 10);
+            const difference = Math.abs(enteredOdometer - lastShiftEndOdometer);
+
+            if (difference > 5) {
+                const confirmed = confirm(`The odometer reading (${enteredOdometer.toLocaleString()} km) differs by ${difference} km from the last shift end (${lastShiftEndOdometer.toLocaleString()} km). Do you want to continue anyway?`);
+                if (!confirmed) {
+                    return;
+                }
+            }
+        }
+
+        // Final validation for EV odometer against last shift
+        if (scannedVehicle.vehicleType === VehicleType.EV && lastShiftEndOdometer !== null) {
+            const enteredOdometer = parseInt(startOdometer, 10);
             const difference = Math.abs(enteredOdometer - lastShiftEndOdometer);
 
             if (difference > 5) {
@@ -346,8 +483,12 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
         const startData = {
             driverId: currentUser.id,
             vehicleId: scannedVehicle.id,
-            startOdometer: scannedVehicle.vehicleType === VehicleType.ICE ? parseInt(startValue, 10) : undefined,
-            startChargePercent: scannedVehicle.vehicleType === VehicleType.EV ? parseInt(startValue, 10) : undefined
+            startOdometer: scannedVehicle.vehicleType === VehicleType.ICE
+                ? parseInt(startValue, 10)
+                : parseInt(startOdometer, 10),
+            startChargePercent: scannedVehicle.vehicleType === VehicleType.EV
+                ? parseInt(startSoC, 10)
+                : undefined
         };
 
         console.log("Starting shift with data:", startData);
@@ -365,6 +506,103 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
     
     const renderContent = () => {
         switch (step) {
+            case 'choose':
+                return (
+                    <div className="text-center">
+                        <Car className="mx-auto h-16 w-16 text-blue-500 mb-4" />
+                        <h3 className="text-xl font-semibold text-gray-800 mb-2">Start Your Shift</h3>
+                        <p className="text-gray-600 mb-6">Choose how you'd like to select your vehicle:</p>
+
+                        <div className="space-y-3">
+                            <button
+                                onClick={() => setStep('scan')}
+                                className="w-full flex items-center justify-center p-4 border-2 border-blue-200 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition"
+                            >
+                                <ScanLine className="h-6 w-6 text-blue-500 mr-3" />
+                                <div className="text-left">
+                                    <div className="font-medium text-gray-800">Scan QR Code</div>
+                                    <div className="text-sm text-gray-500">Quick and automatic</div>
+                                </div>
+                            </button>
+
+                            <button
+                                onClick={() => setStep('manual')}
+                                className="w-full flex items-center justify-center p-4 border-2 border-green-200 rounded-lg hover:border-green-400 hover:bg-green-50 transition"
+                            >
+                                <Car className="h-6 w-6 text-green-500 mr-3" />
+                                <div className="text-left">
+                                    <div className="font-medium text-gray-800">Select Manually</div>
+                                    <div className="text-sm text-gray-500">Choose from available vehicles</div>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                );
+            case 'manual':
+                return (
+                    <div>
+                        <div className="text-center mb-6">
+                            <Car className="mx-auto h-16 w-16 text-green-500 mb-4" />
+                            <h3 className="text-xl font-semibold text-gray-800">Select Vehicle</h3>
+                            <p className="text-gray-600 mt-2">Choose from available vehicles for your shift.</p>
+                        </div>
+
+                        {availableVehicles.length === 0 ? (
+                            <div className="text-center py-8">
+                                <AlertTriangle className="mx-auto h-12 w-12 text-yellow-500 mb-4" />
+                                <h4 className="text-lg font-semibold text-gray-800 mb-2">No Vehicles Available</h4>
+                                <p className="text-gray-600">All vehicles are currently in use or out of service. Please try again later or contact dispatch.</p>
+                                <button
+                                    onClick={() => setStep('choose')}
+                                    className="mt-4 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition"
+                                >
+                                    Back
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">Available Vehicles ({availableVehicles.length})</label>
+                                    <select
+                                        value={selectedVehicleId}
+                                        onChange={(e) => setSelectedVehicleId(e.target.value)}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500"
+                                        required
+                                    >
+                                        <option value="">Select a vehicle...</option>
+                                        {availableVehicles.map(vehicle => (
+                                            <option key={vehicle.id} value={vehicle.id}>
+                                                {vehicle.make} {vehicle.model} - {vehicle.registration}
+                                                {vehicle.vehicleType === VehicleType.EV ? ' (Electric)' : ' (Petrol/Diesel)'}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="flex justify-between gap-4 mt-6">
+                                    <button
+                                        onClick={() => setStep('choose')}
+                                        className="w-full bg-gray-200 text-gray-800 font-bold py-3 px-4 rounded-lg hover:bg-gray-300 transition"
+                                    >
+                                        Back
+                                    </button>
+                                    <button
+                                        onClick={handleManualVehicleSelect}
+                                        disabled={!selectedVehicleId}
+                                        className={`w-full font-bold py-3 px-4 rounded-lg transition ${
+                                            !selectedVehicleId
+                                                ? 'bg-gray-400 cursor-not-allowed text-white'
+                                                : 'bg-green-500 hover:bg-green-600 text-white'
+                                        }`}
+                                    >
+                                        <Check className="inline h-5 w-5 mr-2"/>
+                                        Select Vehicle
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
             case 'scan':
                 return (
                     <div className="text-center">
@@ -377,6 +615,7 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
             case 'confirm':
                  if (!scannedVehicle) return null;
                  const isEV = scannedVehicle.vehicleType === VehicleType.EV;
+                 console.log("Selected vehicle:", scannedVehicle.id, "Type:", scannedVehicle.vehicleType, "IsEV:", isEV);
                  return (
                     <form onSubmit={handleSubmit}>
                         <div className="text-center">
@@ -384,54 +623,227 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
                             <h3 className="text-2xl font-bold mt-2">{scannedVehicle.make} {scannedVehicle.model}</h3>
                             <p className="text-lg text-gray-600 font-medium">{scannedVehicle.registration}</p>
                         </div>
-                        <div className="mt-6">
-                            <label htmlFor="startValue" className="block text-sm font-medium text-gray-700">{isEV ? 'Starting Charge (%)' : 'Starting Odometer (km)'}</label>
-                            <input
-                                type="number"
-                                id="startValue"
-                                value={startValue}
-                                onChange={e => {
-                                    console.log("Input changed to:", e.target.value);
-                                    const value = e.target.value;
-                                    setStartValue(value);
+                        {/* Input fields based on vehicle type */}
+                        {isEV ? (
+                            /* EV vehicles need both odometer and SoC */
+                            <div className="mt-6 space-y-4">
+                                {/* Odometer for EV */}
+                                <div>
+                                    <label htmlFor="startOdometer" className="block text-sm font-medium text-gray-700">
+                                        Starting Odometer (km) *
+                                        <span className="text-xs text-gray-500 block mt-1">
+                                            Enter current odometer reading in kilometers
+                                        </span>
+                                    </label>
+                                    <input
+                                        type="number"
+                                        id="startOdometer"
+                                        value={startOdometer}
+                                        min="0"
+                                        max="999999"
+                                        step="1"
+                                        onChange={e => {
+                                            const value = e.target.value;
+                                            setStartOdometer(value);
 
-                                    // Validate odometer against last shift for ICE vehicles
-                                    if (scannedVehicle?.vehicleType === VehicleType.ICE && lastShiftEndOdometer !== null && value) {
-                                        const enteredOdometer = parseInt(value, 10);
-                                        const difference = Math.abs(enteredOdometer - lastShiftEndOdometer);
+                                            if (value) {
+                                                const numericValue = parseFloat(value);
 
-                                        if (difference > 5) {
-                                            if (enteredOdometer < lastShiftEndOdometer) {
-                                                setValidationMessage(`⚠️ Odometer reading (${enteredOdometer.toLocaleString()} km) is ${difference} km less than last shift end (${lastShiftEndOdometer.toLocaleString()} km). This seems incorrect.`);
+                                                // Validate EV odometer against last shift
+                                                if (lastShiftEndOdometer !== null) {
+                                                    const enteredOdometer = parseInt(value, 10);
+                                                    const difference = Math.abs(enteredOdometer - lastShiftEndOdometer);
+
+                                                    if (difference > 5) {
+                                                        if (enteredOdometer < lastShiftEndOdometer) {
+                                                            setValidationMessage(`⚠️ Odometer reading (${enteredOdometer.toLocaleString()} km) is ${difference} km less than last shift end (${lastShiftEndOdometer.toLocaleString()} km). This seems incorrect.`);
+                                                        } else {
+                                                            setValidationMessage(`⚠️ Odometer reading (${enteredOdometer.toLocaleString()} km) is ${difference} km more than last shift end (${lastShiftEndOdometer.toLocaleString()} km). Please verify this is correct.`);
+                                                        }
+                                                    } else {
+                                                        setValidationMessage(`✅ Odometer reading looks correct (difference: ${difference} km)`);
+                                                    }
+                                                } else if (numericValue > 999999) {
+                                                    setValidationMessage(`⚠️ Odometer reading seems very high. Please verify.`);
+                                                } else {
+                                                    setValidationMessage(`✅ Odometer reading recorded: ${numericValue.toLocaleString()} km`);
+                                                }
                                             } else {
-                                                setValidationMessage(`⚠️ Odometer reading (${enteredOdometer.toLocaleString()} km) is ${difference} km more than last shift end (${lastShiftEndOdometer.toLocaleString()} km). Please verify this is correct.`);
+                                                setValidationMessage('');
+                                            }
+                                        }}
+                                        placeholder={`e.g., ${scannedVehicle.currentOdometer || '50000'}`}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                                        required
+                                    />
+                                    {validationMessage && (
+                                        <div className={`mt-2 p-2 rounded-md text-sm ${
+                                            validationMessage.includes('✅')
+                                                ? 'bg-green-50 text-green-800 border border-green-200'
+                                                : 'bg-yellow-50 text-yellow-800 border border-yellow-200'
+                                        }`}>
+                                            {validationMessage}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* State of Charge for EV */}
+                                <div>
+                                    <label htmlFor="startSoC" className="block text-sm font-medium text-gray-700">
+                                        Starting Charge (%) *
+                                        <span className="text-xs text-gray-500 block mt-1">
+                                            Enter current battery charge level (0-100%)
+                                        </span>
+                                    </label>
+                                    <input
+                                        type="number"
+                                        id="startSoC"
+                                        value={startSoC}
+                                        min="0"
+                                        max="100"
+                                        step="1"
+                                        onChange={e => {
+                                            const value = e.target.value;
+                                            setStartSoC(value);
+
+                                            if (value) {
+                                                const numericValue = parseFloat(value);
+
+                                                if (numericValue < 0 || numericValue > 100) {
+                                                    setSocValidationMessage(`⚠️ State of Charge must be between 0% and 100%`);
+                                                } else if (numericValue < 20) {
+                                                    setSocValidationMessage(`⚠️ Battery level is quite low (${numericValue}%). Consider charging before starting shift.`);
+                                                } else if (numericValue >= 80) {
+                                                    setSocValidationMessage(`✅ Excellent battery level (${numericValue}%)`);
+                                                } else {
+                                                    setSocValidationMessage(`✅ Battery level OK (${numericValue}%)`);
+                                                }
+                                            } else {
+                                                setSocValidationMessage('');
+                                            }
+                                        }}
+                                        placeholder="Enter 0-100"
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                                        required
+                                    />
+                                    {socValidationMessage && (
+                                        <div className={`mt-2 p-2 rounded-md text-sm ${
+                                            socValidationMessage.includes('✅')
+                                                ? 'bg-green-50 text-green-800 border border-green-200'
+                                                : 'bg-yellow-50 text-yellow-800 border border-yellow-200'
+                                        }`}>
+                                            {socValidationMessage}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        ) : (
+                            /* ICE vehicles need only odometer */
+                            <div className="mt-6">
+                                <label htmlFor="startValue" className="block text-sm font-medium text-gray-700">
+                                    Starting Odometer (km) *
+                                    <span className="text-xs text-gray-500 block mt-1">
+                                        Enter current odometer reading in kilometers
+                                    </span>
+                                </label>
+                                <input
+                                    type="number"
+                                    id="startValue"
+                                    value={startValue}
+                                    min="0"
+                                    max="999999"
+                                    step="1"
+                                    onChange={e => {
+                                        const value = e.target.value;
+                                        setStartValue(value);
+
+                                        if (value) {
+                                            const numericValue = parseFloat(value);
+
+                                            // Validate odometer against last shift for ICE vehicles
+                                            if (lastShiftEndOdometer !== null) {
+                                                const enteredOdometer = parseInt(value, 10);
+                                                const difference = Math.abs(enteredOdometer - lastShiftEndOdometer);
+
+                                                if (difference > 5) {
+                                                    if (enteredOdometer < lastShiftEndOdometer) {
+                                                        setValidationMessage(`⚠️ Odometer reading (${enteredOdometer.toLocaleString()} km) is ${difference} km less than last shift end (${lastShiftEndOdometer.toLocaleString()} km). This seems incorrect.`);
+                                                    } else {
+                                                        setValidationMessage(`⚠️ Odometer reading (${enteredOdometer.toLocaleString()} km) is ${difference} km more than last shift end (${lastShiftEndOdometer.toLocaleString()} km). Please verify this is correct.`);
+                                                    }
+                                                } else {
+                                                    setValidationMessage(`✅ Odometer reading looks correct (difference: ${difference} km)`);
+                                                }
+                                            } else if (numericValue > 999999) {
+                                                setValidationMessage(`⚠️ Odometer reading seems very high. Please verify.`);
+                                            } else {
+                                                setValidationMessage(`✅ Odometer reading recorded: ${numericValue.toLocaleString()} km`);
                                             }
                                         } else {
-                                            setValidationMessage(`✅ Odometer reading looks correct (difference: ${difference} km)`);
+                                            setValidationMessage('');
                                         }
-                                    }
-                                }}
-                                placeholder={isEV ? 'e.g., 95' : `e.g., ${scannedVehicle.currentOdometer}`}
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                                required
-                            />
-                            {validationMessage && (
-                                <div className={`mt-2 p-2 rounded-md text-sm ${
-                                    validationMessage.includes('✅')
-                                        ? 'bg-green-50 text-green-800 border border-green-200'
-                                        : 'bg-yellow-50 text-yellow-800 border border-yellow-200'
-                                }`}>
-                                    {validationMessage}
+                                    }}
+                                    placeholder={`e.g., ${scannedVehicle.currentOdometer || '50000'}`}
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                                    required
+                                />
+                                {validationMessage && (
+                                    <div className={`mt-2 p-2 rounded-md text-sm ${
+                                        validationMessage.includes('✅')
+                                            ? 'bg-green-50 text-green-800 border border-green-200'
+                                            : 'bg-yellow-50 text-yellow-800 border border-yellow-200'
+                                    }`}>
+                                        {validationMessage}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {/* Confirmation Summary */}
+                        {((isEV && startOdometer && startSoC) || (!isEV && startValue)) && (
+                            <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                                <h4 className="font-semibold text-blue-800 mb-2">Shift Start Confirmation</h4>
+                                <div className="space-y-1 text-sm text-blue-700">
+                                    <div className="flex justify-between">
+                                        <span>Vehicle:</span>
+                                        <span className="font-medium">{scannedVehicle.make} {scannedVehicle.model} ({scannedVehicle.registration})</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span>Vehicle Type:</span>
+                                        <span className="font-medium">{isEV ? 'Electric' : 'Petrol/Diesel'}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span>Starting Odometer:</span>
+                                        <span className="font-medium">{isEV ? startOdometer : startValue} km</span>
+                                    </div>
+                                    {isEV && (
+                                        <div className="flex justify-between">
+                                            <span>Starting Charge:</span>
+                                            <span className="font-medium">{startSoC}%</span>
+                                        </div>
+                                    )}
+                                    <div className="flex justify-between">
+                                        <span>Driver:</span>
+                                        <span className="font-medium">{currentUser.firstName} {currentUser.surname}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span>Start Time:</span>
+                                        <span className="font-medium">{new Date().toLocaleString()}</span>
+                                    </div>
                                 </div>
-                            )}
-                        </div>
+                            </div>
+                        )}
+
                         <div className="mt-8 flex justify-between items-center gap-4">
-                            <button type="button" onClick={() => setStep('scan')} className="w-full bg-gray-200 text-gray-800 font-bold py-3 px-4 rounded-lg hover:bg-gray-300 transition">Scan Again</button>
+                            <button type="button" onClick={() => setStep('choose')} className="w-full bg-gray-200 text-gray-800 font-bold py-3 px-4 rounded-lg hover:bg-gray-300 transition">Back</button>
                             <button
                                 type="submit"
-                                className={`w-full font-bold py-3 px-4 rounded-lg transition ${!startValue ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600'} text-white`}
-                                disabled={!startValue}
-                                onClick={() => console.log("Button clicked, startValue:", startValue)}
+                                className={`w-full font-bold py-3 px-4 rounded-lg transition ${
+                                    (isEV && (!startOdometer || !startSoC)) || (!isEV && !startValue)
+                                        ? 'bg-gray-400 cursor-not-allowed'
+                                        : 'bg-green-500 hover:bg-green-600'
+                                } text-white`}
+                                disabled={(isEV && (!startOdometer || !startSoC)) || (!isEV && !startValue)}
+                                onClick={() => console.log("Button clicked, EV:", isEV, "Values:", { startValue, startOdometer, startSoC })}
                             >
                                 <Check className="inline h-5 w-5 mr-2"/>
                                 Start Shift
@@ -445,7 +857,7 @@ const StartShiftFlow = ({ onBack, onShiftStarted, vehicles, currentUser }: { onB
                          <XCircle className="mx-auto h-16 w-16 text-red-500 mb-4" />
                          <h3 className="text-xl font-semibold text-gray-800">Error</h3>
                          <p className="text-red-600 mt-2 bg-red-100 p-3 rounded-md">{errorMessage}</p>
-                         <button onClick={() => setStep('scan')} className="mt-6 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">Try Scanning Again</button>
+                         <button onClick={() => setStep('choose')} className="mt-6 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">Back to Start</button>
                      </div>
                  );
             case 'submitting':

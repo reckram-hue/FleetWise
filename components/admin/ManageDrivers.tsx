@@ -4,7 +4,7 @@ import { User, UserRole, AppSettings, EmploymentStatus } from '../../types';
 import api from '../../services/mockApi';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
-import { UserPlus, Edit, Trash2, X, Upload, UserCheck, UserX } from 'lucide-react';
+import { UserPlus, Edit, Trash2, X, Upload, UserCheck, UserX, MessageCircle, Copy } from 'lucide-react';
 
 const emptyDriver: Omit<User, 'id' | 'role'> = {
     firstName: '',
@@ -156,6 +156,21 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
                 return { text: 'Terminated', color: 'text-red-800', bg: 'bg-red-100' };
             default:
                 return { text: 'Unknown', color: 'text-gray-800', bg: 'bg-gray-100' };
+        }
+    };
+
+    const handleTelegramLink = async (driver: User) => {
+        try {
+            const response = await fetch(`http://localhost:3001/api/drivers/${driver.id}/telegram-link`);
+            if (!response.ok) throw new Error('Failed to get Telegram link');
+            const data = await response.json();
+
+            // Copy to clipboard
+            navigator.clipboard.writeText(data.url);
+            alert(`Telegram registration link copied to clipboard!\n\nSend this link to ${driver.firstName} ${driver.surname}:\n${data.url}`);
+        } catch (error) {
+            console.error('Failed to get Telegram link:', error);
+            alert('Failed to generate Telegram link. Make sure the server is running.');
         }
     };
 
@@ -320,6 +335,7 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
                                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact & Area</th>
                                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Employment Status</th>
                                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Licence Expiry</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Telegram</th>
                                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                     </tr>
                                 </thead>
@@ -356,6 +372,16 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
                                                 </td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                                                     <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${expiry.bg} ${expiry.color}`}>{expiry.text}</span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                                    <button
+                                                        onClick={() => handleTelegramLink(driver)}
+                                                        className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors"
+                                                        title="Get Telegram registration link"
+                                                    >
+                                                        <MessageCircle className="h-3 w-3 mr-1" />
+                                                        Get Link
+                                                    </button>
                                                 </td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                                     <div className="flex items-center space-x-2">

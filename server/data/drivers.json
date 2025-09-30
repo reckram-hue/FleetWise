@@ -1,0 +1,28 @@
+[
+  {
+    "id": "driver1",
+    "firstName": "John",
+    "surname": "Doe",
+    "isActive": true,
+    "telegram_username": "Saferich2",
+    "telegram_chat_id": 6040213534
+  },
+  {
+    "id": "driver2",
+    "firstName": "Jane",
+    "surname": "Smith",
+    "isActive": true
+  },
+  {
+    "id": "driver3",
+    "firstName": "Mike",
+    "surname": "Johnson",
+    "isActive": true
+  },
+  {
+    "id": "test_1759054454379",
+    "firstName": "Test",
+    "surname": "Driver",
+    "isActive": true
+  }
+]

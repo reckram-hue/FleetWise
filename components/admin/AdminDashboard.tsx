@@ -5,13 +5,14 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { DefectReport, Cost, DefectUrgency, CostCategory, UserRole, ScheduledService, Vehicle, ServiceProvider } from '../../types';
 import { VehicleStatus } from '../../types';
 import api from '../../services/mockApi';
-import { AlertTriangle, Fuel, Users, Truck, Settings as SettingsIcon, Wrench } from 'lucide-react';
+import { AlertTriangle, Fuel, Users, Truck, Settings as SettingsIcon, Wrench, MessageCircle } from 'lucide-react';
 import ManageDrivers from './ManageDrivers';
 import ManageVehicles from './ManageVehicles';
 import Reports from './Reports';
 import Settings from './Settings';
 import ManageServiceProviders from './ManageServiceProviders';
 import ManageDefects from './ManageDefects';
+import TelegramDrivers from './TelegramDrivers';
 
 
 const AdminDashboard: React.FC = () => {
@@ -76,6 +77,10 @@ const AdminDashboard: React.FC = () => {
         );
     }
 
+    if (view === 'telegram') {
+        return <TelegramDrivers onBack={() => setView('dashboard')} />;
+    }
+
   return (
     <div className="min-h-screen bg-gray-100">
       <Header title="Admin Dashboard" />
@@ -103,6 +108,10 @@ const AdminDashboard: React.FC = () => {
             <button onClick={() => setView('reports')} className="bg-purple-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-purple-600 transition duration-300 shadow-lg">
                 <AlertTriangle className="h-5 w-5 mr-2 inline" />
                 Reports
+            </button>
+            <button onClick={() => setView('telegram')} className="bg-blue-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-blue-600 transition duration-300 shadow-lg">
+                <MessageCircle className="h-5 w-5 mr-2 inline" />
+                Telegram
             </button>
             <button onClick={() => setView('settings')} className="bg-gray-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-gray-700 transition duration-300 shadow-lg">
                 <SettingsIcon className="h-5 w-5 mr-2 inline" />
@@ -133,6 +142,8 @@ const AdminDashboard: React.FC = () => {
           }}
           refreshTrigger={refreshTrigger}
         />
+
+        <LicenseRenewalAlerts />
 
         {/* Service Booking Modal */}
         {showBookingModal && selectedService && (
@@ -792,6 +803,109 @@ const ReturnServiceModal: React.FC<ReturnServiceModalProps> = ({ service, onClos
                 </div>
             </div>
         </div>
+    );
+};
+
+const LicenseRenewalAlerts: React.FC = () => {
+    const [expiredVehicles, setExpiredVehicles] = useState<Vehicle[]>([]);
+    const [loading, setLoading] = useState(false);
+
+    const fetchExpiredLicenses = async () => {
+        setLoading(true);
+        try {
+            // Get vehicles with licenses expiring in the next 60 days
+            const vehicles = await api.getVehiclesWithExpiredLicenses(60);
+            setExpiredVehicles(vehicles);
+        } catch (error) {
+            console.error('Failed to fetch expired licenses:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchExpiredLicenses();
+    }, []);
+
+    const getLicenseStatusColor = (vehicle: Vehicle) => {
+        if (!vehicle.licenseExpiryDate) return 'text-gray-500';
+
+        const today = new Date();
+        const expiryDate = new Date(vehicle.licenseExpiryDate);
+        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (daysUntilExpiry < 0) return 'text-red-600';
+        if (daysUntilExpiry <= (vehicle.licenseRenewalReminderDays || 30)) return 'text-orange-600';
+        return 'text-yellow-600';
+    };
+
+    const getLicenseStatusText = (vehicle: Vehicle) => {
+        if (!vehicle.licenseExpiryDate) return 'No expiry date set';
+
+        const today = new Date();
+        const expiryDate = new Date(vehicle.licenseExpiryDate);
+        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (daysUntilExpiry < 0) return `Expired ${Math.abs(daysUntilExpiry)} days ago`;
+        if (daysUntilExpiry === 0) return 'Expires today';
+        if (daysUntilExpiry === 1) return 'Expires tomorrow';
+        return `Expires in ${daysUntilExpiry} days`;
+    };
+
+    if (loading) {
+        return (
+            <Card>
+                <div className="animate-pulse">
+                    <div className="h-4 bg-gray-200 rounded w-1/4 mb-2"></div>
+                    <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                </div>
+            </Card>
+        );
+    }
+
+    if (expiredVehicles.length === 0) {
+        return null; // Don't show the section if no vehicles need license renewals
+    }
+
+    return (
+        <Card className="border-orange-200 bg-orange-50">
+            <div className="flex items-center mb-3">
+                <AlertTriangle className="h-5 w-5 text-orange-500 mr-2" />
+                <h3 className="text-lg font-semibold text-orange-800">License Renewal Required</h3>
+            </div>
+            <div className="space-y-3">
+                {expiredVehicles.map(vehicle => (
+                    <div key={vehicle.id} className="flex justify-between items-center p-3 bg-white rounded-lg border border-orange-200">
+                        <div>
+                            <div className="font-medium text-gray-900">
+                                {vehicle.registration} - {vehicle.make} {vehicle.model}
+                            </div>
+                            <div className={`text-sm ${getLicenseStatusColor(vehicle)}`}>
+                                {getLicenseStatusText(vehicle)}
+                            </div>
+                            {vehicle.licenseExpiryDate && (
+                                <div className="text-xs text-gray-500">
+                                    License expires: {vehicle.licenseExpiryDate}
+                                </div>
+                            )}
+                        </div>
+                        <div className="text-right">
+                            <button
+                                onClick={() => {
+                                    // This would open the vehicle details in edit mode
+                                    // For now, we'll show an alert
+                                    alert(`Please update license information for ${vehicle.registration}`);
+                                }}
+                                className="bg-orange-500 text-white px-3 py-1 rounded text-sm hover:bg-orange-600 transition"
+                            >
+                                Update License
+                            </button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            <p className="text-xs text-orange-600 mt-3">⚠️ Ensure licenses are renewed to avoid penalties and keep vehicles road-legal!</p>
+        </Card>
     );
 };
 

@@ -1,0 +1,19 @@
+[
+  {
+    "id": "shift_1759054880536_9va0kt0ra",
+    "driverId": "driver1",
+    "vehicleId": "v1",
+    "startTime": 1759054880536,
+    "startOdometer": 47000,
+    "vehicleCheck": {
+      "exterior": "✅ All good",
+      "interior": "⚠️ Needs attention",
+      "tires": "✅ All good",
+      "lights": "⚠️ Some issues",
+      "fluids": "✅ Levels good",
+      "fuel": "⚠️ Medium"
+    },
+    "endTime": 1759054997658,
+    "endOdometer": 47500
+  }
+]

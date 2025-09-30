@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FleetWise Telegram Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        h2 { color: #666; margin-top: 30px; }
+        .section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background: #fafafa;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚗 FleetWise Telegram Integration Test</h1>
+
+        <div class="section">
+            <h2>📱 Server Status</h2>
+            <p>Server URL: <span id="server-url">http://localhost:3001</span></p>
+            <p>Status: <span id="server-status">Checking...</span></p>
+            <button onclick="checkServerHealth()">Check Server</button>
+        </div>
+
+        <div class="section">
+            <h2>👥 Drivers</h2>
+            <button onclick="loadDrivers()">Load Drivers</button>
+            <button onclick="createTestDriver()">Create Test Driver</button>
+            <div id="drivers-list"></div>
+        </div>
+
+        <div class="section">
+            <h2>🚙 Vehicles</h2>
+            <button onclick="loadVehicles()">Load Vehicles</button>
+            <div id="vehicles-list"></div>
+        </div>
+
+        <div class="section">
+            <h2>⏰ Active Shifts</h2>
+            <button onclick="loadActiveShifts()">Load Active Shifts</button>
+            <div id="active-shifts"></div>
+        </div>
+
+        <div class="section">
+            <h2>📊 All Shifts</h2>
+            <button onclick="loadAllShifts()">Load All Shifts</button>
+            <div id="all-shifts"></div>
+        </div>
+    </div>
+
+    <script>
+        const SERVER_URL = 'http://localhost:3001';
+
+        async function checkServerHealth() {
+            const statusEl = document.getElementById('server-status');
+            try {
+                const response = await fetch(`${SERVER_URL}/health`);
+                const data = await response.json();
+                if (data.ok) {
+                    statusEl.innerHTML = '<span class="success">✅ Server is running</span>';
+                } else {
+                    statusEl.innerHTML = '<span class="error">❌ Server error</span>';
+                }
+            } catch (error) {
+                statusEl.innerHTML = '<span class="error">❌ Server offline</span>';
+            }
+        }
+
+        async function loadDrivers() {
+            const driversEl = document.getElementById('drivers-list');
+            try {
+                const response = await fetch(`${SERVER_URL}/api/drivers`);
+                const drivers = await response.json();
+
+                let html = '<table><tr><th>ID</th><th>Name</th><th>Active</th><th>Telegram</th><th>Actions</th></tr>';
+                for (const driver of drivers) {
+                    html += `<tr>
+                        <td>${driver.id}</td>
+                        <td>${driver.firstName} ${driver.surname}</td>
+                        <td>${driver.isActive ? '✅' : '❌'}</td>
+                        <td>${driver.hasTelegram ? '✅' : '❌'}</td>
+                        <td><button onclick="getTelegramLink('${driver.id}', '${driver.firstName} ${driver.surname}')">Get Link</button></td>
+                    </tr>`;
+                }
+                html += '</table>';
+                driversEl.innerHTML = html;
+            } catch (error) {
+                driversEl.innerHTML = `<span class="error">Error: ${error.message}</span>`;
+            }
+        }
+
+        async function createTestDriver() {
+            try {
+                const driverId = 'test_' + Date.now();
+                const response = await fetch(`${SERVER_URL}/api/drivers`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: driverId,
+                        firstName: 'Test',
+                        surname: 'Driver'
+                    })
+                });
+                if (response.ok) {
+                    alert('Test driver created: ' + driverId);
+                    loadDrivers();
+                } else {
+                    alert('Failed to create driver');
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function getTelegramLink(driverId, driverName) {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/drivers/${driverId}/telegram-link`);
+                const data = await response.json();
+
+                navigator.clipboard.writeText(data.url);
+                alert(`Telegram link for ${driverName} copied to clipboard:\\n\\n${data.url}\\n\\nSend this link to the driver to register their Telegram account.`);
+            } catch (error) {
+                alert('Failed to get Telegram link: ' + error.message);
+            }
+        }
+
+        async function loadVehicles() {
+            const vehiclesEl = document.getElementById('vehicles-list');
+            try {
+                const response = await fetch(`${SERVER_URL}/api/vehicles`);
+                const vehicles = await response.json();
+
+                let html = '<table><tr><th>ID</th><th>Name</th><th>Telegram</th><th>Location</th></tr>';
+                for (const vehicle of vehicles) {
+                    html += `<tr>
+                        <td>${vehicle.id}</td>
+                        <td>${vehicle.name}</td>
+                        <td>${vehicle.hasTelegram ? '✅' : '❌'}</td>
+                        <td>${vehicle.last_location ? '✅' : '❌'}</td>
+                    </tr>`;
+                }
+                html += '</table>';
+                vehiclesEl.innerHTML = html;
+            } catch (error) {
+                vehiclesEl.innerHTML = `<span class="error">Error: ${error.message}</span>`;
+            }
+        }
+
+        async function loadActiveShifts() {
+            const shiftsEl = document.getElementById('active-shifts');
+            try {
+                const response = await fetch(`${SERVER_URL}/api/shifts/active`);
+                const shifts = await response.json();
+
+                if (shifts.length === 0) {
+                    shiftsEl.innerHTML = '<p class="info">No active shifts</p>';
+                    return;
+                }
+
+                let html = '<table><tr><th>Driver</th><th>Vehicle</th><th>Start Time</th><th>Duration</th><th>Start Odo</th></tr>';
+                for (const shift of shifts) {
+                    const startTime = new Date(shift.startTime);
+                    const duration = Math.floor((Date.now() - shift.startTime) / (1000 * 60));
+                    html += `<tr>
+                        <td>${shift.driverName}</td>
+                        <td>${shift.vehicleName}</td>
+                        <td>${startTime.toLocaleString()}</td>
+                        <td>${Math.floor(duration / 60)}h ${duration % 60}m</td>
+                        <td>${shift.startOdometer.toLocaleString()} km</td>
+                    </tr>`;
+                }
+                html += '</table>';
+                shiftsEl.innerHTML = html;
+            } catch (error) {
+                shiftsEl.innerHTML = `<span class="error">Error: ${error.message}</span>`;
+            }
+        }
+
+        async function loadAllShifts() {
+            const shiftsEl = document.getElementById('all-shifts');
+            try {
+                const response = await fetch(`${SERVER_URL}/api/shifts`);
+                const shifts = await response.json();
+
+                if (shifts.length === 0) {
+                    shiftsEl.innerHTML = '<p class="info">No shifts recorded</p>';
+                    return;
+                }
+
+                let html = '<table><tr><th>Driver</th><th>Vehicle</th><th>Start</th><th>End</th><th>Distance</th></tr>';
+                for (const shift of shifts.slice(-20)) { // Show last 20 shifts
+                    const startTime = new Date(shift.startTime);
+                    const endTime = shift.endTime ? new Date(shift.endTime) : null;
+                    const distance = shift.endOdometer ? (shift.endOdometer - shift.startOdometer) : 'Active';
+
+                    html += `<tr>
+                        <td>${shift.driverName}</td>
+                        <td>${shift.vehicleName}</td>
+                        <td>${startTime.toLocaleString()}</td>
+                        <td>${endTime ? endTime.toLocaleString() : 'Active'}</td>
+                        <td>${distance !== 'Active' ? distance.toLocaleString() + ' km' : distance}</td>
+                    </tr>`;
+                }
+                html += '</table>';
+                shiftsEl.innerHTML = html;
+            } catch (error) {
+                shiftsEl.innerHTML = `<span class="error">Error: ${error.message}</span>`;
+            }
+        }
+
+        // Auto-check server status on load
+        checkServerHealth();
+    </script>
+</body>
+</html>
