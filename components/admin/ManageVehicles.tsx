@@ -60,6 +60,11 @@ const emptyVehicle: Omit<Vehicle, 'id'> = {
     warrantyContactName: '',
     warrantyContactEmail: '',
     warrantyContactPhone: '',
+    // License Information
+    licenseExpiryDate: '',
+    licenseRenewalReminderDays: 30,
+    lastLicenseRenewalDate: '',
+    licenseNumber: '',
 };
 
 const emptyRecord: Omit<MaintenanceRecord, 'id' | 'vehicleId'> = {
@@ -483,7 +488,9 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
             'manufacturerFuelConsumption', 'manufacturerEnergyConsumption',
             'baselineFuelConsumption', 'baselineEnergyConsumption',
             'currentFuelConsumption', 'currentEnergyConsumption',
-            'economyVarianceThreshold'
+            'economyVarianceThreshold',
+            // License fields
+            'licenseRenewalReminderDays'
         ];
         const parsedValue = numericFields.includes(name) ? (parseFloat(value) || 0) : value;
         setSelectedVehicle({ ...selectedVehicle, [name]: parsedValue });
@@ -536,7 +543,24 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
         return <div className="flex items-center">{dueText}{freeServiceTag}</div>;
     };
 
+    const getLicenseStatus = (vehicle: Vehicle) => {
+        if (!vehicle.licenseExpiryDate) {
+            return <span className="text-gray-500">No Date Set</span>;
+        }
 
+        const today = new Date();
+        const expiryDate = new Date(vehicle.licenseExpiryDate);
+        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        const reminderDays = vehicle.licenseRenewalReminderDays || 30;
+
+        if (daysUntilExpiry < 0) {
+            return <span className="font-bold text-red-600">Expired {Math.abs(daysUntilExpiry)} days ago</span>;
+        } else if (daysUntilExpiry <= reminderDays) {
+            return <span className="font-bold text-yellow-600">Expires in {daysUntilExpiry} days</span>;
+        } else {
+            return <span className="text-green-600">Valid ({daysUntilExpiry} days left)</span>;
+        }
+    };
 
     const renderVehicleForm = () => (
          <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
@@ -917,6 +941,32 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                         </div>
                     </div>
 
+                    {/* License Information */}
+                    <div>
+                        <h4 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4">License Information</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">License Number</label>
+                                <input name="licenseNumber" value={selectedVehicle.licenseNumber || ''} onChange={handleFormChange} placeholder="License/Registration number" className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">License Expiry Date</label>
+                                <input type="date" name="licenseExpiryDate" value={selectedVehicle.licenseExpiryDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">Last Renewal Date</label>
+                                <input type="date" name="lastLicenseRenewalDate" value={selectedVehicle.lastLicenseRenewalDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">
+                                    Reminder Days Before Expiry
+                                    <span className="text-xs text-gray-500 block">How many days before expiry to send reminder</span>
+                                </label>
+                                <input type="number" min="1" max="365" name="licenseRenewalReminderDays" value={selectedVehicle.licenseRenewalReminderDays || 30} onChange={handleFormChange} placeholder="30" className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                            </div>
+                        </div>
+                    </div>
+
                     {(isEditMode || !isEditing) && (
                         <div className="flex justify-end space-x-4">
                             <button type="button" onClick={() => {
@@ -986,6 +1036,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                     </th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Odometer</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Next Service</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">License Status</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
                             </thead>
@@ -998,7 +1049,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                         <React.Fragment key={vehicle.id}>
                                             {shouldShowStatusDivider && (
                                                 <tr>
-                                                    <td colSpan={8} className="px-6 py-2 bg-gray-100 border-t border-gray-300">
+                                                    <td colSpan={9} className="px-6 py-2 bg-gray-100 border-t border-gray-300">
                                                         <div className="text-xs font-medium text-gray-600 uppercase tracking-wider">
                                                             {vehicle.status} Vehicles
                                                         </div>
@@ -1040,6 +1091,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{(vehicle.currentOdometer || 0).toLocaleString()} km</td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{getNextServiceKm(vehicle)}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{getLicenseStatus(vehicle)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                                             <button onClick={() => handleEditClick(vehicle)} className="text-blue-600 hover:text-blue-900" title="Edit">
                                                 <Edit size={16} />
@@ -1060,7 +1112,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                         })}
                                 {sortedVehicles.length === 0 && (
                                     <tr>
-                                        <td colSpan={8} className="px-6 py-4 text-center text-gray-500">
+                                        <td colSpan={9} className="px-6 py-4 text-center text-gray-500">
                                             No vehicles found.
                                         </td>
                                     </tr>
