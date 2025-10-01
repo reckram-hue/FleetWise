@@ -5,7 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { DefectReport, Cost, DefectUrgency, CostCategory, UserRole, ScheduledService, Vehicle, ServiceProvider } from '../../types';
 import { VehicleStatus } from '../../types';
 import api from '../../services/mockApi';
-import { AlertTriangle, Fuel, Users, Truck, Settings as SettingsIcon, Wrench, MessageCircle } from 'lucide-react';
+import { AlertTriangle, Fuel, Users, Truck, Settings as SettingsIcon, Wrench, MessageCircle, FileText } from 'lucide-react';
 import ManageDrivers from './ManageDrivers';
 import ManageVehicles from './ManageVehicles';
 import Reports from './Reports';
@@ -17,20 +17,18 @@ import TelegramDrivers from './TelegramDrivers';
 
 const AdminDashboard: React.FC = () => {
     const [view, setView] = useState('dashboard');
-    const [totalDrivers, setTotalDrivers] = useState(0);
     const [totalVehicles, setTotalVehicles] = useState(0);
     const [activeVehicles, setActiveVehicles] = useState(0);
+    const [vehiclesNeedingLicense, setVehiclesNeedingLicense] = useState(0);
     const [selectedDefectId, setSelectedDefectId] = useState<string | null>(null);
     const [showBookingModal, setShowBookingModal] = useState(false);
     const [showSendModal, setShowSendModal] = useState(false);
     const [showReturnModal, setShowReturnModal] = useState(false);
     const [selectedService, setSelectedService] = useState<ScheduledService | null>(null);
     const [refreshTrigger, setRefreshTrigger] = useState(0);
+    const [showLicenseRenewalModal, setShowLicenseRenewalModal] = useState(false);
 
     useEffect(() => {
-        api.getUsers().then(users => {
-            setTotalDrivers(users.filter(u => u.role === UserRole.Driver).length);
-        });
         api.getVehicles().then(vehicles => {
             // Exclude sold and end-of-life vehicles from total count
             const operationalVehicles = vehicles.filter(v =>
@@ -41,6 +39,16 @@ const AdminDashboard: React.FC = () => {
 
             setTotalVehicles(operationalVehicles.length);
             setActiveVehicles(activeVehicleCount);
+
+            // Count vehicles needing license renewal within 30 days
+            const today = new Date();
+            const thirtyDaysFromNow = new Date(today.getTime() + (30 * 24 * 60 * 60 * 1000));
+            const needingLicense = vehicles.filter(v => {
+                if (!v.licenseExpiryDate) return false;
+                const expiryDate = new Date(v.licenseExpiryDate);
+                return expiryDate <= thirtyDaysFromNow;
+            });
+            setVehiclesNeedingLicense(needingLicense.length);
         });
     }, [refreshTrigger]);
 
@@ -87,7 +95,14 @@ const AdminDashboard: React.FC = () => {
       <main className="max-w-7xl mx-auto p-6 space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <StatCard title="Total Vehicles" value={`${activeVehicles}/${totalVehicles}`} icon={<Truck className="h-8 w-8 text-cyan-500"/>} />
-            <StatCard title="Total Drivers" value={totalDrivers.toString()} icon={<Users className="h-8 w-8 text-purple-500"/>} />
+            <StatCard
+                title="Vehicle License Renewal"
+                value={vehiclesNeedingLicense.toString()}
+                icon={<FileText className="h-8 w-8 text-red-500"/>}
+                onClick={() => setShowLicenseRenewalModal(true)}
+                isClickable={true}
+                isAlert={vehiclesNeedingLicense > 0}
+            />
             <StatCard title="Active Defects" value="5" icon={<AlertTriangle className="h-8 w-8 text-red-500"/>} />
             <StatCard title="Total Costs This Month" value="R 25,750" icon={<Fuel className="h-8 w-8 text-green-500"/>} />
         </div>
@@ -193,22 +208,46 @@ const AdminDashboard: React.FC = () => {
             }}
           />
         )}
-        
+
+        {/* License Renewal Modal */}
+        {showLicenseRenewalModal && (
+          <VehicleLicenseRenewalModal
+            onClose={() => setShowLicenseRenewalModal(false)}
+          />
+        )}
+
       </main>
     </div>
   );
 };
 
 
-const StatCard = ({ title, value, icon }: { title: string, value: string, icon: React.ReactNode }) => (
-    <Card>
+const StatCard = ({
+    title,
+    value,
+    icon,
+    onClick,
+    isClickable = false,
+    isAlert = false
+}: {
+    title: string;
+    value: string;
+    icon: React.ReactNode;
+    onClick?: () => void;
+    isClickable?: boolean;
+    isAlert?: boolean;
+}) => (
+    <Card
+        className={`${isClickable ? 'cursor-pointer hover:shadow-lg transition-shadow' : ''} ${isAlert ? 'bg-red-50 border-red-200' : ''}`}
+        onClick={isClickable ? onClick : undefined}
+    >
         <div className="flex items-center">
-            <div className="p-3 rounded-full bg-gray-200 mr-4">
+            <div className={`p-3 rounded-full mr-4 ${isAlert ? 'bg-red-100' : 'bg-gray-200'}`}>
                 {icon}
             </div>
             <div>
-                <p className="text-sm font-medium text-gray-500 truncate">{title}</p>
-                <p className="mt-1 text-3xl font-semibold text-gray-900">{value}</p>
+                <p className={`text-sm font-medium truncate ${isAlert ? 'text-red-700' : 'text-gray-500'}`}>{title}</p>
+                <p className={`mt-1 text-3xl font-semibold ${isAlert ? 'text-red-900' : 'text-gray-900'}`}>{value}</p>
             </div>
         </div>
     </Card>
@@ -906,6 +945,173 @@ const LicenseRenewalAlerts: React.FC = () => {
             </div>
             <p className="text-xs text-orange-600 mt-3">⚠️ Ensure licenses are renewed to avoid penalties and keep vehicles road-legal!</p>
         </Card>
+    );
+};
+
+interface VehicleLicenseRenewalModalProps {
+    onClose: () => void;
+}
+
+const VehicleLicenseRenewalModal: React.FC<VehicleLicenseRenewalModalProps> = ({ onClose }) => {
+    const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchVehicles = async () => {
+            try {
+                // Get vehicles with licenses expiring in the next 30 days
+                const vehiclesNeedingRenewal = await api.getVehiclesWithExpiredLicenses(30);
+                setVehicles(vehiclesNeedingRenewal);
+            } catch (error) {
+                console.error('Failed to fetch vehicles:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchVehicles();
+    }, []);
+
+    const getLicenseStatusColor = (vehicle: Vehicle) => {
+        if (!vehicle.licenseExpiryDate) return 'text-gray-500';
+
+        const today = new Date();
+        const expiryDate = new Date(vehicle.licenseExpiryDate);
+        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (daysUntilExpiry < 0) return 'bg-red-100 text-red-800';
+        if (daysUntilExpiry <= 7) return 'bg-red-100 text-red-800';
+        if (daysUntilExpiry <= 14) return 'bg-orange-100 text-orange-800';
+        return 'bg-yellow-100 text-yellow-800';
+    };
+
+    const getLicenseStatusText = (vehicle: Vehicle) => {
+        if (!vehicle.licenseExpiryDate) return 'No expiry date set';
+
+        const today = new Date();
+        const expiryDate = new Date(vehicle.licenseExpiryDate);
+        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (daysUntilExpiry < 0) return `Expired ${Math.abs(daysUntilExpiry)} days ago`;
+        if (daysUntilExpiry === 0) return 'Expires today';
+        if (daysUntilExpiry === 1) return 'Expires tomorrow';
+        return `Expires in ${daysUntilExpiry} days`;
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+                {/* Modal Header */}
+                <div className="flex items-center justify-between p-6 border-b border-gray-200">
+                    <div className="flex items-center">
+                        <AlertTriangle className="h-6 w-6 text-red-500 mr-2" />
+                        <h2 className="text-2xl font-bold text-gray-800">
+                            Vehicles Requiring License Renewal (Next 30 Days)
+                        </h2>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+                    >
+                        ×
+                    </button>
+                </div>
+
+                {/* Modal Body */}
+                <div className="flex-1 overflow-y-auto p-6">
+                    {loading ? (
+                        <div className="animate-pulse space-y-4">
+                            <div className="h-4 bg-gray-200 rounded w-1/4"></div>
+                            <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                            <div className="h-3 bg-gray-200 rounded w-1/3"></div>
+                        </div>
+                    ) : vehicles.length === 0 ? (
+                        <div className="text-center py-8">
+                            <FileText className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+                            <h3 className="text-lg font-semibold text-gray-700 mb-2">No License Renewals Needed</h3>
+                            <p className="text-gray-500">All vehicle licenses are up to date for the next 30 days.</p>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Registration
+                                            </th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Vehicle
+                                            </th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                License Expiry
+                                            </th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Status
+                                            </th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Disc Number
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {vehicles.map((vehicle) => (
+                                            <tr key={vehicle.id} className="hover:bg-gray-50">
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="text-sm font-medium text-gray-900">
+                                                        {vehicle.registration}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="text-sm text-gray-900">
+                                                        {vehicle.make} {vehicle.model}
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">
+                                                        {vehicle.year}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="text-sm text-gray-900">
+                                                        {vehicle.licenseExpiryDate || 'Not set'}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getLicenseStatusColor(vehicle)}`}>
+                                                        {getLicenseStatusText(vehicle)}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="text-sm text-gray-900">
+                                                        {vehicle.licenseDiscNumber || 'N/A'}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                                <p className="text-sm text-red-800">
+                                    <strong>⚠️ Important:</strong> Ensure all vehicle licenses are renewed before their expiry dates
+                                    to avoid penalties and keep vehicles road-legal. Contact your licensing authority immediately
+                                    for vehicles that are expired or expiring soon.
+                                </p>
+                            </div>
+                        </>
+                    )}
+                </div>
+
+                {/* Modal Footer */}
+                <div className="flex justify-end p-6 border-t border-gray-200">
+                    <button
+                        onClick={onClose}
+                        className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition duration-300"
+                    >
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 };
 

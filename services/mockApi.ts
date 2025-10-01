@@ -197,8 +197,8 @@ export let mockVehicles: Vehicle[] = [
         warrantyServiceProviderId: 'sp1',
         // License Information
         licenseNumber: 'CA123456',
-        licenseExpiryDate: '2024-03-15', // Expires soon for testing
-        lastLicenseRenewalDate: '2023-03-15',
+        licenseExpiryDate: '2025-10-15', // Expires in 15 days for testing
+        lastLicenseRenewalDate: '2024-10-15',
         licenseRenewalReminderDays: 30,
     },
     {
@@ -234,8 +234,8 @@ export let mockVehicles: Vehicle[] = [
         warrantyServiceProviderId: 'sp1', // City Motors Workshop
         // License Information
         licenseNumber: 'GP789XYZ',
-        licenseExpiryDate: '2024-02-28', // Expired for testing
-        lastLicenseRenewalDate: '2023-02-28',
+        licenseExpiryDate: '2025-10-05', // Expires in 5 days for testing
+        lastLicenseRenewalDate: '2024-10-05',
         licenseRenewalReminderDays: 45,
     },
     {
@@ -261,8 +261,8 @@ export let mockVehicles: Vehicle[] = [
         warrantyServiceProviderId: 'sp4',
         // License Information
         licenseNumber: 'NC321654',
-        licenseExpiryDate: '2025-06-15', // Valid, long time ahead
-        lastLicenseRenewalDate: '2024-06-15',
+        licenseExpiryDate: '2025-10-25', // Expires in 25 days for testing
+        lastLicenseRenewalDate: '2024-10-25',
         licenseRenewalReminderDays: 30,
     },
     {
