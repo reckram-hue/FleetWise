@@ -4,7 +4,10 @@
       "Bash(rm:*)",
       "Bash(git commit:*)",
       "Bash(start chrome http://localhost:5174)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(curl http://localhost:3001/api/shifts/active)"
     ],
     "deny": [],
     "ask": []

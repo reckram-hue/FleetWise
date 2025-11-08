@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { DefectReport, Cost, DefectUrgency, CostCategory, UserRole, ScheduledService, Vehicle, ServiceProvider } from '../../types';
+import { DefectReport, Cost, DefectUrgency, CostCategory, UserRole, ScheduledService, Vehicle, ServiceProvider, User } from '../../types';
 import { VehicleStatus } from '../../types';
 import api from '../../services/mockApi';
-import { AlertTriangle, Fuel, Users, Truck, Settings as SettingsIcon, Wrench, MessageCircle, FileText } from 'lucide-react';
+import { AlertTriangle, Fuel, Users, Truck, Settings as SettingsIcon, Wrench, MessageCircle, FileText, IdCard } from 'lucide-react';
 import ManageDrivers from './ManageDrivers';
 import ManageVehicles from './ManageVehicles';
 import Reports from './Reports';
@@ -13,6 +13,7 @@ import Settings from './Settings';
 import ManageServiceProviders from './ManageServiceProviders';
 import ManageDefects from './ManageDefects';
 import TelegramDrivers from './TelegramDrivers';
+import VehicleLicenseRenewal from './VehicleLicenseRenewal';
 
 
 const AdminDashboard: React.FC = () => {
@@ -20,15 +21,16 @@ const AdminDashboard: React.FC = () => {
     const [totalVehicles, setTotalVehicles] = useState(0);
     const [activeVehicles, setActiveVehicles] = useState(0);
     const [vehiclesNeedingLicense, setVehiclesNeedingLicense] = useState(0);
+    const [driversNeedingLicense, setDriversNeedingLicense] = useState(0);
     const [selectedDefectId, setSelectedDefectId] = useState<string | null>(null);
     const [showBookingModal, setShowBookingModal] = useState(false);
     const [showSendModal, setShowSendModal] = useState(false);
     const [showReturnModal, setShowReturnModal] = useState(false);
     const [selectedService, setSelectedService] = useState<ScheduledService | null>(null);
     const [refreshTrigger, setRefreshTrigger] = useState(0);
-    const [showLicenseRenewalModal, setShowLicenseRenewalModal] = useState(false);
 
     useEffect(() => {
+        // Fetch vehicle data
         api.getVehicles().then(vehicles => {
             // Exclude sold and end-of-life vehicles from total count
             const operationalVehicles = vehicles.filter(v =>
@@ -49,6 +51,22 @@ const AdminDashboard: React.FC = () => {
                 return expiryDate <= thirtyDaysFromNow;
             });
             setVehiclesNeedingLicense(needingLicense.length);
+        });
+
+        // Fetch driver data
+        api.getUsers().then(users => {
+            // Filter only drivers with driver role
+            const drivers = users.filter(u => u.role === UserRole.Driver);
+
+            // Count drivers needing license renewal within 30 days
+            const today = new Date();
+            const thirtyDaysFromNow = new Date(today.getTime() + (30 * 24 * 60 * 60 * 1000));
+            const needingLicense = drivers.filter(d => {
+                if (!d.driversLicenceExpiry) return false;
+                const expiryDate = new Date(d.driversLicenceExpiry);
+                return expiryDate <= thirtyDaysFromNow;
+            });
+            setDriversNeedingLicense(needingLicense.length);
         });
     }, [refreshTrigger]);
 
@@ -89,6 +107,10 @@ const AdminDashboard: React.FC = () => {
         return <TelegramDrivers onBack={() => setView('dashboard')} />;
     }
 
+    if (view === 'license-renewal') {
+        return <VehicleLicenseRenewal onBack={() => setView('dashboard')} />;
+    }
+
   return (
     <div className="min-h-screen bg-gray-100">
       <Header title="Admin Dashboard" />
@@ -96,15 +118,47 @@ const AdminDashboard: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <StatCard title="Total Vehicles" value={`${activeVehicles}/${totalVehicles}`} icon={<Truck className="h-8 w-8 text-cyan-500"/>} />
             <StatCard
+                title="Active Defects"
+                value="5"
+                icon={<AlertTriangle className="h-8 w-8 text-red-500"/>}
+                onClick={() => {
+                    const element = document.getElementById('active-defects-section');
+                    if (element) {
+                        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                }}
+                isClickable={true}
+                isAlert={true}
+            />
+            <StatCard
                 title="Vehicle License Renewal"
                 value={vehiclesNeedingLicense.toString()}
                 icon={<FileText className="h-8 w-8 text-red-500"/>}
-                onClick={() => setShowLicenseRenewalModal(true)}
+                onClick={() => {
+                    const element = document.getElementById('license-renewal-section');
+                    console.log('Attempting to scroll to license renewal section', element);
+                    if (element) {
+                        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    } else {
+                        console.log('License renewal section not found in DOM');
+                    }
+                }}
                 isClickable={true}
                 isAlert={vehiclesNeedingLicense > 0}
             />
-            <StatCard title="Active Defects" value="5" icon={<AlertTriangle className="h-8 w-8 text-red-500"/>} />
-            <StatCard title="Total Costs This Month" value="R 25,750" icon={<Fuel className="h-8 w-8 text-green-500"/>} />
+            <StatCard
+                title="Drivers Licence Renewals"
+                value={driversNeedingLicense.toString()}
+                icon={<IdCard className="h-8 w-8 text-orange-500"/>}
+                onClick={() => {
+                    const element = document.getElementById('driver-license-renewal-section');
+                    if (element) {
+                        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                }}
+                isClickable={true}
+                isAlert={driversNeedingLicense > 0}
+            />
         </div>
         
         <div className="flex flex-wrap gap-6">
@@ -158,7 +212,9 @@ const AdminDashboard: React.FC = () => {
           refreshTrigger={refreshTrigger}
         />
 
-        <LicenseRenewalAlerts />
+        <LicenseRenewalAlerts onLicenseUpdated={() => setRefreshTrigger(prev => prev + 1)} />
+
+        <DriverLicenseRenewalAlerts onLicenseUpdated={() => setRefreshTrigger(prev => prev + 1)} />
 
         {/* Service Booking Modal */}
         {showBookingModal && selectedService && (
@@ -206,13 +262,6 @@ const AdminDashboard: React.FC = () => {
               setSelectedService(null);
               setRefreshTrigger(prev => prev + 1);
             }}
-          />
-        )}
-
-        {/* License Renewal Modal */}
-        {showLicenseRenewalModal && (
-          <VehicleLicenseRenewalModal
-            onClose={() => setShowLicenseRenewalModal(false)}
           />
         )}
 
@@ -293,7 +342,7 @@ const CriticalDefects: React.FC<CriticalDefectsProps> = ({ onDefectClick }) => {
   };
 
   return (
-    <Card>
+    <Card id="active-defects-section">
       <h2 className="text-xl font-bold text-gray-800 mb-4">High & Critical Defects</h2>
       <div className="space-y-3 max-h-80 overflow-y-auto">
         {defects.length > 0 ? defects.map(defect => {
@@ -845,9 +894,26 @@ const ReturnServiceModal: React.FC<ReturnServiceModalProps> = ({ service, onClos
     );
 };
 
-const LicenseRenewalAlerts: React.FC = () => {
+interface LicenseRenewalAlertsProps {
+    onLicenseUpdated: () => void;
+}
+
+const LicenseRenewalAlerts: React.FC<LicenseRenewalAlertsProps> = ({ onLicenseUpdated }) => {
     const [expiredVehicles, setExpiredVehicles] = useState<Vehicle[]>([]);
     const [loading, setLoading] = useState(false);
+    const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
+    const [editForm, setEditForm] = useState<{
+        licenseExpiryDate: string;
+        licenseDiscNumber: string;
+        lastLicenseRenewalDate: string;
+        licenseNumber: string;
+    }>({
+        licenseExpiryDate: '',
+        licenseDiscNumber: '',
+        lastLicenseRenewalDate: '',
+        licenseNumber: ''
+    });
+    const [saving, setSaving] = useState(false);
 
     const fetchExpiredLicenses = async () => {
         setLoading(true);
@@ -891,9 +957,65 @@ const LicenseRenewalAlerts: React.FC = () => {
         return `Expires in ${daysUntilExpiry} days`;
     };
 
+    const handleEditClick = (vehicle: Vehicle) => {
+        setEditingVehicleId(vehicle.id);
+        setEditForm({
+            licenseExpiryDate: vehicle.licenseExpiryDate || '',
+            licenseDiscNumber: vehicle.licenseDiscNumber || '',
+            lastLicenseRenewalDate: vehicle.lastLicenseRenewalDate || '',
+            licenseNumber: vehicle.licenseNumber || ''
+        });
+    };
+
+    const handleCancelEdit = () => {
+        setEditingVehicleId(null);
+        setEditForm({
+            licenseExpiryDate: '',
+            licenseDiscNumber: '',
+            lastLicenseRenewalDate: '',
+            licenseNumber: ''
+        });
+    };
+
+    const handleSaveEdit = async () => {
+        if (!editingVehicleId) return;
+
+        setSaving(true);
+        try {
+            const vehicle = expiredVehicles.find(v => v.id === editingVehicleId);
+            if (!vehicle) return;
+
+            const updatedVehicle = {
+                ...vehicle,
+                ...editForm
+            };
+
+            await api.updateVehicle(updatedVehicle);
+
+            // Refresh the vehicles list
+            await fetchExpiredLicenses();
+
+            // Trigger refresh of dashboard stats
+            onLicenseUpdated();
+
+            setEditingVehicleId(null);
+            setEditForm({
+                licenseExpiryDate: '',
+                licenseDiscNumber: '',
+                lastLicenseRenewalDate: '',
+                licenseNumber: ''
+            });
+        } catch (error) {
+            console.error('Failed to update vehicle license information:', error);
+            alert('Failed to update license information. Please try again.');
+        } finally {
+            setSaving(false);
+        }
+    };
+
     if (loading) {
         return (
-            <Card>
+            <Card id="license-renewal-section">
                 <div className="animate-pulse">
                     <div className="h-4 bg-gray-200 rounded w-1/4 mb-2"></div>
                     <div className="h-3 bg-gray-200 rounded w-1/2"></div>
@@ -907,39 +1029,116 @@ const LicenseRenewalAlerts: React.FC = () => {
     }
 
     return (
-        <Card className="border-orange-200 bg-orange-50">
+            <Card id="license-renewal-section" className="border-orange-200 bg-orange-50">
             <div className="flex items-center mb-3">
                 <AlertTriangle className="h-5 w-5 text-orange-500 mr-2" />
                 <h3 className="text-lg font-semibold text-orange-800">License Renewal Required</h3>
             </div>
             <div className="space-y-3">
                 {expiredVehicles.map(vehicle => (
-                    <div key={vehicle.id} className="flex justify-between items-center p-3 bg-white rounded-lg border border-orange-200">
-                        <div>
-                            <div className="font-medium text-gray-900">
-                                {vehicle.registration} - {vehicle.make} {vehicle.model}
-                            </div>
-                            <div className={`text-sm ${getLicenseStatusColor(vehicle)}`}>
-                                {getLicenseStatusText(vehicle)}
-                            </div>
-                            {vehicle.licenseExpiryDate && (
-                                <div className="text-xs text-gray-500">
-                                    License expires: {vehicle.licenseExpiryDate}
+                    <div key={vehicle.id} className={`p-3 bg-white rounded-lg border border-orange-200 ${editingVehicleId === vehicle.id ? 'ring-2 ring-blue-500' : ''}`}>
+                        {editingVehicleId === vehicle.id ? (
+                            // Edit Mode
+                            <div className="space-y-3">
+                                <div className="font-medium text-gray-900 mb-2">
+                                    {vehicle.registration} - {vehicle.make} {vehicle.model}
                                 </div>
-                            )}
-                        </div>
-                        <div className="text-right">
-                            <button
-                                onClick={() => {
-                                    // This would open the vehicle details in edit mode
-                                    // For now, we'll show an alert
-                                    alert(`Please update license information for ${vehicle.registration}`);
-                                }}
-                                className="bg-orange-500 text-white px-3 py-1 rounded text-sm hover:bg-orange-600 transition"
-                            >
-                                Update License
-                            </button>
-                        </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                                            License Expiry Date *
+                                        </label>
+                                        <input
+                                            type="date"
+                                            value={editForm.licenseExpiryDate}
+                                            onChange={(e) => setEditForm({ ...editForm, licenseExpiryDate: e.target.value })}
+                                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                                            License Disc Number
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={editForm.licenseDiscNumber}
+                                            onChange={(e) => setEditForm({ ...editForm, licenseDiscNumber: e.target.value })}
+                                            placeholder="Disc Number"
+                                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                                            Last Renewal Date
+                                        </label>
+                                        <input
+                                            type="date"
+                                            value={editForm.lastLicenseRenewalDate}
+                                            onChange={(e) => setEditForm({ ...editForm, lastLicenseRenewalDate: e.target.value })}
+                                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                                            License Number
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={editForm.licenseNumber}
+                                            onChange={(e) => setEditForm({ ...editForm, licenseNumber: e.target.value })}
+                                            placeholder="License Number"
+                                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex justify-end space-x-2 mt-2">
+                                    <button
+                                        onClick={handleCancelEdit}
+                                        disabled={saving}
+                                        className="px-3 py-1 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={handleSaveEdit}
+                                        disabled={saving}
+                                        className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                                    >
+                                        {saving ? 'Saving...' : 'Save'}
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            // View Mode
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <div className="font-medium text-gray-900">
+                                        {vehicle.registration} - {vehicle.make} {vehicle.model}
+                                    </div>
+                                    <div className={`text-sm ${getLicenseStatusColor(vehicle)}`}>
+                                        {getLicenseStatusText(vehicle)}
+                                    </div>
+                                    {vehicle.licenseExpiryDate && (
+                                        <div className="text-xs text-gray-500">
+                                            License expires: {vehicle.licenseExpiryDate}
+                                        </div>
+                                    )}
+                                    {vehicle.licenseDiscNumber && (
+                                        <div className="text-xs text-gray-500">
+                                            Disc: {vehicle.licenseDiscNumber}
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="text-right">
+                                    <button
+                                        onClick={() => handleEditClick(vehicle)}
+                                        className="bg-orange-500 text-white px-3 py-1 rounded text-sm hover:bg-orange-600 transition"
+                                    >
+                                        Update License
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 ))}
             </div>
@@ -948,47 +1147,67 @@ const LicenseRenewalAlerts: React.FC = () => {
     );
 };
 
-interface VehicleLicenseRenewalModalProps {
-    onClose: () => void;
+
+interface DriverLicenseRenewalAlertsProps {
+    onLicenseUpdated: () => void;
 }
 
-const VehicleLicenseRenewalModal: React.FC<VehicleLicenseRenewalModalProps> = ({ onClose }) => {
-    const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-    const [loading, setLoading] = useState(true);
+const DriverLicenseRenewalAlerts: React.FC<DriverLicenseRenewalAlertsProps> = ({ onLicenseUpdated }) => {
+    const [expiredDrivers, setExpiredDrivers] = useState<User[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
+    const [editForm, setEditForm] = useState<{
+        driversLicenceExpiry: string;
+        driversLicenceNumber: string;
+    }>({
+        driversLicenceExpiry: '',
+        driversLicenceNumber: ''
+    });
+    const [saving, setSaving] = useState(false);
 
-    useEffect(() => {
-        const fetchVehicles = async () => {
-            try {
-                // Get vehicles with licenses expiring in the next 30 days
-                const vehiclesNeedingRenewal = await api.getVehiclesWithExpiredLicenses(30);
-                setVehicles(vehiclesNeedingRenewal);
-            } catch (error) {
-                console.error('Failed to fetch vehicles:', error);
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchVehicles();
-    }, []);
+    const fetchExpiredLicenses = async () => {
+        setLoading(true);
+        try {
+            const users = await api.getUsers();
+            const drivers = users.filter(u => u.role === UserRole.Driver);
 
-    const getLicenseStatusColor = (vehicle: Vehicle) => {
-        if (!vehicle.licenseExpiryDate) return 'text-gray-500';
-
-        const today = new Date();
-        const expiryDate = new Date(vehicle.licenseExpiryDate);
-        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-
-        if (daysUntilExpiry < 0) return 'bg-red-100 text-red-800';
-        if (daysUntilExpiry <= 7) return 'bg-red-100 text-red-800';
-        if (daysUntilExpiry <= 14) return 'bg-orange-100 text-orange-800';
-        return 'bg-yellow-100 text-yellow-800';
+            // Get drivers with licenses expiring in the next 30 days
+            const today = new Date();
+            const thirtyDaysFromNow = new Date(today.getTime() + (30 * 24 * 60 * 60 * 1000));
+            const needingLicense = drivers.filter(d => {
+                if (!d.driversLicenceExpiry) return false;
+                const expiryDate = new Date(d.driversLicenceExpiry);
+                return expiryDate <= thirtyDaysFromNow;
+            });
+            setExpiredDrivers(needingLicense);
+        } catch (error) {
+            console.error('Failed to fetch drivers with expiring licenses:', error);
+        } finally {
+            setLoading(false);
+        }
     };
 
-    const getLicenseStatusText = (vehicle: Vehicle) => {
-        if (!vehicle.licenseExpiryDate) return 'No expiry date set';
+    useEffect(() => {
+        fetchExpiredLicenses();
+    }, []);
+
+    const getLicenseStatusColor = (driver: User) => {
+        if (!driver.driversLicenceExpiry) return 'text-gray-500';
 
         const today = new Date();
-        const expiryDate = new Date(vehicle.licenseExpiryDate);
+        const expiryDate = new Date(driver.driversLicenceExpiry);
+        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (daysUntilExpiry < 0) return 'text-red-600';
+        if (daysUntilExpiry <= 14) return 'text-orange-600';
+        return 'text-yellow-600';
+    };
+
+    const getLicenseStatusText = (driver: User) => {
+        if (!driver.driversLicenceExpiry) return 'No expiry date set';
+
+        const today = new Date();
+        const expiryDate = new Date(driver.driversLicenceExpiry);
         const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
         if (daysUntilExpiry < 0) return `Expired ${Math.abs(daysUntilExpiry)} days ago`;
@@ -997,123 +1216,170 @@ const VehicleLicenseRenewalModal: React.FC<VehicleLicenseRenewalModalProps> = ({
         return `Expires in ${daysUntilExpiry} days`;
     };
 
+    const handleEditClick = (driver: User) => {
+        setEditingDriverId(driver.id);
+        setEditForm({
+            driversLicenceExpiry: driver.driversLicenceExpiry || '',
+            driversLicenceNumber: driver.driversLicenceNumber || ''
+        });
+    };
+
+    const handleCancelEdit = () => {
+        setEditingDriverId(null);
+        setEditForm({
+            driversLicenceExpiry: '',
+            driversLicenceNumber: ''
+        });
+    };
+
+    const handleSaveEdit = async () => {
+        if (!editingDriverId) return;
+
+        setSaving(true);
+        try {
+            const driver = expiredDrivers.find(d => d.id === editingDriverId);
+            if (!driver) return;
+
+            const updatedDriver = {
+                ...driver,
+                ...editForm
+            };
+
+            await api.updateDriver(updatedDriver);
+
+            // Refresh the drivers list
+            await fetchExpiredLicenses();
+
+            // Trigger refresh of dashboard stats
+            onLicenseUpdated();
+
+            setEditingDriverId(null);
+            setEditForm({
+                driversLicenceExpiry: '',
+                driversLicenceNumber: ''
+            });
+        } catch (error) {
+            console.error('Failed to update driver license information:', error);
+            alert('Failed to update license information. Please try again.');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    if (loading) {
+        return (
+            <Card id="driver-license-renewal-section">
+                <div className="animate-pulse">
+                    <div className="h-4 bg-gray-200 rounded w-1/4 mb-2"></div>
+                    <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                </div>
+            </Card>
+        );
+    }
+
+    if (expiredDrivers.length === 0) {
+        return null; // Don't show the section if no drivers need license renewals
+    }
+
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
-                {/* Modal Header */}
-                <div className="flex items-center justify-between p-6 border-b border-gray-200">
-                    <div className="flex items-center">
-                        <AlertTriangle className="h-6 w-6 text-red-500 mr-2" />
-                        <h2 className="text-2xl font-bold text-gray-800">
-                            Vehicles Requiring License Renewal (Next 30 Days)
-                        </h2>
-                    </div>
-                    <button
-                        onClick={onClose}
-                        className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
-                    >
-                        ×
-                    </button>
-                </div>
-
-                {/* Modal Body */}
-                <div className="flex-1 overflow-y-auto p-6">
-                    {loading ? (
-                        <div className="animate-pulse space-y-4">
-                            <div className="h-4 bg-gray-200 rounded w-1/4"></div>
-                            <div className="h-3 bg-gray-200 rounded w-1/2"></div>
-                            <div className="h-3 bg-gray-200 rounded w-1/3"></div>
-                        </div>
-                    ) : vehicles.length === 0 ? (
-                        <div className="text-center py-8">
-                            <FileText className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                            <h3 className="text-lg font-semibold text-gray-700 mb-2">No License Renewals Needed</h3>
-                            <p className="text-gray-500">All vehicle licenses are up to date for the next 30 days.</p>
-                        </div>
-                    ) : (
-                        <>
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full divide-y divide-gray-200">
-                                    <thead className="bg-gray-50">
-                                        <tr>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Registration
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Vehicle
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                License Expiry
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Status
-                                            </th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Disc Number
-                                            </th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="bg-white divide-y divide-gray-200">
-                                        {vehicles.map((vehicle) => (
-                                            <tr key={vehicle.id} className="hover:bg-gray-50">
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <div className="text-sm font-medium text-gray-900">
-                                                        {vehicle.registration}
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <div className="text-sm text-gray-900">
-                                                        {vehicle.make} {vehicle.model}
-                                                    </div>
-                                                    <div className="text-xs text-gray-500">
-                                                        {vehicle.year}
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <div className="text-sm text-gray-900">
-                                                        {vehicle.licenseExpiryDate || 'Not set'}
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getLicenseStatusColor(vehicle)}`}>
-                                                        {getLicenseStatusText(vehicle)}
-                                                    </span>
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <div className="text-sm text-gray-900">
-                                                        {vehicle.licenseDiscNumber || 'N/A'}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-
-                            <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-                                <p className="text-sm text-red-800">
-                                    <strong>⚠️ Important:</strong> Ensure all vehicle licenses are renewed before their expiry dates
-                                    to avoid penalties and keep vehicles road-legal. Contact your licensing authority immediately
-                                    for vehicles that are expired or expiring soon.
-                                </p>
-                            </div>
-                        </>
-                    )}
-                </div>
-
-                {/* Modal Footer */}
-                <div className="flex justify-end p-6 border-t border-gray-200">
-                    <button
-                        onClick={onClose}
-                        className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition duration-300"
-                    >
-                        Close
-                    </button>
-                </div>
+        <Card id="driver-license-renewal-section" className="border-blue-200 bg-blue-50">
+            <div className="flex items-center mb-3">
+                <IdCard className="h-5 w-5 text-blue-500 mr-2" />
+                <h3 className="text-lg font-semibold text-blue-800">Driver License Renewal Required</h3>
             </div>
-        </div>
+            <div className="space-y-3">
+                {expiredDrivers.map(driver => (
+                    <div key={driver.id} className={`p-3 bg-white rounded-lg border border-blue-200 ${editingDriverId === driver.id ? 'ring-2 ring-blue-500' : ''}`}>
+                        {editingDriverId === driver.id ? (
+                            // Edit Mode
+                            <div className="space-y-3">
+                                <div className="font-medium text-gray-900 mb-2">
+                                    {driver.firstName} {driver.surname}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                                            License Expiry Date *
+                                        </label>
+                                        <input
+                                            type="date"
+                                            value={editForm.driversLicenceExpiry}
+                                            onChange={(e) => setEditForm({ ...editForm, driversLicenceExpiry: e.target.value })}
+                                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                                            License Number
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={editForm.driversLicenceNumber}
+                                            onChange={(e) => setEditForm({ ...editForm, driversLicenceNumber: e.target.value })}
+                                            placeholder="License Number"
+                                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex justify-end space-x-2 mt-2">
+                                    <button
+                                        onClick={handleCancelEdit}
+                                        disabled={saving}
+                                        className="px-3 py-1 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={handleSaveEdit}
+                                        disabled={saving}
+                                        className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                                    >
+                                        {saving ? 'Saving...' : 'Save'}
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            // View Mode
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <div className="font-medium text-gray-900">
+                                        {driver.firstName} {driver.surname}
+                                    </div>
+                                    <div className={`text-sm ${getLicenseStatusColor(driver)}`}>
+                                        {getLicenseStatusText(driver)}
+                                    </div>
+                                    {driver.driversLicenceExpiry && (
+                                        <div className="text-xs text-gray-500">
+                                            License expires: {driver.driversLicenceExpiry}
+                                        </div>
+                                    )}
+                                    {driver.driversLicenceNumber && (
+                                        <div className="text-xs text-gray-500">
+                                            License #: {driver.driversLicenceNumber}
+                                        </div>
+                                    )}
+                                    {driver.contactNumber && (
+                                        <div className="text-xs text-gray-500">
+                                            Contact: {driver.contactNumber}
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="text-right">
+                                    <button
+                                        onClick={() => handleEditClick(driver)}
+                                        className="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600 transition"
+                                    >
+                                        Update License
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+            <p className="text-xs text-blue-600 mt-3">⚠️ Ensure driver licenses are renewed before expiry to maintain compliance and avoid penalties!</p>
+        </Card>
     );
 };
-
 
 export default AdminDashboard;
