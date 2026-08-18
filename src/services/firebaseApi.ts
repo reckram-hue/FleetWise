@@ -77,6 +77,8 @@ const convertTimestamps = (data: any): any => {
     } else if (value && typeof value === 'object') {
       if ('seconds' in value && 'nanoseconds' in value) {
         result[key] = new Date(value.seconds * 1000 + value.nanoseconds / 1000000);
+      } else if ('_seconds' in value && '_nanoseconds' in value) {
+        result[key] = new Date(value._seconds * 1000 + value._nanoseconds / 1000000);
       } else {
         result[key] = convertTimestamps(value);
       }

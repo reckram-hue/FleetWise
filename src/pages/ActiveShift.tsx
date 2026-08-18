@@ -75,6 +75,10 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
             vehicle = null;
           }
           if (cancelled) return;
+          const startDate = new Date(shift.startTime as any);
+          if (isNaN(startDate.getTime())) {
+            throw new Error('Active shift has an unreadable startTime from the server');
+          }
           setActiveShift({
             shiftId: shift.id,
             driverId: currentUser.id,
@@ -86,7 +90,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
               alias: vehicle?.alias,
               vehicleType: vehicle?.vehicleType || 'ICE',
             },
-            startAt: shift.startTime ? new Date(shift.startTime).toISOString() : new Date().toISOString(),
+            startAt: startDate.toISOString(),
             startOdo: shift.startOdometer,
             startChargePercent: shift.startChargePercent,
           });
