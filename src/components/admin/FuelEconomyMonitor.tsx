@@ -64,13 +64,13 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
     const getTrendIcon = (trend: string) => {
         switch (trend) {
             case 'improving':
-                return <TrendingDown className="h-4 w-4 text-green-500" title="Improving efficiency" />;
+                return <TrendingDown className="h-4 w-4 text-green-500" />;
             case 'degrading':
-                return <TrendingUp className="h-4 w-4 text-red-500" title="Degrading efficiency" />;
+                return <TrendingUp className="h-4 w-4 text-red-500" />;
             case 'stable':
-                return <Minus className="h-4 w-4 text-blue-500" title="Stable efficiency" />;
+                return <Minus className="h-4 w-4 text-blue-500" />;
             default:
-                return <Minus className="h-4 w-4 text-gray-500" title="Unknown trend" />;
+                return <Minus className="h-4 w-4 text-gray-500" />;
         }
     };
 

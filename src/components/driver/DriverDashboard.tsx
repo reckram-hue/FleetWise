@@ -1048,7 +1048,7 @@ const MyStats = ({ onBack, currentUser }: { onBack: () => void; currentUser: Use
                 ]);
 
                 const myStats = leaderboardData.find(e => e.driver.id === currentUser.id) || null;
-                const myIncidents = incidentSummary as DriverIncidentSummary;
+                const myIncidents = incidentSummary.length > 0 ? incidentSummary[0] : null;
 
                 setStats(myStats);
                 setIncidentData(myIncidents);

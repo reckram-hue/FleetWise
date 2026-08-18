@@ -448,7 +448,7 @@ const FineFormModal = ({
                     driverId: result.driverId || '',
                     vehicleId: result.vehicleId || '',
                     allocatedAutomatically: true,
-                    allocationMethod: result.method
+                    allocationMethod: result.method === 'no_match' ? 'manual' : result.method
                 }));
                 setAutoAssignComplete(true);
             } else {

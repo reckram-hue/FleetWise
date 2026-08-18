@@ -102,6 +102,7 @@ export interface Vehicle {
     alias?: string; // Friendly name/alias for the vehicle
     make: string;
     model: string;
+    year?: number; // Model year
     vin?: string; // Vehicle Identification Number
     engineNumber?: string;
     bodyStyle?: BodyStyle;
@@ -176,6 +177,7 @@ export interface Vehicle {
     licenseRenewalReminderDays?: number; // Number of days before expiry to send reminder (admin configurable)
     lastLicenseRenewalDate?: string; // YYYY-MM-DD when license was last renewed
     licenseNumber?: string; // License/registration number for tracking
+    licenseDiscNumber?: string; // Licence disc number (renewal disc)
 }
 
 export enum ShiftStatus {
@@ -438,8 +440,8 @@ export interface ServiceProvider {
     specializations: string[]; // e.g., ['ICE', 'EV', 'Warranty', 'General']
     isActive: boolean;
     notes?: string;
-    createdDate: string; // YYYY-MM-DD
-    lastModified: Date;
+    createdDate?: string; // YYYY-MM-DD
+    lastModified?: Date;
 }
 
 export interface LicenseRenewalReminder {

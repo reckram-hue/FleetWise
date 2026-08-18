@@ -482,6 +482,30 @@ const api = {
     return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as DefectReport;
   },
 
+  updateDefectStatus: async (defectId: string, status: DefectStatus, notes?: string): Promise<DefectReport> => {
+    const defectRef = doc(db, COLLECTIONS.defects, defectId);
+    const updateData: any = { status, updatedAt: serverTimestamp() };
+    if (notes !== undefined) updateData.notes = notes;
+    if (status === DefectStatus.Resolved) updateData.resolvedDateTime = serverTimestamp();
+    if (status === DefectStatus.Acknowledged) updateData.acknowledgedDateTime = serverTimestamp();
+    await updateDoc(defectRef, updateData);
+    const updatedDoc = await getDoc(defectRef);
+    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as DefectReport;
+  },
+
+  assignDefect: async (defectId: string, assignedTo: string, estimatedCost?: number): Promise<DefectReport> => {
+    const defectRef = doc(db, COLLECTIONS.defects, defectId);
+    const updateData: any = {
+      assignedTo,
+      status: DefectStatus.InProgress,
+      updatedAt: serverTimestamp(),
+    };
+    if (estimatedCost !== undefined) updateData.estimatedCost = estimatedCost;
+    await updateDoc(defectRef, updateData);
+    const updatedDoc = await getDoc(defectRef);
+    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as DefectReport;
+  },
+
   deleteDefectReport: async (defectId: string): Promise<{ success: boolean }> => {
     await deleteDoc(doc(db, COLLECTIONS.defects, defectId));
     return { success: true };
@@ -493,12 +517,12 @@ const api = {
     return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as Cost);
   },
 
-  getVehicleCosts: async (vehicleId: string): Promise<Cost[]> => {
+  getVehicleCosts: async (vehicleId?: string): Promise<Cost[]> => {
     // Fetch and filter in memory to avoid index requirement
     const snapshot = await getDocs(collection(db, COLLECTIONS.costs));
     const allCosts = snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as Cost);
-    return allCosts
-      .filter(c => c.vehicleId === vehicleId)
+    const filtered = vehicleId ? allCosts.filter(c => c.vehicleId === vehicleId) : allCosts;
+    return filtered
       .sort((a, b) => {
         const aDate = new Date(a.date).getTime();
         const bDate = new Date(b.date).getTime();
@@ -651,6 +675,64 @@ const api = {
     return { id: docRef.id, ...fineData } as DriverFine;
   },
 
+  updateDriverFine: async (fine: DriverFine): Promise<DriverFine> => {
+    const { id, ...updateData } = fine;
+    await updateDoc(doc(db, COLLECTIONS.driverFines, id), { ...updateData, updatedAt: serverTimestamp() });
+    const updatedDoc = await getDoc(doc(db, COLLECTIONS.driverFines, id));
+    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as DriverFine;
+  },
+
+  determineDriverForFine: async (vehicleRegistration: string, fineDate: string, fineTime?: string): Promise<{
+    driverId: string | null;
+    vehicleId: string | null;
+    method: 'shift_lookup' | 'single_driver' | 'no_match';
+    confidence: 'high' | 'medium' | 'low';
+    details: string;
+  }> => {
+    const vehicles = await api.getVehicles();
+    const vehicle = vehicles.find(v => (v.registration || '').toLowerCase() === vehicleRegistration.toLowerCase());
+    if (!vehicle) {
+      return { driverId: null, vehicleId: null, method: 'no_match', confidence: 'low', details: `Vehicle with registration ${vehicleRegistration} not found` };
+    }
+
+    const fineDateTime = new Date(`${fineDate}T${fineTime || '12:00'}:00`);
+    const fineDateStart = new Date(`${fineDate}T00:00:00`);
+    const fineDateEnd = new Date(`${fineDate}T23:59:59`);
+
+    const snapshot = await getDocs(collection(db, COLLECTIONS.shifts));
+    const allShifts = snapshot.docs.map(d => convertTimestamps({ id: d.id, ...d.data() }) as Shift);
+
+    const vehicleShifts = allShifts.filter(shift =>
+      shift.vehicleId === vehicle.id &&
+      shift.startTime >= fineDateStart &&
+      shift.startTime <= fineDateEnd
+    );
+
+    if (vehicleShifts.length === 0) {
+      const vehicleHistory = allShifts.filter(shift => shift.vehicleId === vehicle.id);
+      const uniqueDrivers = [...new Set(vehicleHistory.map(s => s.driverId))];
+      if (uniqueDrivers.length === 1) {
+        return { driverId: uniqueDrivers[0], vehicleId: vehicle.id, method: 'single_driver', confidence: 'medium', details: 'Only one driver has driven this vehicle' };
+      }
+      return { driverId: null, vehicleId: vehicle.id, method: 'no_match', confidence: 'low', details: `No shifts found for ${vehicleRegistration} on ${fineDate}` };
+    }
+
+    if (vehicleShifts.length === 1) {
+      return { driverId: vehicleShifts[0].driverId, vehicleId: vehicle.id, method: 'shift_lookup', confidence: 'high', details: `Single shift on ${fineDate} by driver ${vehicleShifts[0].driverId}` };
+    }
+
+    if (fineTime) {
+      for (const shift of vehicleShifts) {
+        const shiftEnd = shift.endTime || new Date();
+        if (fineDateTime >= shift.startTime && fineDateTime <= shiftEnd) {
+          return { driverId: shift.driverId, vehicleId: vehicle.id, method: 'shift_lookup', confidence: 'high', details: `Fine time ${fineTime} matches shift ${shift.id}` };
+        }
+      }
+    }
+
+    return { driverId: vehicleShifts[0].driverId, vehicleId: vehicle.id, method: 'shift_lookup', confidence: 'medium', details: `Multiple shifts on ${fineDate}, assigned to first shift driver` };
+  },
+
   getVehicleDamages: async (vehicleId?: string): Promise<VehicleDamage[]> => {
     let q;
     if (vehicleId) {
@@ -665,6 +747,13 @@ const api = {
   addVehicleDamage: async (damageData: Omit<VehicleDamage, 'id'>): Promise<VehicleDamage> => {
     const docRef = await addDoc(collection(db, COLLECTIONS.vehicleDamages), damageData);
     return { id: docRef.id, ...damageData } as VehicleDamage;
+  },
+
+  updateVehicleDamage: async (damage: VehicleDamage): Promise<VehicleDamage> => {
+    const { id, ...updateData } = damage;
+    await updateDoc(doc(db, COLLECTIONS.vehicleDamages, id), { ...updateData, updatedAt: serverTimestamp() });
+    const updatedDoc = await getDoc(doc(db, COLLECTIONS.vehicleDamages, id));
+    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as VehicleDamage;
   },
 
   // ==================== STATISTICS & REPORTS ====================
@@ -701,18 +790,6 @@ const api = {
     return leaderboard.sort((a, b) => b.totalKmDriven - a.totalKmDriven);
   },
 
-  getVehicleStats: async (vehicleId: string, startDate: Date, endDate: Date): Promise<VehicleStats> => {
-    // Aggregate stats from various collections
-    const vehicle = await api.getVehicle(vehicleId);
-    if (!vehicle) throw new Error('Vehicle not found');
-
-    // This is a simplified version - you'd calculate real stats from shifts, costs, etc.
-    return {
-      avgDailyDistanceKm: 0, // Placeholder
-      avgEnergyConsumptionKwhPerKm: 0 // Placeholder
-    };
-  },
-
   getVehicleUsageStats: async (): Promise<VehicleUsageStats[]> => {
     const vehicles = await api.getVehicles();
     return vehicles.map(v => ({
@@ -724,7 +801,7 @@ const api = {
     }));
   },
 
-  getDriverIncidentSummary: async (driverId?: string): Promise<DriverIncidentSummary[] | DriverIncidentSummary> => {
+  getDriverIncidentSummary: async (driverId?: string): Promise<DriverIncidentSummary[]> => {
     // 1. Fetch relevant data
     const [allFines, allDamages, allUsers] = await Promise.all([
       api.getDriverFines(driverId),
@@ -779,31 +856,6 @@ const api = {
         needsTraining: riskScore > 50
       };
     });
-
-    // 4. Return array or single object based on input
-    // NOTE: Always return array for now as ManageIncidents expects it.
-    // If specific driver requested, filter result (already done by drivers filter)
-
-    // However, if we change return type signature, we might break types.
-    // The current signature says `Promise<DriverIncidentSummary>`.
-    // I need to change the interface usage or the function signature.
-    // ManageIncidents calls it without args and expects Array.
-
-    if (driverId) {
-      return summaries.length > 0 ? summaries[0] : {
-        driverId,
-        totalFines: 0,
-        totalFineAmount: 0,
-        totalDamages: 0,
-        totalDamageAmount: 0,
-        unpaidFines: 0,
-        unpaidAmount: 0,
-        totalDamagesCost: 0,
-        riskScore: 0,
-        needsTraining: false,
-        driver: drivers[0] || { id: driverId } as any // Fallback
-      } as DriverIncidentSummary;
-    }
 
     return summaries;
   },
@@ -875,6 +927,50 @@ const api = {
   getFuelEconomyAlerts: async (): Promise<FuelEconomyAlert[]> => {
     const snapshot = await getDocs(collection(db, COLLECTIONS.fuelEconomyAlerts));
     return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as FuelEconomyAlert);
+  },
+
+  calculateFuelEconomyStatus: async (vehicleId: string): Promise<{
+    vehicle: Vehicle;
+    manufacturerVsBaseline: number;
+    currentVsBaseline: number;
+    currentVsManufacturer: number;
+    needsAttention: boolean;
+    trend: 'improving' | 'stable' | 'degrading' | 'unknown';
+    recommendations: string[];
+  }> => {
+    const vehicle = await api.getVehicle(vehicleId);
+    if (!vehicle) throw new Error('Vehicle not found');
+
+    const isICE = vehicle.vehicleType === 'ICE';
+    const manufacturerConsumption = isICE ? (vehicle.manufacturerFuelConsumption || 0) : (vehicle.manufacturerEnergyConsumption || 0);
+    const baselineConsumption = isICE ? (vehicle.baselineFuelConsumption || 0) : (vehicle.baselineEnergyConsumption || 0);
+    const currentConsumption = isICE ? (vehicle.currentFuelConsumption || 0) : (vehicle.currentEnergyConsumption || 0);
+
+    const manufacturerVsBaseline = (baselineConsumption > 0 && manufacturerConsumption > 0)
+      ? ((baselineConsumption - manufacturerConsumption) / manufacturerConsumption) * 100 : 0;
+    const currentVsBaseline = (baselineConsumption > 0 && currentConsumption > 0)
+      ? ((currentConsumption - baselineConsumption) / baselineConsumption) * 100 : 0;
+    const currentVsManufacturer = (manufacturerConsumption > 0 && currentConsumption > 0)
+      ? ((currentConsumption - manufacturerConsumption) / manufacturerConsumption) * 100 : 0;
+
+    const threshold = vehicle.economyVarianceThreshold || 15;
+    const needsAttention = Math.abs(currentVsBaseline) > threshold;
+
+    const recommendations: string[] = [];
+    if (currentVsBaseline > 15) recommendations.push('Consider engine service - consumption significantly above baseline');
+    if (currentVsBaseline > 20) recommendations.push('Check air filter, fuel injectors, and tire pressure');
+    if (currentVsBaseline > 25) recommendations.push('URGENT: Major maintenance required - investigate engine performance');
+    if (currentVsManufacturer > 30) recommendations.push('Performance significantly below manufacturer specifications');
+
+    return {
+      vehicle,
+      manufacturerVsBaseline,
+      currentVsBaseline,
+      currentVsManufacturer,
+      needsAttention,
+      trend: vehicle.economyTrendDirection || 'unknown',
+      recommendations,
+    };
   },
 
   // ==================== SHIFT MANAGEMENT WITH PIN ====================

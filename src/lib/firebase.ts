@@ -30,7 +30,6 @@ const app: FirebaseApp = getApps().length ? getApps()[0] : initializeApp(cfg);
 const useMemoryCache = false; // set true only if IndexedDB is broken in your browser profile
 initializeFirestore(app, {
   experimentalForceLongPolling: true,
-  useFetchStreams: false,
   localCache: useMemoryCache ? memoryLocalCache() : persistentLocalCache(),
 });
 
