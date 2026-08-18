@@ -44,6 +44,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
   // Optional fields
   const [startOdo, setStartOdo] = useState<string>('');
   const [startCharge, setStartCharge] = useState<string>('');
+  const [pin, setPin] = useState<string>('');
 
   // Data loading
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -263,6 +264,10 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
       setError("Please enter starting odometer");
       return;
     }
+    if (!/^\d{4}$/.test(pin)) {
+      setError("Please enter your 4-digit PIN");
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
@@ -271,10 +276,11 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
       const startOdometer = parseFloat(startOdo);
       const startChargePercent = startCharge ? parseFloat(startCharge) : undefined;
 
-      // Start shift without PIN (User already logged in)
+      // Start shift via secure Cloud Function (server-side PIN verification)
       const result = await api.startShift({
         driverId: currentUser.id,
         vehicleId: selectedVehicle.id,
+        pin,
         startOdometer,
         startChargePercent
       });
@@ -309,6 +315,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
       setCurrentStep(1);
       setStartOdo('');
       setStartCharge('');
+      setPin('');
     } else {
       onBack();
     }
@@ -497,6 +504,21 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
                   />
                 </div>
               )}
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Your PIN (to confirm) *
+                </label>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  placeholder="••••"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg text-center tracking-widest"
+                />
+              </div>
             </div>
 
             {error && (

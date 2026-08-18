@@ -21,7 +21,7 @@ import {
 } from 'firebase/firestore';
 import { getApp, initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { db, firebaseConfigured } from '../lib/firebase';
+import { db, firebaseConfigured, callFunction } from '../lib/firebase';
 import {
   User,
   UserRole,
@@ -89,7 +89,11 @@ const api = {
   // ==================== USERS / DRIVERS ====================
   getUsers: async (): Promise<User[]> => {
     const snapshot = await getDocs(collection(db, COLLECTIONS.users));
-    return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as User);
+    return snapshot.docs.map(doc => {
+      const user = convertTimestamps({ id: doc.id, ...doc.data() }) as User;
+      delete (user as any).pinHash; // never send PIN hashes to the client
+      return user;
+    });
   },
 
   getAdminUsers: async (): Promise<User[]> => {
@@ -142,28 +146,16 @@ const api = {
   },
 
   addDriver: async (driverData: Omit<User, 'id' | 'role'>): Promise<User> => {
-    // Hash default PIN (1234) client-side using bcryptjs
-    let defaultPinHash: string;
-    try {
-      // Import bcryptjs dynamically to hash the default PIN
-      const bcrypt = await import('bcryptjs');
-      defaultPinHash = await bcrypt.hash('1234', 10);
-    } catch (error) {
-      console.error('Failed to hash default PIN:', error);
-      throw new Error('Failed to create driver: PIN hashing failed');
-    }
-
+    // PIN is NOT written here. Admins set the driver PIN server-side via adminSetDriverPin.
     const newDriver = {
       ...driverData,
       role: UserRole.Driver,
-      pinHash: defaultPinHash, // Set default PIN hash directly
-      pinLastUpdated: serverTimestamp(),
       createdAt: serverTimestamp()
     };
     const docRef = await addDoc(collection(db, COLLECTIONS.users), newDriver);
     const createdDriver = { id: docRef.id, ...driverData, role: UserRole.Driver } as User;
 
-    console.log(`Driver created with default PIN (1234): ${docRef.id}`);
+    console.log(`Driver created (PIN must be set by an admin): ${docRef.id}`);
 
     // NOTE: Telegram sync disabled for Firebase deployment
     // The Express server on localhost:3001 is not available in production
@@ -360,15 +352,11 @@ const api = {
   },
 
   getActiveShift: async (driverId: string): Promise<Shift | null> => {
-    const q = query(
-      collection(db, COLLECTIONS.shifts),
-      where('driverId', '==', driverId),
-      where('status', '==', ShiftStatus.Active)
-    );
-    const snapshot = await getDocs(q);
-    if (snapshot.empty) return null;
-    const doc = snapshot.docs[0];
-    return convertTimestamps({ id: doc.id, ...doc.data() }) as Shift;
+    const data = await callFunction<{ success: boolean; hasActiveShift: boolean; shift: any | null }>('getActiveShift', { driverId });
+    if (data.hasActiveShift && data.shift) {
+      return convertTimestamps(data.shift) as Shift;
+    }
+    return null;
   },
 
   getActiveShifts: async (): Promise<Shift[]> => {
@@ -392,43 +380,36 @@ const api = {
     return completed.length > 0 ? completed[0] : null;
   },
 
-  startShift: async (shiftData: { driverId: string; vehicleId: string; startOdometer?: number; startChargePercent?: number; }): Promise<Shift> => {
-    // Check for existing active shift
-    const existingActive = await api.getActiveShift(shiftData.driverId);
-    if (existingActive) {
-      throw new Error("Driver already has an active shift.");
+  startShift: async (shiftData: { driverId: string; vehicleId: string; pin?: string; startOdometer?: number; startChargePercent?: number; }): Promise<Shift> => {
+    if (!shiftData.pin) {
+      throw new Error('PIN is required to start a shift.');
     }
-
-    const newShift = {
-      ...shiftData,
-      startTime: serverTimestamp(),
+    const data = await callFunction<{ success: boolean; shiftId: string; message: string }>('startShiftWithPin', {
+      driverId: shiftData.driverId,
+      vehicleId: shiftData.vehicleId,
+      pin: shiftData.pin,
+      startOdometer: shiftData.startOdometer,
+      startChargePercent: shiftData.startChargePercent,
+    });
+    return {
+      id: data.shiftId,
+      driverId: shiftData.driverId,
+      vehicleId: shiftData.vehicleId,
+      startTime: new Date(),
       startOdometer: shiftData.startOdometer || 0,
+      startChargePercent: shiftData.startChargePercent,
       status: ShiftStatus.Active,
-      createdAt: serverTimestamp()
-    };
-    const docRef = await addDoc(collection(db, COLLECTIONS.shifts), newShift);
-    return { id: docRef.id, ...shiftData, startTime: new Date(), status: ShiftStatus.Active, startOdometer: shiftData.startOdometer || 0 } as Shift;
+    } as Shift;
   },
 
   endShift: async (shiftId: string, endData: { endOdometer: number; endChargePercent?: number; notes?: string; }): Promise<Shift> => {
-    const shiftRef = doc(db, COLLECTIONS.shifts, shiftId);
-    const updateData: any = {
+    await callFunction<{ success: boolean; message: string }>('endShift', {
+      shiftId,
       endOdometer: endData.endOdometer,
-      endTime: serverTimestamp(),
-      status: ShiftStatus.Completed,
-      updatedAt: serverTimestamp()
-    };
-
-    if (endData.endChargePercent !== undefined) {
-      updateData.endChargePercent = endData.endChargePercent;
-    }
-    if (endData.notes !== undefined) {
-      updateData.notes = endData.notes;
-    }
-
-    await updateDoc(shiftRef, updateData);
-    const updatedDoc = await getDoc(shiftRef);
-    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as Shift;
+      endChargePercent: endData.endChargePercent,
+      notes: endData.notes,
+    });
+    return { id: shiftId, endOdometer: endData.endOdometer, endChargePercent: endData.endChargePercent, endTime: new Date(), status: ShiftStatus.Completed } as Shift;
   },
 
   // ==================== DEFECTS ====================
@@ -980,76 +961,11 @@ const api = {
    * Validate a driver's PIN
    */
   validateDriverPin: async (driverId: string, pin: string): Promise<{ valid: boolean; requiresPinChange: boolean; message?: string }> => {
-    const driverRef = doc(db, COLLECTIONS.users, driverId);
-    const driverSnap = await getDoc(driverRef);
-
-    if (!driverSnap.exists()) {
-      return { valid: false, requiresPinChange: false, message: 'Driver not found' };
-    }
-
-    const driverData = driverSnap.data() as User;
-
-    // If no PIN set, allow default 1234 but force change
-    if (!driverData.pinHash) {
-      // Check if pin is 1234
-      if (pin === '1234') {
-        return { valid: true, requiresPinChange: true };
-      }
-      return { valid: false, requiresPinChange: false, message: 'Invalid PIN' };
-    }
-
     try {
-      const bcrypt = await import('bcryptjs');
-      const isValid = await bcrypt.compare(pin, driverData.pinHash);
-
-      if (isValid) {
-        // Check if it is the default hash for 1234
-        const isDefault = await bcrypt.compare('1234', driverData.pinHash);
-        return { valid: true, requiresPinChange: isDefault };
-      } else {
-        return { valid: false, requiresPinChange: false, message: 'Invalid PIN' };
-      }
-    } catch (e) {
-      console.error("PIN validation error", e);
-      return { valid: false, requiresPinChange: false, message: 'Validation error' };
-    }
-  },
-
-  /**
-   * Start a shift with PIN authentication
-   * @param driverId - The driver's ID
-   * @param vehicleId - The vehicle's ID
-   * @param pin - 4-digit PIN for authentication
-   * @param deviceId - Optional device identifier for rate limiting
-   * @param startOdo - Optional starting odometer reading
-   * @param startChargePercent - Optional starting charge percentage (for EVs)
-   * @returns Promise with shift details
-   */
-  startShiftWithPin: async (
-    driverId: string,
-    vehicleId: string,
-    pin: string,
-    deviceId?: string,
-    startOdo?: number,
-    startChargePercent?: number
-  ): Promise<{ success: boolean; shiftId: string; message: string }> => {
-
-    // Validate PIN first
-    const validation = await api.validateDriverPin(driverId, pin);
-    if (!validation.valid) {
-      throw new Error(validation.message || 'Invalid PIN');
-    }
-
-    try {
-      const shift = await api.startShift({
-        driverId,
-        vehicleId,
-        startOdometer: startOdo,
-        startChargePercent
-      });
-      return { success: true, shiftId: shift.id, message: 'Shift started successfully' };
+      const data = await callFunction<{ valid: boolean; requiresPinChange: boolean; message?: string }>('validateDriverPin', { driverId, pin });
+      return { valid: data.valid, requiresPinChange: data.requiresPinChange, message: data.message };
     } catch (e: any) {
-      throw new Error(e.message || 'Failed to start shift');
+      return { valid: false, requiresPinChange: false, message: e?.message || 'PIN validation failed' };
     }
   },
 
@@ -1087,13 +1003,8 @@ const api = {
    * Verifies current pin then sets new pin.
    */
   driverChangePin: async (driverId: string, currentPin: string, newPin: string): Promise<{ success: boolean; message: string }> => {
-    // Validate current PIN
-    const validation = await api.validateDriverPin(driverId, currentPin);
-    if (!validation.valid) {
-      throw new Error('Current PIN is incorrect');
-    }
-
-    return await api.adminSetDriverPin(driverId, newPin);
+    const data = await callFunction<{ success: boolean; message: string }>('driverChangePin', { driverId, currentPin, newPin });
+    return { success: data.success, message: data.message };
   },
 
   /**
@@ -1106,19 +1017,8 @@ const api = {
     driverId: string,
     newPin: string
   ): Promise<{ success: boolean; message: string }> => {
-    try {
-      const bcrypt = await import('bcryptjs');
-      const hash = await bcrypt.hash(newPin, 10);
-
-      await updateDoc(doc(db, COLLECTIONS.users, driverId), {
-        pinHash: hash,
-        pinLastUpdated: serverTimestamp()
-      });
-
-      return { success: true, message: 'PIN updated successfully' };
-    } catch (e: any) {
-      throw new Error(e.message || 'Failed to update PIN');
-    }
+    const data = await callFunction<{ success: boolean; message: string }>('adminSetDriverPin', { driverId, newPin });
+    return { success: data.success, message: data.message };
   },
 
   /**

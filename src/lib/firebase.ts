@@ -8,6 +8,7 @@ import {
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getStorage } from "firebase/storage";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
 // Read from Vite env
 const cfg = {
@@ -37,3 +38,11 @@ initializeFirestore(app, {
 export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
+export const functions = getFunctions(app); // default region us-central1
+
+// Helper to call a Firebase callable Cloud Function.
+export async function callFunction<T = any>(name: string, data?: unknown): Promise<T> {
+  const fn = httpsCallable(functions, name);
+  const result = await fn(data);
+  return result.data as T;
+}

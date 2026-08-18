@@ -78,13 +78,13 @@ const StartShiftSchema = z.object({
   vehicleId: z.string().min(1, 'Vehicle ID is required'),
   pin: z.string().regex(/^\d{4}$/, 'PIN must be exactly 4 digits'),
   deviceId: z.string().optional(),
-  startOdo: z.number().min(0, 'Start odometer must be positive').optional(),
+  startOdometer: z.number().min(0, 'Start odometer must be positive').optional(),
   startChargePercent: z.number().min(0).max(100).optional(),
 });
 
 const EndShiftSchema = z.object({
   shiftId: z.string().min(1, 'Shift ID is required'),
-  endOdo: z.number().min(0, 'End odometer must be positive'),
+  endOdometer: z.number().min(0, 'End odometer must be positive'),
   endChargePercent: z.number().min(0).max(100).optional(),
   notes: z.string().optional(),
 });
@@ -117,7 +117,7 @@ export const startShiftWithPin = functions.https.onCall(async (data, context) =>
   try {
     // Validate input data
     const validated = StartShiftSchema.parse(data);
-    const { driverId, vehicleId, pin, deviceId = 'unknown', startOdo, startChargePercent } = validated;
+    const { driverId, vehicleId, pin, deviceId = 'unknown', startOdometer, startChargePercent } = validated;
 
     // Check rate limiting BEFORE expensive operations
     await checkRateLimit(driverId, deviceId);
@@ -138,6 +138,13 @@ export const startShiftWithPin = functions.https.onCall(async (data, context) =>
       throw new functions.https.HttpsError(
         'failed-precondition',
         'Driver is not active and cannot start shifts'
+      );
+    }
+
+    if (driverData.role && driverData.role !== 'driver') {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Only drivers can start shifts'
       );
     }
 
@@ -197,6 +204,25 @@ export const startShiftWithPin = functions.https.onCall(async (data, context) =>
       }
     }
 
+    // Legacy compatibility: also detect active shifts that predate activeShiftId pointers
+    // (single-field queries + in-memory status filter; no composite index required)
+    const [driverShifts, vehicleShifts] = await Promise.all([
+      db.collection('shifts').where('driverId', '==', driverId).get(),
+      db.collection('shifts').where('vehicleId', '==', vehicleId).get(),
+    ]);
+    if (driverShifts.docs.some(d => d.data().status === 'Active')) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Driver already has an active shift. Please end your current shift first.'
+      );
+    }
+    if (vehicleShifts.docs.some(d => d.data().status === 'Active')) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'This vehicle is already in use by another driver. Please select a different vehicle.'
+      );
+    }
+
     // Create shift in transaction
     const shiftRef = db.collection('shifts').doc();
     const shiftId = shiftRef.id;
@@ -221,19 +247,19 @@ export const startShiftWithPin = functions.https.onCall(async (data, context) =>
         );
       }
 
-      // Create shift document
+      // Create shift document (legacy-compatible field names)
       const shiftData = {
         driverId,
         vehicleId,
-        startAt: admin.firestore.FieldValue.serverTimestamp(),
-        endAt: null,
-        status: 'active',
-        startOdo: startOdo || null,
-        endOdo: null,
-        startChargePercent: startChargePercent || null,
+        startTime: admin.firestore.FieldValue.serverTimestamp(),
+        endTime: null,
+        startOdometer: startOdometer ?? null,
+        endOdometer: null,
+        startChargePercent: startChargePercent ?? null,
         endChargePercent: null,
-        notes: null,
+        status: 'Active',
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
       transaction.set(shiftRef, shiftData);
 
@@ -283,7 +309,7 @@ export const endShift = functions.https.onCall(async (data, context) => {
   try {
     // Validate input
     const validated = EndShiftSchema.parse(data);
-    const { shiftId, endOdo, endChargePercent, notes } = validated;
+    const { shiftId, endOdometer, endChargePercent, notes } = validated;
 
     // Get shift document
     const shiftRef = db.collection('shifts').doc(shiftId);
@@ -296,7 +322,7 @@ export const endShift = functions.https.onCall(async (data, context) => {
     const shiftData = shiftDoc.data()!;
 
     // Validate shift is active
-    if (shiftData.status !== 'active') {
+    if (shiftData.status !== 'Active') {
       throw new functions.https.HttpsError(
         'failed-precondition',
         'This shift has already been ended'
@@ -304,10 +330,10 @@ export const endShift = functions.https.onCall(async (data, context) => {
     }
 
     // Validate end odometer is greater than start (if both exist)
-    if (shiftData.startOdo && endOdo < shiftData.startOdo) {
+    if (shiftData.startOdometer && endOdometer < shiftData.startOdometer) {
       throw new functions.https.HttpsError(
         'invalid-argument',
-        `End odometer (${endOdo}) must be greater than or equal to start odometer (${shiftData.startOdo})`
+        `End odometer (${endOdometer}) must be greater than or equal to start odometer (${shiftData.startOdometer})`
       );
     }
 
@@ -321,33 +347,19 @@ export const endShift = functions.https.onCall(async (data, context) => {
         db.collection('vehicles').doc(vehicleId),
       ];
 
-      // Update shift document
+      // Update shift document (legacy-compatible field names)
       transaction.update(shiftRef, {
-        endAt: admin.firestore.FieldValue.serverTimestamp(),
-        status: 'ended',
-        endOdo: endOdo,
-        endChargePercent: endChargePercent || null,
-        notes: notes || null,
+        endTime: admin.firestore.FieldValue.serverTimestamp(),
+        status: 'Completed',
+        endOdometer: endOdometer,
+        endChargePercent: endChargePercent ?? null,
+        notes: notes ?? null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // Clear driver's activeShiftId
-      transaction.update(driverRef, {
-        activeShiftId: null,
-        lastShiftEnd: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      // Clear vehicle's activeShiftId and update current odometer
-      const updateData: any = {
-        activeShiftId: null,
-        lastShiftEnd: admin.firestore.FieldValue.serverTimestamp(),
-      };
-
-      if (endOdo) {
-        updateData.currentOdometer = endOdo;
-      }
-
-      transaction.update(vehicleRef, updateData);
+      // Clear additive activeShiftId pointers if present (no-op on legacy docs)
+      transaction.update(driverRef, { activeShiftId: admin.firestore.FieldValue.delete() });
+      transaction.update(vehicleRef, { activeShiftId: admin.firestore.FieldValue.delete() });
     });
 
     return {
@@ -476,6 +488,13 @@ export const validateDriverPin = functions.https.onCall(async (data, context) =>
       throw new functions.https.HttpsError(
         'failed-precondition',
         'Your account is not active. Please contact your administrator.'
+      );
+    }
+
+    if (driverData.role && driverData.role !== 'driver') {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'This account is not a driver account'
       );
     }
 
@@ -621,71 +640,42 @@ export const driverChangePin = functions.https.onCall(async (data, context) => {
  */
 export const getActiveShift = functions.https.onCall(async (data, context) => {
   try {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+    const driverId = typeof data?.driverId === 'string' ? data.driverId : '';
+    if (!driverId) {
+      throw new functions.https.HttpsError('invalid-argument', 'Driver ID is required');
     }
 
-    const driverId = data.driverId || context.auth.uid;
-
-    // Security: Ensure driver can only get their own shift (unless admin)
-    const callerDoc = await db.collection('users').doc(context.auth.uid).get();
-    if (!callerDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Caller not found');
-    }
-
-    const callerData = callerDoc.data()!;
-    if (callerData.role !== 'admin' && context.auth.uid !== driverId) {
-      throw new functions.https.HttpsError(
-        'permission-denied',
-        'You can only view your own active shift'
-      );
-    }
-
-    // Get driver's active shift ID
-    const driverDoc = await db.collection('users').doc(driverId).get();
+    const driverRef = db.collection('users').doc(driverId);
+    const driverDoc = await driverRef.get();
     if (!driverDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Driver not found');
     }
 
-    const activeShiftId = driverDoc.data()!.activeShiftId;
-    if (!activeShiftId) {
-      return {
-        success: true,
-        hasActiveShift: false,
-        shift: null,
-      };
+    // A. New documents with additive activeShiftId pointer
+    const activeShiftId = driverDoc.data()?.activeShiftId;
+    if (activeShiftId) {
+      const shiftDoc = await db.collection('shifts').doc(activeShiftId).get();
+      if (shiftDoc.exists && shiftDoc.data()?.status === 'Active') {
+        return { success: true, hasActiveShift: true, shift: { id: shiftDoc.id, ...shiftDoc.data() } };
+      }
+      // stale pointer — fall through to legacy lookup
     }
 
-    // Get shift details
-    const shiftDoc = await db.collection('shifts').doc(activeShiftId).get();
-    if (!shiftDoc.exists) {
-      return {
-        success: true,
-        hasActiveShift: false,
-        shift: null,
-      };
+    // B. Legacy lookup by driverId + status 'Active' (single-field query; no composite index)
+    const snapshot = await db.collection('shifts').where('driverId', '==', driverId).get();
+    let active: any = null;
+    snapshot.docs.forEach(d => {
+      const data = d.data();
+      if (!active && data && data.status === 'Active') {
+        active = { id: d.id, ...data };
+      }
+    });
+
+    if (active) {
+      return { success: true, hasActiveShift: true, shift: active };
     }
 
-    const shiftData = shiftDoc.data()!;
-
-    // Get vehicle details
-    const vehicleDoc = await db.collection('vehicles').doc(shiftData.vehicleId).get();
-    const vehicleData = vehicleDoc.exists ? vehicleDoc.data() : null;
-
-    return {
-      success: true,
-      hasActiveShift: true,
-      shift: {
-        id: shiftDoc.id,
-        ...shiftData,
-        vehicle: vehicleData ? {
-          id: vehicleDoc.id,
-          registration: vehicleData.registration,
-          alias: vehicleData.alias,
-          vehicleType: vehicleData.vehicleType,
-        } : null,
-      },
-    };
+    return { success: true, hasActiveShift: false, shift: null };
   } catch (error: any) {
     if (error instanceof functions.https.HttpsError) {
       throw error;
