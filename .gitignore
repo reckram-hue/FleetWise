@@ -25,3 +25,17 @@ dist-ssr
 .claude/settings.local.json
 *.zip
 server/eng.traineddata
+
+# Environment & secret files (local only - never commit real credentials)
+.env
+.env.local
+.env.*.local
+server/.env
+functions/.env
+
+# Service account & private key material
+*-service-account*.json
+*service-account*.json
+firebase-adminsdk*.json
+*.pem
+*.key
