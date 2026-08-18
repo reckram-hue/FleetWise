@@ -384,13 +384,17 @@ const api = {
     if (!shiftData.pin) {
       throw new Error('PIN is required to start a shift.');
     }
-    const data = await callFunction<{ success: boolean; shiftId: string; message: string }>('startShiftWithPin', {
+    // Build payload omitting charge % for ICE (avoids serializing undefined -> null).
+    const payload: any = {
       driverId: shiftData.driverId,
       vehicleId: shiftData.vehicleId,
       pin: shiftData.pin,
       startOdometer: shiftData.startOdometer,
-      startChargePercent: shiftData.startChargePercent,
-    });
+    };
+    if (typeof shiftData.startChargePercent === 'number') {
+      payload.startChargePercent = shiftData.startChargePercent;
+    }
+    const data = await callFunction<{ success: boolean; shiftId: string; message: string }>('startShiftWithPin', payload);
     return {
       id: data.shiftId,
       driverId: shiftData.driverId,
@@ -403,12 +407,15 @@ const api = {
   },
 
   endShift: async (shiftId: string, endData: { endOdometer: number; endChargePercent?: number; notes?: string; }): Promise<Shift> => {
-    await callFunction<{ success: boolean; message: string }>('endShift', {
+    const payload: any = {
       shiftId,
       endOdometer: endData.endOdometer,
-      endChargePercent: endData.endChargePercent,
       notes: endData.notes,
-    });
+    };
+    if (typeof endData.endChargePercent === 'number') {
+      payload.endChargePercent = endData.endChargePercent;
+    }
+    await callFunction<{ success: boolean; message: string }>('endShift', payload);
     return { id: shiftId, endOdometer: endData.endOdometer, endChargePercent: endData.endChargePercent, endTime: new Date(), status: ShiftStatus.Completed } as Shift;
   },
 

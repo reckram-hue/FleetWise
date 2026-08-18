@@ -73,19 +73,26 @@ async function clearRateLimit(driverId: string, deviceId: string = 'unknown'): P
 // VALIDATION SCHEMAS
 // =============================================================================
 
+// Charge percent is EV-only. Normalize null/undefined to undefined so ICE vehicles
+// can omit the field; still validate 0-100 when a number is actually supplied.
+const optionalChargePercent = z.preprocess(
+  (v) => (v === null || v === undefined ? undefined : v),
+  z.number().min(0).max(100).optional()
+);
+
 const StartShiftSchema = z.object({
   driverId: z.string().min(1, 'Driver ID is required'),
   vehicleId: z.string().min(1, 'Vehicle ID is required'),
   pin: z.string().regex(/^\d{4}$/, 'PIN must be exactly 4 digits'),
   deviceId: z.string().optional(),
   startOdometer: z.number().min(0, 'Start odometer must be positive').optional(),
-  startChargePercent: z.number().min(0).max(100).optional(),
+  startChargePercent: optionalChargePercent,
 });
 
 const EndShiftSchema = z.object({
   shiftId: z.string().min(1, 'Shift ID is required'),
   endOdometer: z.number().min(0, 'End odometer must be positive'),
-  endChargePercent: z.number().min(0).max(100).optional(),
+  endChargePercent: optionalChargePercent,
   notes: z.string().optional(),
 });
 
@@ -247,20 +254,22 @@ export const startShiftWithPin = functions.https.onCall(async (data, context) =>
         );
       }
 
-      // Create shift document (legacy-compatible field names)
-      const shiftData = {
+      // Create shift document (legacy-compatible field names; charge % is EV-only)
+      const shiftData: any = {
         driverId,
         vehicleId,
         startTime: admin.firestore.FieldValue.serverTimestamp(),
         endTime: null,
         startOdometer: startOdometer ?? null,
         endOdometer: null,
-        startChargePercent: startChargePercent ?? null,
         endChargePercent: null,
         status: 'Active',
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
+      if (typeof startChargePercent === 'number') {
+        shiftData.startChargePercent = startChargePercent;
+      }
       transaction.set(shiftRef, shiftData);
 
       // Update driver's activeShiftId
@@ -347,15 +356,18 @@ export const endShift = functions.https.onCall(async (data, context) => {
         db.collection('vehicles').doc(vehicleId),
       ];
 
-      // Update shift document (legacy-compatible field names)
-      transaction.update(shiftRef, {
+      // Update shift document (legacy-compatible field names; charge % is EV-only)
+      const shiftUpdate: any = {
         endTime: admin.firestore.FieldValue.serverTimestamp(),
         status: 'Completed',
         endOdometer: endOdometer,
-        endChargePercent: endChargePercent ?? null,
         notes: notes ?? null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      };
+      if (typeof endChargePercent === 'number') {
+        shiftUpdate.endChargePercent = endChargePercent;
+      }
+      transaction.update(shiftRef, shiftUpdate);
 
       // Clear additive activeShiftId pointers if present (no-op on legacy docs)
       transaction.update(driverRef, { activeShiftId: admin.firestore.FieldValue.delete() });
