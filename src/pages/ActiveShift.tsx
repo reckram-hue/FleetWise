@@ -1,7 +1,8 @@
 // src/pages/ActiveShift.tsx — FULL DROP-IN component for managing and ending active shifts
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { useShiftStore } from '../store/shift';
+import { UserContext } from '../contexts/UserContext';
 import api from '../services/firebaseApi';
 import Card from '../components/shared/Card';
 import Header from '../components/shared/Header';
@@ -30,7 +31,8 @@ interface ActiveShiftProps {
 }
 
 const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
-  const { activeShift, clearActiveShift } = useShiftStore();
+  const { currentUser } = useContext(UserContext);
+  const { activeShift, clearActiveShift, setActiveShift } = useShiftStore();
 
   // Form state
   const [endOdo, setEndOdo] = useState<string>('');
@@ -41,6 +43,68 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shiftDuration, setShiftDuration] = useState<string>('');
+
+  // Modal visibility (declared up front to keep React hook order stable)
+  const [showEndForm, setShowEndForm] = useState(false);
+  const [showLogCharge, setShowLogCharge] = useState(false);
+  const [showLogRefuel, setShowLogRefuel] = useState(false);
+  const [showReportFault, setShowReportFault] = useState(false);
+
+  // Server reconciliation state
+  const [reconciling, setReconciling] = useState(true);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+
+  // Reconcile local shift state with the authoritative server path (getActiveShift callable)
+  useEffect(() => {
+    let cancelled = false;
+    const reconcile = async () => {
+      if (!currentUser) {
+        setReconciling(false);
+        return;
+      }
+      setReconciling(true);
+      setLookupError(null);
+      try {
+        const shift = await api.getActiveShift(currentUser.id);
+        if (cancelled) return;
+        if (shift) {
+          let vehicle = null;
+          try {
+            vehicle = await api.getVehicle(shift.vehicleId);
+          } catch {
+            vehicle = null;
+          }
+          if (cancelled) return;
+          setActiveShift({
+            shiftId: shift.id,
+            driverId: currentUser.id,
+            driverName: `${currentUser.firstName} ${currentUser.surname}`,
+            vehicleId: shift.vehicleId,
+            vehicle: {
+              id: shift.vehicleId,
+              registration: vehicle?.registration || 'Unknown',
+              alias: vehicle?.alias,
+              vehicleType: vehicle?.vehicleType || 'ICE',
+            },
+            startAt: shift.startTime ? new Date(shift.startTime).toISOString() : new Date().toISOString(),
+            startOdo: shift.startOdometer,
+            startChargePercent: shift.startChargePercent,
+          });
+        } else {
+          clearActiveShift();
+        }
+      } catch (e: any) {
+        if (!cancelled) setLookupError(e?.message || 'Failed to look up active shift');
+      } finally {
+        if (!cancelled) setReconciling(false);
+      }
+    };
+    reconcile();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser]);
 
   // Calculate shift duration
   useEffect(() => {
@@ -135,6 +199,43 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
     }
   };
 
+  // Still querying the authoritative server for the active shift
+  if (reconciling) {
+    return (
+      <div className="min-h-screen bg-gray-100">
+        <Header title="Active Shift" />
+        <main className="max-w-4xl mx-auto p-6">
+          <Card className="text-center py-12">
+            <Loader className="h-12 w-12 text-blue-500 mx-auto mb-4 animate-spin" />
+            <p className="text-gray-600">Looking up your active shift...</p>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
+  // Server lookup failed — surface the error, never present it as "no shift"
+  if (lookupError) {
+    return (
+      <div className="min-h-screen bg-gray-100">
+        <Header title="Active Shift" />
+        <main className="max-w-4xl mx-auto p-6">
+          <Card className="text-center py-12">
+            <AlertCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-800 mb-2">Could not check your shift</h2>
+            <p className="text-red-600 mb-6">{lookupError}</p>
+            <button
+              onClick={onBack}
+              className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-semibold"
+            >
+              Go Back
+            </button>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
   // If no active shift, show message
   if (!activeShift) {
     return (
@@ -156,11 +257,6 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       </div>
     );
   }
-
-  const [showEndForm, setShowEndForm] = useState(false);
-  const [showLogCharge, setShowLogCharge] = useState(false);
-  const [showLogRefuel, setShowLogRefuel] = useState(false);
-  const [showReportFault, setShowReportFault] = useState(false);
 
   // Calculate distance driven (if both start and current end are available)
   const distanceDriven =
