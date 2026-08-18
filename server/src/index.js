@@ -5,10 +5,11 @@ import { Telegraf, Markup } from 'telegraf';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import Tesseract from 'tesseract.js';
-import Jimp from 'jimp';
-import QrCodeReader from 'qrcode-reader';
 import fetch from 'node-fetch';
+
+// Lazy imports for heavy image processing libraries
+// These will be imported only when needed to avoid startup delays
+let Tesseract, Jimp, QrCodeReader;
 
 /**
  * Resolve data file paths
@@ -113,6 +114,16 @@ for (const s of shiftData) shifts.set(s.id, s);
 // ----- Utility Functions -----
 async function processQRCode(photoUrl) {
   try {
+    // Lazy load Jimp and QrCodeReader
+    if (!Jimp) {
+      const jimpModule = await import('jimp');
+      Jimp = jimpModule.default;
+    }
+    if (!QrCodeReader) {
+      const qrModule = await import('qrcode-reader');
+      QrCodeReader = qrModule.default;
+    }
+
     const image = await Jimp.read(photoUrl);
     const qr = new QrCodeReader();
 
@@ -133,6 +144,12 @@ async function processQRCode(photoUrl) {
 
 async function processOdometer(photoUrl) {
   try {
+    // Lazy load Tesseract
+    if (!Tesseract) {
+      const tesseractModule = await import('tesseract.js');
+      Tesseract = tesseractModule.default;
+    }
+
     const { data: { text } } = await Tesseract.recognize(photoUrl, 'eng', {
       logger: () => {} // Suppress logs
     });
@@ -365,6 +382,67 @@ if (bot) {
         .oneTime()
         .resize()
     );
+  });
+
+  // /mystats command - View driver performance statistics
+  bot.command('mystats', async (ctx) => {
+    const driver = getDriverByChatId(ctx.chat.id);
+
+    if (!driver) {
+      return ctx.reply('❌ You are not registered. Please contact your administrator.');
+    }
+
+    // Calculate driver statistics
+    const driverShifts = Array.from(shifts.values()).filter(s => s.driverId === driver.id);
+    const completedShifts = driverShifts.filter(s => s.endTime);
+
+    if (completedShifts.length === 0) {
+      return ctx.reply(
+        `📊 Your Performance Stats\n\n` +
+        `Driver: ${driver.firstName} ${driver.surname}\n\n` +
+        `You haven't completed any shifts yet.\n` +
+        `Start your first shift with /scan to begin tracking your performance! 🚀`
+      );
+    }
+
+    // Calculate total distance and duration
+    const totalDistance = completedShifts.reduce((sum, s) => sum + (s.endOdometer - s.startOdometer), 0);
+    const totalDuration = completedShifts.reduce((sum, s) => sum + (s.endTime - s.startTime), 0);
+    const totalHours = Math.floor(totalDuration / (1000 * 60 * 60));
+    const avgDistance = (totalDistance / completedShifts.length).toFixed(0);
+
+    // Find best shift (longest distance)
+    const bestShift = completedShifts.reduce((best, current) => {
+      const currentDistance = current.endOdometer - current.startOdometer;
+      const bestDistance = best.endOdometer - best.startOdometer;
+      return currentDistance > bestDistance ? current : best;
+    });
+    const bestDistance = bestShift.endOdometer - bestShift.startOdometer;
+
+    let statsMessage = `📊 Your Performance Stats\n\n`;
+    statsMessage += `Driver: ${driver.firstName} ${driver.surname}\n`;
+    statsMessage += `Status: ${driver.isActive ? '✅ Active' : '⏸️ Inactive'}\n\n`;
+    statsMessage += `🚗 Shift Statistics:\n`;
+    statsMessage += `   Total Shifts: ${completedShifts.length}\n`;
+    statsMessage += `   Total Distance: ${totalDistance.toLocaleString()} km\n`;
+    statsMessage += `   Total Hours: ${totalHours}h\n`;
+    statsMessage += `   Average Distance: ${avgDistance} km/shift\n\n`;
+    statsMessage += `🏆 Best Performance:\n`;
+    statsMessage += `   Longest Shift: ${bestDistance} km\n\n`;
+
+    // Add motivational message
+    if (completedShifts.length >= 10) {
+      statsMessage += `🌟 Milestone Achievement!\n`;
+      statsMessage += `   You've completed ${completedShifts.length} shifts!\n`;
+      statsMessage += `   Keep up the excellent work! 💪\n`;
+    } else {
+      statsMessage += `💪 Keep Going!\n`;
+      statsMessage += `   Complete ${10 - completedShifts.length} more shifts to reach your first milestone!\n`;
+    }
+
+    statsMessage += `\nUse /status to check your current shift.`;
+
+    ctx.reply(statsMessage);
   });
 
   // Handle photo messages
@@ -693,13 +771,18 @@ async function startShift(ctx, vehicleId, startOdometer, vehicleCheckResults) {
   const vehicle = vehicles.get(vehicleId);
 
   await ctx.reply(
-    `✅ Shift started successfully!\n\n` +
+    `✅ Shift started successfully! 🚀\n\n` +
+    `Welcome back, ${driver.firstName}! 👋\n\n` +
     `Driver: ${driver.firstName} ${driver.surname}\n` +
     `Vehicle: ${vehicle.name || vehicleId}\n` +
     `Start time: ${new Date().toLocaleString()}\n` +
     `Start odometer: ${startOdometer.toLocaleString()} km\n\n` +
-    `Use /status to check your shift or /endshift when done.\n` +
-    `You can also send your location to update vehicle position.`,
+    `📱 Quick Commands:\n` +
+    `   /status - Check your current shift\n` +
+    `   /mystats - View your performance stats\n` +
+    `   /endshift - End your shift when done\n\n` +
+    `💡 Tip: You can send your location to update vehicle position.\n\n` +
+    `Drive safely! 🚗`,
     Markup.removeKeyboard()
   );
 
@@ -722,17 +805,43 @@ async function endShift(ctx, shiftId, endOdometer) {
   const duration = Math.floor((shift.endTime - shift.startTime) / (1000 * 60));
   const distance = endOdometer - shift.startOdometer;
 
+  // Calculate performance feedback
+  let performanceMessage = '';
+  let economyEmoji = '📊';
+
+  // Calculate average speed
+  const avgSpeed = duration > 0 ? (distance / (duration / 60)).toFixed(1) : 0;
+
+  // Build performance message
+  if (distance >= 100) {
+    performanceMessage = `\n🎯 Performance Summary:\n`;
+    performanceMessage += `   Average Speed: ${avgSpeed} km/h\n`;
+
+    // Add motivational message based on distance
+    if (distance >= 200) {
+      performanceMessage += `   🌟 Excellent! You covered ${distance} km today!\n`;
+      economyEmoji = '🌟';
+    } else if (distance >= 100) {
+      performanceMessage += `   👍 Great work! ${distance} km completed!\n`;
+      economyEmoji = '👍';
+    }
+  }
+
   await ctx.reply(
-    `✅ Shift ended successfully!\n\n` +
+    `✅ Shift ended successfully! ${economyEmoji}\n\n` +
     `Driver: ${driver.firstName} ${driver.surname}\n` +
     `Vehicle: ${vehicle.name || shift.vehicleId}\n` +
     `Duration: ${Math.floor(duration / 60)}h ${duration % 60}m\n` +
     `Distance: ${distance.toLocaleString()} km\n` +
     `Start: ${shift.startOdometer.toLocaleString()} km\n` +
-    `End: ${endOdometer.toLocaleString()} km\n\n` +
-    `Thank you for using FleetWise!`,
+    `End: ${endOdometer.toLocaleString()} km` +
+    performanceMessage +
+    `\n\nThank you for driving safely! 🚗\n` +
+    `Rest well and see you on the next shift!`,
     Markup.removeKeyboard()
   );
+
+  telegramSessions.delete(ctx.chat.id);
 }
 
 // ----- HTTP API -----
@@ -740,7 +849,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/health', (_req, res) => {
+  const env = process.env.NODE_ENV || "development";
+  const port = Number(process.env.PORT ?? 5174);
+  const firebaseConfigured =
+    !!process.env.VITE_FIREBASE_API_KEY || !!process.env.FIREBASE_API_KEY;
+  res.json({ ok: true, env, port, firebaseConfigured });
+});
 
 // List vehicles
 app.get('/api/vehicles', (_req, res) => {
@@ -753,11 +868,17 @@ app.get('/api/vehicles', (_req, res) => {
   res.json(arr);
 });
 
-// Add a vehicle { id, name }
+// Add/Update a vehicle { id, name }
 app.post('/api/vehicles', async (req, res) => {
   const { id, name } = req.body || {};
   if (!id || !name) return res.status(400).json({ error: 'id and name are required' });
-  if (vehicles.has(id)) return res.status(409).json({ error: 'Vehicle already exists' });
+  if (vehicles.has(id)) {
+    // Update existing vehicle
+    const existing = vehicles.get(id);
+    vehicles.set(id, { ...existing, id, name });
+    await saveVehiclesToDisk(vehicles);
+    return res.json({ ok: true, message: 'Vehicle updated' });
+  }
   vehicles.set(id, { id, name });
   await saveVehiclesToDisk(vehicles);
   res.status(201).json({ ok: true });
@@ -779,7 +900,13 @@ app.get('/api/drivers', (_req, res) => {
 app.post('/api/drivers', async (req, res) => {
   const { id, firstName, surname } = req.body || {};
   if (!id || !firstName || !surname) return res.status(400).json({ error: 'id, firstName and surname are required' });
-  if (drivers.has(id)) return res.status(409).json({ error: 'Driver already exists' });
+  if (drivers.has(id)) {
+    // Update existing driver instead of returning error
+    const existing = drivers.get(id);
+    drivers.set(id, { ...existing, firstName, surname, isActive: true });
+    await saveDriversToDisk(drivers);
+    return res.json({ ok: true, message: 'Driver updated' });
+  }
   drivers.set(id, { id, firstName, surname, isActive: true });
   await saveDriversToDisk(drivers);
   res.status(201).json({ ok: true });
@@ -866,4 +993,9 @@ app.post('/api/vehicles/:id/dispatch', async (req, res) => {
 });
 
 const port = Number(process.env.PORT ?? 5174);
-app.listen(port, () => console.log(`FleetWise server listening on http://localhost:${port}`));
+const host = '0.0.0.0'; // Bind to all network interfaces for LAN access
+app.listen(port, host, () => {
+  console.log(`FleetWise server listening on:`);
+  console.log(`  Local:   http://localhost:${port}`);
+  console.log(`  Network: http://<YOUR_LAN_IP>:${port}`);
+});

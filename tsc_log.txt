@@ -1,0 +1,61 @@
+﻿src/components/admin/FuelEconomyMonitor.tsx(43,42): error TS2339: Property 'calculateFuelEconomyStatus' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'.
+src/components/admin/FuelEconomyMonitor.tsx(67,73): error TS2322: Type '{ className: string; title: string; }' is not assignable to type 'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+  Property 'title' does not exist on type 'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+src/components/admin/FuelEconomyMonitor.tsx(69,69): error TS2322: Type '{ className: string; title: string; }' is not assignable to type 'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+  Property 'title' does not exist on type 'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+src/components/admin/FuelEconomyMonitor.tsx(71,65): error TS2322: Type '{ className: string; title: string; }' is not assignable to type 'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+  Property 'title' does not exist on type 'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+src/components/admin/FuelEconomyMonitor.tsx(73,65): error TS2322: Type '{ className: string; title: string; }' is not assignable to type 'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+  Property 'title' does not exist on type 'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+src/components/admin/ManageCosts.tsx(33,21): error TS2554: Expected 1 arguments, but got 0.
+src/components/admin/ManageDefects.tsx(383,23): error TS2339: Property 'updateDefectStatus' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'.
+src/components/admin/ManageDefects.tsx(483,23): error TS2339: Property 'assignDefect' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'.
+src/components/admin/ManageIncidents.tsx(45,25): error TS2554: Expected 1 arguments, but got 0.
+src/components/admin/ManageIncidents.tsx(51,36): error TS2345: Argument of type 'DriverIncidentSummary' is not assignable to parameter of type 'SetStateAction<DriverIncidentSummary[]>'.
+src/components/admin/ManageIncidents.tsx(86,21): error TS2554: Expected 1 arguments, but got 0.
+src/components/admin/ManageIncidents.tsx(90,32): error TS2345: Argument of type 'DriverIncidentSummary' is not assignable to parameter of type 'SetStateAction<DriverIncidentSummary[]>'.
+src/components/admin/ManageIncidents.tsx(437,38): error TS2339: Property 'determineDriverForFine' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'.
+src/components/admin/ManageIncidents.tsx(483,27): error TS2551: Property 'updateDriverFine' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'. Did you mean 'updateDriver'?
+src/components/admin/ManageIncidents.tsx(876,27): error TS2551: Property 'updateVehicleDamage' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'. Did you mean 'updateVehicle'?
+src/components/admin/ManageServiceProviders.tsx(293,46): error TS2345: Argument of type '{ name: string; contactPerson: string; primaryPhone: string; secondaryPhone: string; email: string; address: string; city: string; province: string; postalCode: string; specializations: string[]; isActive: boolean; notes: string; }' is not assignable to parameter of type 'Omit<ServiceProvider, "id">'.
+  Type '{ name: string; contactPerson: string; primaryPhone: string; secondaryPhone: string; email: string; address: string; city: string; province: string; postalCode: string; specializations: string[]; isActive: boolean; notes: string; }' is missing the following properties from type 'Omit<ServiceProvider, "id">': createdDate, lastModified
+src/components/admin/Settings.tsx(34,17): error TS2353: Object literal may only specify known properties, and 'defaultServiceReminderDays' does not exist in type 'AppSettings | ((prevState: AppSettings | null) => AppSettings | null)'.
+src/components/admin/VehicleLicenseRenewal.tsx(77,40): error TS2551: Property 'licenseDiscNumber' does not exist on type 'Vehicle'. Did you mean 'licenseNumber'?
+src/components/admin/VehicleLicenseRenewal.tsx(261,74): error TS2339: Property 'year' does not exist on type 'Vehicle'.
+src/components/admin/VehicleLicenseRenewal.tsx(325,74): error TS2339: Property 'year' does not exist on type 'Vehicle'.
+src/components/admin/VehicleLicenseRenewal.tsx(340,74): error TS2551: Property 'licenseDiscNumber' does not exist on type 'Vehicle'. Did you mean 'licenseNumber'?
+src/components/driver/DriverDashboard.tsx(214,25): error TS2551: Property 'getActiveShifts' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'. Did you mean 'getActiveShift'?
+src/components/driver/DriverDashboard.tsx(223,72): error TS2304: Cannot find name 'VehicleStatus'.
+src/components/driver/DriverDashboard.tsx(302,61): error TS2339: Property 'getLastCompletedShift' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'.
+src/components/driver/DriverDashboard.tsx(371,41): error TS2339: Property 'getLastCompletedShift' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'.
+src/components/driver/DriverDashboard.tsx(931,23): error TS2554: Expected 2 arguments, but got 1.
+src/components/driver/DriverDashboard.tsx(1047,21): error TS2339: Property 'getDriverActiveVehicle' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'.
+src/components/driver/DriverDashboard.tsx(1073,39): error TS2339: Property 'checkSimilarDefects' does not exist on type '{ getUsers: () => Promise<User[]>; addDriver: (driverData: Omit<User, "role" | "id">) => Promise<User>; updateDriver: (driverData: User) => Promise<...>; ... 57 more ...; getLicenseRenewalReminders: () => Promise<...>; }'.
+src/components/driver/DriverDashboard.tsx(1486,53): error TS2339: Property 'find' does not exist on type 'DriverIncidentSummary'.
+src/components/driver/DriverDashboard.tsx(1486,58): error TS7006: Parameter 'e' implicitly has an 'any' type.
+src/components/driver/DriverDashboard.tsx(1780,37): error TS2554: Expected 3 arguments, but got 1.
+src/lib/firebase.ts(14,23): error TS2339: Property 'env' does not exist on type 'ImportMeta'.
+src/lib/firebase.ts(15,27): error TS2339: Property 'env' does not exist on type 'ImportMeta'.
+src/lib/firebase.ts(16,26): error TS2339: Property 'env' does not exist on type 'ImportMeta'.
+src/lib/firebase.ts(17,30): error TS2339: Property 'env' does not exist on type 'ImportMeta'.
+src/lib/firebase.ts(18,34): error TS2339: Property 'env' does not exist on type 'ImportMeta'.
+src/lib/firebase.ts(19,22): error TS2339: Property 'env' does not exist on type 'ImportMeta'.
+src/lib/firebase.ts(20,30): error TS2339: Property 'env' does not exist on type 'ImportMeta'.
+src/lib/firebase.ts(33,3): error TS2353: Object literal may only specify known properties, and 'useFetchStreams' does not exist in type 'FirestoreSettings'.
+src/pages/ShiftStart.tsx(52,46): error TS2339: Property 'activeShiftId' does not exist on type 'Vehicle'.
+src/services/firebaseApi.ts(21,20): error TS2307: Cannot find module '../src/lib/firebase' or its corresponding type declarations.
+src/services/firebaseApi.ts(448,7): error TS2353: Object literal may only specify known properties, and 'completionNotes' does not exist in type 'Partial<ScheduledService>'.
+src/services/firebaseApi.ts(583,11): error TS2561: Object literal may only specify known properties, but 'driverId' does not exist in type 'LeaderboardEntry'. Did you mean to write 'driver'?
+src/services/firebaseApi.ts(591,41): error TS2339: Property 'totalKm' does not exist on type 'LeaderboardEntry'.
+src/services/firebaseApi.ts(591,53): error TS2339: Property 'totalKm' does not exist on type 'LeaderboardEntry'.
+src/services/firebaseApi.ts(601,7): error TS2353: Object literal may only specify known properties, and 'vehicleId' does not exist in type 'VehicleStats'.
+src/services/firebaseApi.ts(602,24): error TS2339: Property 'odometer' does not exist on type 'Vehicle'.
+src/services/firebaseApi.ts(612,5): error TS2322: Type '{ vehicleId: string; registration: string; totalKm: any; tripCount: number; utilizationPercent: number; }[]' is not assignable to type 'VehicleUsageStats[]'.
+  Type '{ vehicleId: string; registration: string; totalKm: any; tripCount: number; utilizationPercent: number; }' is missing the following properties from type 'VehicleUsageStats': avgDailyUsageKm, totalDaysTracked, lastCalculated, recentUsageTrend
+src/services/firebaseApi.ts(615,18): error TS2339: Property 'odometer' does not exist on type 'Vehicle'.
+src/services/firebaseApi.ts(628,7): error TS2353: Object literal may only specify known properties, and 'totalDamageAmount' does not exist in type 'DriverIncidentSummary'.
+src/services/firebaseApi.ts(646,7): error TS2740: Type '{ defaultServiceReminderDays: number; defaultLicenseRenewalReminderDays: number; fuelEconomyThreshold: number; companyName: string; areas: never[]; departments: never[]; id: string; }' is missing the following properties from type 'AppSettings': serviceBookingLeadTimeDays, enableSmartBookingReminders, defaultDailyUsageKm, bookingReminderThresholdKm, and 4 more.
+src/services/firebaseApi.ts(707,35): error TS2307: Cannot find module '../src/lib/firebase' or its corresponding type declarations.
+src/services/mockApi.ts(632,5): error TS2739: Type '{ id: string; areas: string[]; departments: string[]; serviceBookingLeadTimeDays: number; enableSmartBookingReminders: true; defaultDailyUsageKm: number; bookingReminderThresholdKm: number; createdBy: string; lastModified: Date; }' is missing the following properties from type 'AppSettings': defaultLicenseReminderDays, enableLicenseReminders
+src/services/mockApi.ts(1481,13): error TS2322: Type '"shift_lookup" | "single_driver" | "no_match"' is not assignable to type '"manual" | "shift_lookup" | "single_driver" | undefined'.
+  Type '"no_match"' is not assignable to type '"manual" | "shift_lookup" | "single_driver" | undefined'.

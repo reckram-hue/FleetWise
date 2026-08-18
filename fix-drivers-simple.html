@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fix Driver PINs - FleetWise</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .container {
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #60a5fa;
+            margin-top: 0;
+        }
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #2563eb;
+        }
+        button:disabled {
+            background: #4b5563;
+            cursor: not-allowed;
+        }
+        .warning {
+            background: #fef3c7;
+            color: #92400e;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #f59e0b;
+            margin: 20px 0;
+        }
+        .success {
+            background: #d1fae5;
+            color: #065f46;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #10b981;
+            margin: 20px 0;
+        }
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #ef4444;
+            margin: 20px 0;
+        }
+        #output {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .log-line {
+            margin: 5px 0;
+            padding: 5px;
+        }
+        .log-info { color: #60a5fa; }
+        .log-success { color: #34d399; }
+        .log-error { color: #f87171; }
+        .log-warning { color: #fbbf24; }
+        .spinner {
+            border: 3px solid #4b5563;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Fix Driver PINs</h1>
+
+        <div class="warning">
+            <strong>⚠️ Important:</strong> This tool will add the default PIN (1234) to all drivers who don't have a PIN set.
+            Make sure you've deployed your Cloud Functions first!
+        </div>
+
+        <p>This tool will:</p>
+        <ul>
+            <li>Scan all drivers in your Firestore database</li>
+            <li>Add PIN hash for drivers missing it</li>
+            <li>Use default PIN: <strong>1234</strong></li>
+            <li>Drivers will be forced to change PIN on first login</li>
+        </ul>
+
+        <button id="fixBtn" onclick="fixDrivers()">
+            🔐 Fix All Driver PINs
+        </button>
+
+        <button onclick="location.reload()">
+            🔄 Refresh Page
+        </button>
+
+        <div id="output"></div>
+    </div>
+
+    <!-- Include Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getFirestore, collection, getDocs, doc, updateDoc, where, query, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        // Your Firebase configuration - REPLACE WITH YOUR CONFIG
+        const firebaseConfig = {
+            apiKey: "AIzaSyDU_jLgRLba1Kvb8ZytGH45UqlR6494y24",
+            authDomain: "fleetwise-9ab3a.firebaseapp.com",
+            projectId: "fleetwise-9ab3a",
+            storageBucket: "fleetwise-9ab3a.appspot.com",
+            messagingSenderId: "152244336755",
+            appId: "1:152244336755:web:d45ac6cd98eacf46785206"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // Make functions available globally
+        window.fixDrivers = async function() {
+            const output = document.getElementById('output');
+            const btn = document.getElementById('fixBtn');
+
+            btn.disabled = true;
+            output.innerHTML = '';
+
+            log('🔧 Starting driver PIN fix...', 'info');
+            log('📋 Loading drivers from Firestore...', 'info');
+
+            try {
+                // Import bcryptjs from CDN
+                const bcrypt = window.dcodeIO?.bcrypt;
+                if (!bcrypt) {
+                    throw new Error('bcrypt library not loaded');
+                }
+
+                // Get all drivers
+                const usersRef = collection(db, 'users');
+                const q = query(usersRef, where('role', '==', 'driver'));
+                const querySnapshot = await getDocs(q);
+
+                if (querySnapshot.empty) {
+                    log('❌ No drivers found in database', 'error');
+                    btn.disabled = false;
+                    return;
+                }
+
+                log(`📊 Found ${querySnapshot.size} driver(s)`, 'info');
+                log('🔐 Generating PIN hash...', 'info');
+
+                // Hash default PIN
+                const salt = bcrypt.genSaltSync(10);
+                const defaultPinHash = bcrypt.hashSync('1234', salt);
+
+                log('✅ PIN hash generated', 'success');
+                log('', 'info');
+
+                let fixed = 0;
+                let skipped = 0;
+
+                // Process each driver
+                for (const docSnapshot of querySnapshot.docs) {
+                    const data = docSnapshot.data();
+                    const driverName = `${data.firstName || 'Unknown'} ${data.surname || 'Unknown'}`;
+
+                    if (!data.pinHash) {
+                        // Set PIN
+                        await updateDoc(doc(db, 'users', docSnapshot.id), {
+                            pinHash: defaultPinHash,
+                            pinLastUpdated: serverTimestamp(),
+                        });
+                        log(`✅ Set PIN for: ${driverName}`, 'success');
+                        fixed++;
+                    } else {
+                        log(`⏭️  Already has PIN: ${driverName}`, 'warning');
+                        skipped++;
+                    }
+                }
+
+                log('', 'info');
+                log('====================================', 'info');
+                log('✨ Complete!', 'success');
+                log(`   Fixed: ${fixed} driver(s)`, 'success');
+                log(`   Skipped: ${skipped} driver(s)`, 'info');
+                log('====================================', 'info');
+                log('', 'info');
+                log('All drivers now have PIN: 1234', 'info');
+                log('They will be forced to change it on first login.', 'info');
+
+            } catch (error) {
+                log('❌ Error: ' + error.message, 'error');
+                console.error(error);
+            } finally {
+                btn.disabled = false;
+            }
+        };
+
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const line = document.createElement('div');
+            line.className = `log-line log-${type}`;
+            line.textContent = message;
+            output.appendChild(line);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        window.log = log;
+    </script>
+
+    <!-- Include bcryptjs from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dcodeIO-bcrypt.js/2.4.3/bcrypt.min.js"></script>
+</body>
+</html>

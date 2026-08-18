@@ -1,0 +1,23 @@
+# FleetWise — Deploy Readiness
+
+## Local
+1. Terminal A: `cd server && npm ci && npm run dev` (listens on 5174)
+2. Terminal B: `npm ci && npm run dev` (Vite on 5173)
+3. Browse: http://localhost:5173/#/admin/health — all checks must be OK.
+
+## Build
+- `npm run build`
+- `npm run preview` then open shown URL.
+
+## Vercel
+Set the following **Environment Variables** in the Vercel Project (Production + Preview):
+- VITE_FIREBASE_API_KEY
+- VITE_FIREBASE_AUTH_DOMAIN
+- VITE_FIREBASE_PROJECT_ID
+- VITE_FIREBASE_STORAGE_BUCKET
+- VITE_FIREBASE_MESSAGING_SENDER_ID
+- VITE_FIREBASE_APP_ID
+- VITE_FIREBASE_MEASUREMENT_ID (optional)
+- VITE_API_BASE_URL=https://<your-api-or-server-if-needed>
+
+Deploy from commit. Verify `/#/admin/health`.
