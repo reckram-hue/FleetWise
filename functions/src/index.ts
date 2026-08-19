@@ -215,7 +215,10 @@ const StartVehicleAssignmentSchema = z.object({
   sessionToken: z.string().min(1, 'Session token is required'),
   shiftId: z.string().min(1, 'Shift ID is required'),
   vehicleId: z.string().min(1, 'Vehicle ID is required'),
-  startOdometer: z.number().min(0, 'Start odometer must be positive').optional(),
+  startOdometer: z.preprocess(
+    (v) => (v === null || v === undefined ? undefined : v),
+    z.number().min(0, 'Start odometer must be positive').optional()
+  ),
   startChargePercent: optionalChargePercent,
   transitionReason: z.enum(['SHIFT_START', 'VEHICLE_SWAP']).optional(),
   deviceId: optionalString,
@@ -225,7 +228,10 @@ const EndVehicleAssignmentSchema = z.object({
   driverId: z.string().min(1, 'Driver ID is required'),
   sessionToken: z.string().min(1, 'Session token is required'),
   assignmentId: z.string().min(1, 'Assignment ID is required'),
-  endOdometer: z.number().min(0, 'End odometer must be positive').optional(),
+  endOdometer: z.preprocess(
+    (v) => (v === null || v === undefined ? undefined : v),
+    z.number().min(0, 'End odometer must be positive').optional()
+  ),
   endChargePercent: optionalChargePercent,
   transitionReason: z.enum(['VEHICLE_SWAP', 'SHIFT_END', 'CANCELLED']),
   deviceId: optionalString,
@@ -234,7 +240,10 @@ const EndVehicleAssignmentSchema = z.object({
 const GetActiveVehicleAssignmentSchema = z.object({
   driverId: z.string().min(1, 'Driver ID is required'),
   sessionToken: z.string().min(1, 'Session token is required'),
-  shiftId: z.string().min(1, 'Shift ID is required').optional(),
+  shiftId: z.preprocess(
+    (v) => (v === null || v === undefined ? undefined : v),
+    z.string().min(1, 'Shift ID is required').optional()
+  ),
 });
 
 // =============================================================================
@@ -2136,9 +2145,10 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
 
     const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
 
-    const [shiftDoc, vehicleDoc] = await Promise.all([
+    const [shiftDoc, vehicleDoc, driverDoc] = await Promise.all([
       db.collection('shifts').doc(shiftId).get(),
       db.collection('vehicles').doc(vehicleId).get(),
+      db.collection('users').doc(driverId).get(),
     ]);
 
     if (!shiftDoc.exists) throw new functions.https.HttpsError('not-found', 'Shift not found');
@@ -2160,13 +2170,25 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
       );
     }
 
+    // Allowed-vehicles check — same restriction as startShift/startShiftWithPin.
+    // allowedVehicles absent → no restriction. Present → driver may only use listed vehicles.
+    if (driverDoc.exists) {
+      const driverData = driverDoc.data()!;
+      if (driverData.allowedVehicles && Array.isArray(driverData.allowedVehicles)) {
+        if (!driverData.allowedVehicles.includes(vehicleId)) {
+          throw new functions.https.HttpsError('permission-denied', 'You are not authorized to use this vehicle.');
+        }
+      }
+    }
+
     const assignmentRef = db.collection('vehicleAssignments').doc();
     const assignmentId = assignmentRef.id;
 
     await db.runTransaction(async (transaction) => {
-      const [txShiftDoc, txVehicleDoc] = await Promise.all([
+      const [txShiftDoc, txVehicleDoc, txDriverDoc] = await Promise.all([
         transaction.get(shiftDoc.ref),
         transaction.get(vehicleDoc.ref),
+        transaction.get(driverDoc.ref),
       ]);
 
       // A. Shift remains Active.
@@ -2189,6 +2211,13 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
       const vehicleActiveShiftId = txVehicleDoc.data()?.activeShiftId;
       if (vehicleActiveShiftId && vehicleActiveShiftId !== shiftId) {
         throw new functions.https.HttpsError('failed-precondition', 'This vehicle belongs to another active shift.');
+      }
+      // G. Re-verify allowedVehicles from authoritative driver doc inside the transaction.
+      const txDriverData = txDriverDoc.data();
+      if (txDriverData?.allowedVehicles && Array.isArray(txDriverData.allowedVehicles)) {
+        if (!txDriverData.allowedVehicles.includes(vehicleId)) {
+          throw new functions.https.HttpsError('permission-denied', 'You are not authorized to use this vehicle.');
+        }
       }
 
       const assignmentData: any = {
@@ -2387,12 +2416,24 @@ export const getActiveVehicleAssignment = functions.https.onCall(async (data, co
     }
 
     const assignmentDoc = await db.collection('vehicleAssignments').doc(activeAssignmentId).get();
-    if (!assignmentDoc.exists || assignmentDoc.data()?.status !== 'ACTIVE') {
-      return { success: true, hasActiveAssignment: false, assignment: null };
+    // shift.activeAssignmentId is present — the pointed document MUST be valid and consistent.
+    // Returning null here could allow a second assignment to start while a stale pointer remains.
+    if (!assignmentDoc.exists) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Your assignment record is inconsistent. Please contact support.'
+      );
     }
     const assignmentData = assignmentDoc.data()!;
-    if (assignmentData.shiftId !== shiftId || assignmentData.driverId !== driverId) {
-      return { success: true, hasActiveAssignment: false, assignment: null };
+    if (
+      assignmentData.status !== 'ACTIVE' ||
+      assignmentData.shiftId !== shiftId ||
+      assignmentData.driverId !== driverId
+    ) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Your assignment record is inconsistent. Please contact support.'
+      );
     }
 
     return { success: true, hasActiveAssignment: true, assignment: { id: assignmentDoc.id, ...assignmentData } };
