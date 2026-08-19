@@ -1,0 +1,79 @@
+rules_version = '2';
+// PROPOSED FleetWise Firestore rules — least privilege, default deny.
+// NOT deployed. This is a design/local-validation artifact for WP5B.
+// Cloud Functions (Admin SDK) bypass these rules, so the bridge keeps working.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Admin = Firebase Auth user whose users/{uid} doc has role == 'admin'.
+    // get() here is a rules-internal read and is NOT blocked by the users match below.
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // ---- users ----
+    // DENY all direct client access. Firestore rules cannot redact fields, and the
+    // documents contain pinHash. User list/create/update must move to Cloud Functions.
+    match /users/{userId} {
+      allow read, write: if false;
+    }
+
+    // ---- vehicles ----
+    // Fleet data (no PII): readable by anyone; writes are admin-only.
+    match /vehicles/{vehicleId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---- shifts ----
+    // Historical/stat visibility is public; start/end are owned by Cloud Functions.
+    match /shifts/{shiftId} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+
+    // ---- defects ----
+    // Public read; admin update/delete. Driver create is BLOCKED (no auth identity)
+    // and must move behind a Cloud Function before live lockdown.
+    match /defects/{defectId} {
+      allow read: if true;
+      allow create: if false;
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- admin-only operational collections ----
+    match /costs/{id} { allow read, write: if isAdmin(); }
+    match /maintenanceRecords/{id} { allow read, write: if isAdmin(); }
+    match /scheduledServices/{id} { allow read, write: if isAdmin(); }
+    match /driverFines/{id} { allow read, write: if isAdmin(); }
+    match /vehicleDamages/{id} { allow read, write: if isAdmin(); }
+    match /serviceProviders/{id} { allow read, write: if isAdmin(); }
+    match /settings/{id} { allow read, write: if isAdmin(); }
+    match /fuelEconomyAlerts/{id} { allow read, write: if isAdmin(); }
+
+    // ---- fw_health ----
+    match /fw_health/{id} { allow read, write: if isAdmin(); }
+
+    // ---- driver-logged fuel/charge ----
+    // Readable for stats; writes are BLOCKED (no driver auth identity) and must move
+    // behind Cloud Functions before live lockdown. (Forms are currently unwired anyway.)
+    match /refuelRecords/{id} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+    match /chargeRecords/{id} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+
+    // ---- server-only ----
+    match /rateLimits/{id} { allow read, write: if false; }
+
+    // ---- default deny ----
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
