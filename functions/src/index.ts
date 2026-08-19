@@ -832,7 +832,10 @@ const ReportDefectSchema = z.object({
   urgency: z.string().min(1, 'Urgency is required'),
   location: optionalString,
   notes: optionalString,
-  photos: z.array(z.string()).optional(),
+  photos: z.preprocess(
+    (value) => value === null ? undefined : value,
+    z.array(z.string()).optional()
+  ),
   deviceId: optionalString,
 });
 
