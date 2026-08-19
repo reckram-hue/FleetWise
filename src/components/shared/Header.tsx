@@ -1,6 +1,7 @@
 import React, { useContext } from 'react';
 import { UserContext } from '../../contexts/UserContext';
-import { getDriverSession, clearDriverSession } from '../../store/session';
+import { getDriverSession, clearDriverSession, isSessionLocallyExpired } from '../../store/session';
+import { shiftStore } from '../../store/shift';
 import api from '../../services/firebaseApi';
 import { ShieldCheck, LogOut, ArrowLeft } from 'lucide-react';
 
@@ -13,16 +14,37 @@ const Header: React.FC<HeaderProps> = ({ title, onBack }) => {
   const { currentUser, setCurrentUser } = useContext(UserContext);
 
   const handleLogout = async () => {
-    // Revoke the session server-side, then clear local driver state.
     const session = getDriverSession();
-    if (session) {
+
+    if (session && !isSessionLocallyExpired(session)) {
+      // A valid driver session exists. Do NOT revoke it while an active shift remains,
+      // otherwise the shift would be left Active after the driver logs out.
+      try {
+        const activeShift = await api.getActiveShiftWithSession(session.driverId, session.sessionToken);
+        if (activeShift) {
+          alert('You have an active shift. Please end your shift before logging out.');
+          return;
+        }
+      } catch {
+        // Preserve the session rather than risk orphaning an active shift.
+        alert('FleetWise could not confirm your shift status. Please try again before logging out.');
+        return;
+      }
+
+      // No active shift — safe to revoke the session server-side.
       try {
         await api.driverLogout(session.driverId, session.sessionToken);
       } catch {
-        // Ignore remote failure — we clear local state regardless.
+        // Ignore remote failure — still clear local state below.
       }
       clearDriverSession();
+      shiftStore.clearActiveShift();
+    } else if (session) {
+      // Locally expired/invalid session — clear local state without server verification.
+      clearDriverSession();
+      shiftStore.clearActiveShift();
     }
+
     setCurrentUser(null);
   };
 
