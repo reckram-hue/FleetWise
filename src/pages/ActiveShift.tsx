@@ -66,8 +66,15 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       if (!pickupDone) {
         setInspecting('PICKUP');
       } else if (inspections.some(i => i.boundaryType === 'RETURN' && i.status === 'PENDING')) {
-        setReturnReason('VEHICLE_SWAP');
-        setInspecting('RETURN');
+        const ret = inspections.find(i => i.boundaryType === 'RETURN' && i.status === 'PENDING');
+        const intent = ret?.returnIntent;
+        if (intent === 'VEHICLE_SWAP' || intent === 'SHIFT_END') {
+          setReturnReason(intent);
+          setInspecting('RETURN');
+        } else {
+          // Fail closed — never guess the return intent.
+          throw new Error('Return inspection intent is missing or invalid. Please contact support.');
+        }
       } else {
         setInspecting(null);
       }
@@ -125,6 +132,29 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
     return () => clearInterval(interval);
   }, [activeShift]);
 
+  // ---- Begin a return (create the PENDING RETURN inspection with the chosen intent) ----
+  const startReturn = async (intent: 'VEHICLE_SWAP' | 'SHIFT_END') => {
+    if (!activeShift || !activeShift.assignmentId) return;
+    const session = getDriverSession();
+    if (!session) { setError('Your session has expired. Please log in again.'); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      // Persist the return intent server-side NOW so refresh/reopen cannot lose it.
+      await api.createVehicleInspection(activeShift.driverId, session.sessionToken, activeShift.assignmentId, 'RETURN', intent);
+      setReturnReason(intent);
+      setInspecting('RETURN');
+    } catch (e: any) {
+      const code = String(e?.code || '');
+      let msg = e?.message || 'Failed to start return inspection';
+      if (code.includes('failed-precondition')) { const m = msg.match(/failed-precondition: (.+)/); if (m) msg = m[1]; }
+      else if (code.includes('invalid-argument')) { const m = msg.match(/invalid-argument: (.+)/); if (m) msg = m[1]; }
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   // ---- Complete a PICKUP or RETURN inspection (called by VehicleInspectionForm) ----
   const handleInspectionCompleted = async (result: VehicleInspectionResult) => {
     if (!activeShift || !activeShift.assignmentId) return;
@@ -136,7 +166,16 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       return;
     }
 
-    const reason = returnReason || 'VEHICLE_SWAP';
+    // Use the server-authoritative return intent from the completed inspection response.
+    // Fall back to local state only defensively — never trust stale React state as truth.
+    const reason: 'VEHICLE_SWAP' | 'SHIFT_END' | undefined = result.returnIntent || returnReason || undefined;
+    if (!reason) {
+      setError('Return intent is missing. Please contact support.');
+      setSubmitting(false);
+      setInspecting(null);
+      await resolveAll();
+      return;
+    }
     const session = getDriverSession();
     if (!session) {
       setError('Your session has expired. Please log in again.');
@@ -332,6 +371,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
             driverId={activeShift.driverId}
             vehicle={currentVehicle}
             startOdo={activeShift.assignmentStartOdo}
+            returnIntent={returnReason ?? undefined}
             onCompleted={handleInspectionCompleted}
             onBack={inspecting === 'RETURN' ? () => { setInspecting(null); setError(null); } : undefined}
           />
@@ -425,11 +465,11 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
 
               {hasAssignment ? (
                 <>
-                  <button onClick={() => { setReturnReason('VEHICLE_SWAP'); setInspecting('RETURN'); setError(null); }} className="flex flex-col items-center justify-center p-4 bg-white border border-blue-200 rounded-xl shadow-sm hover:shadow-md hover:bg-blue-50 transition-all active:scale-95">
+                  <button onClick={() => startReturn('VEHICLE_SWAP')} className="flex flex-col items-center justify-center p-4 bg-white border border-blue-200 rounded-xl shadow-sm hover:shadow-md hover:bg-blue-50 transition-all active:scale-95">
                     <div className="bg-blue-50 p-3 rounded-full mb-2"><Car className="h-6 w-6 text-blue-600" /></div>
                     <span className="font-semibold text-blue-700">Return / Change Vehicle</span>
                   </button>
-                  <button onClick={() => { setReturnReason('SHIFT_END'); setInspecting('RETURN'); setError(null); }} className="flex flex-col items-center justify-center p-4 bg-white border border-red-200 rounded-xl shadow-sm hover:shadow-md hover:bg-red-50 transition-all active:scale-95 col-span-2">
+                  <button onClick={() => startReturn('SHIFT_END')} className="flex flex-col items-center justify-center p-4 bg-white border border-red-200 rounded-xl shadow-sm hover:shadow-md hover:bg-red-50 transition-all active:scale-95 col-span-2">
                     <div className="bg-red-100 p-3 rounded-full mb-2"><Flag className="h-6 w-6 text-red-600" /></div>
                     <span className="font-bold text-red-700">Return Vehicle & End Shift</span>
                   </button>

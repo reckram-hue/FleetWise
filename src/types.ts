@@ -251,6 +251,9 @@ export type VehicleInspectionStatus = 'PENDING' | 'COMPLETED';
 
 export type RetentionClass = 'ROUTINE' | 'EVIDENCE';
 
+// What the driver intends to do AFTER a RETURN inspection is completed.
+export type VehicleReturnIntent = 'VEHICLE_SWAP' | 'SHIFT_END';
+
 export interface VehicleInspection {
     id: string;
     orgId: string;
@@ -260,6 +263,8 @@ export interface VehicleInspection {
     vehicleId: string;
     boundaryType: VehicleInspectionBoundary;
     status: VehicleInspectionStatus;
+    // PICKUP -> null. RETURN -> 'VEHICLE_SWAP' or 'SHIFT_END' (server-authoritative).
+    returnIntent?: VehicleReturnIntent | null;
     capturedAt?: Date | null;
     completedAt?: Date | null;
     exteriorPhotoPath?: string | null;

@@ -255,6 +255,10 @@ const CreateVehicleInspectionSchema = z.object({
   sessionToken: z.string().min(1, 'Session token is required'),
   assignmentId: z.string().min(1, 'Assignment ID is required'),
   boundaryType: z.enum(['PICKUP', 'RETURN']),
+  returnIntent: z.preprocess(
+    (v) => (v === null || v === undefined ? undefined : v),
+    z.enum(['VEHICLE_SWAP', 'SHIFT_END']).optional()
+  ),
 });
 
 const CompleteVehicleInspectionSchema = z.object({
@@ -2332,6 +2336,9 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
 
     // WP7D1: a RETURN inspection must be COMPLETED before the assignment may be closed via
     // the driver's return flows (VEHICLE_SWAP / SHIFT_END). Cancellation is exempt.
+    // TODO(WP7D1A): before this RETURN-inspection enforcement is deployed to production,
+    // ensure driver-session callers cannot use transitionReason='CANCELLED' as an
+    // inspection-bypass path (e.g. a driver-supplied CANCELLED reason).
     if (transitionReason !== 'CANCELLED') {
       const returnInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN'));
       const returnInspectionDoc = await returnInspectionRef.get();
@@ -2506,8 +2513,13 @@ const ROUTINE_INSPECTION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const createVehicleInspection = functions.https.onCall(async (data, context) => {
   try {
     const validated = CreateVehicleInspectionSchema.parse(data);
-    const { driverId: reqDriverId, sessionToken, assignmentId, boundaryType } = validated;
+    const { driverId: reqDriverId, sessionToken, assignmentId, boundaryType, returnIntent } = validated;
     const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    // RETURN inspections require an explicit, server-validated return intent.
+    if (boundaryType === 'RETURN' && !returnIntent) {
+      throw new functions.https.HttpsError('invalid-argument', 'A return intent (VEHICLE_SWAP or SHIFT_END) is required for a RETURN inspection.');
+    }
 
     const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
     const assignmentDoc = await assignmentRef.get();
@@ -2537,6 +2549,8 @@ export const createVehicleInspection = functions.https.onCall(async (data, conte
       driverId,
       vehicleId: assignmentData.vehicleId,
       boundaryType,
+      // PICKUP -> null; RETURN -> the validated intent (first write wins; never overwritten).
+      returnIntent: boundaryType === 'PICKUP' ? null : returnIntent,
       status: 'PENDING',
       capturedAt: null,
       completedAt: null,

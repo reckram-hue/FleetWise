@@ -27,6 +27,7 @@ import {
   VehicleAssignmentTransitionReason,
   VehicleInspection,
   VehicleInspectionBoundary,
+  VehicleReturnIntent,
   DefectReport,
   DefectStatus,
   DefectCategory,
@@ -412,8 +413,10 @@ const api = {
    * Create (or return the existing) PENDING inspection for an ACTIVE assignment (WP7D1).
    * Deterministic doc ID guarantees at most one PICKUP and one RETURN per assignment.
    */
-  createVehicleInspection: async (driverId: string, sessionToken: string, assignmentId: string, boundaryType: VehicleInspectionBoundary): Promise<VehicleInspection> => {
-    const data = await callFunction<{ success: boolean; inspection: any }>('createVehicleInspection', { driverId, sessionToken, assignmentId, boundaryType });
+  createVehicleInspection: async (driverId: string, sessionToken: string, assignmentId: string, boundaryType: VehicleInspectionBoundary, returnIntent?: VehicleReturnIntent): Promise<VehicleInspection> => {
+    const payload: any = { driverId, sessionToken, assignmentId, boundaryType };
+    if (returnIntent) payload.returnIntent = returnIntent;
+    const data = await callFunction<{ success: boolean; inspection: any }>('createVehicleInspection', payload);
     return convertTimestamps(data.inspection) as VehicleInspection;
   },
 

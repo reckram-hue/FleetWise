@@ -2,6 +2,7 @@
 // Photo fields are local previews only (NOT uploaded). Cloud Storage arrives in WP7D2.
 import React, { useState } from 'react';
 import api from '../../services/firebaseApi';
+import { VehicleReturnIntent } from '../../types';
 import { getDriverSession } from '../../store/session';
 import Card from '../shared/Card';
 import { Camera, CheckCircle, AlertCircle, Loader, Car, Gauge, Battery } from 'lucide-react';
@@ -9,6 +10,7 @@ import { Camera, CheckCircle, AlertCircle, Loader, Car, Gauge, Battery } from 'l
 export interface VehicleInspectionResult {
   endOdometer?: number;
   endChargePercent?: number;
+  returnIntent?: VehicleReturnIntent;
 }
 
 interface VehicleInspectionFormProps {
@@ -17,12 +19,13 @@ interface VehicleInspectionFormProps {
   driverId: string;
   vehicle: { registration: string; alias?: string; vehicleType: 'ICE' | 'EV' };
   startOdo?: number;
+  returnIntent?: VehicleReturnIntent;
   onCompleted: (result: VehicleInspectionResult) => void;
   onBack?: () => void;
 }
 
 const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
-  boundaryType, assignmentId, driverId, vehicle, startOdo, onCompleted, onBack,
+  boundaryType, assignmentId, driverId, vehicle, startOdo, returnIntent, onCompleted, onBack,
 }) => {
   const [exteriorPreview, setExteriorPreview] = useState<string | null>(null);
   const [interiorPreview, setInteriorPreview] = useState<string | null>(null);
@@ -70,8 +73,8 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
       const session = getDriverSession();
       if (!session) throw new Error('Your session has expired. Please log in again.');
       // Idempotent create (deterministic doc ID) then complete.
-      const created = await api.createVehicleInspection(driverId, session.sessionToken, assignmentId, boundaryType);
-      await api.completeVehicleInspection({
+      const created = await api.createVehicleInspection(driverId, session.sessionToken, assignmentId, boundaryType, returnIntent);
+      const completed = await api.completeVehicleInspection({
         driverId,
         sessionToken: session.sessionToken,
         inspectionId: created.id,
@@ -80,7 +83,8 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         exteriorPhotoCaptured: true,
         interiorPhotoCaptured: true,
       });
-      onCompleted({ endOdometer, endChargePercent });
+      // Use the server-authoritative return intent (never stale local state).
+      onCompleted({ endOdometer, endChargePercent, returnIntent: completed.returnIntent ?? undefined });
     } catch (e: any) {
       const code = String(e?.code || '');
       let msg = e?.message || 'Failed to complete inspection.';
