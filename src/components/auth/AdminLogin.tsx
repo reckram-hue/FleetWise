@@ -27,18 +27,13 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onBack }) => {
       // Sign in with Firebase Auth
       const auth = getAuth();
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const firebaseUser = userCredential.user;
 
-      // Get user details from Firestore
-      const users = await api.getUsers();
-      const adminUser = users.find(u => u.email === firebaseUser.email);
+      // Get admin profile via secure callable (uses context.auth.uid)
+      // No need to download all users — callable reads users/{uid} directly
+      const adminUser = await api.getAdminProfile();
 
       if (!adminUser) {
-        throw new Error('User profile not found');
-      }
-
-      if (adminUser.role !== 'admin') {
-        throw new Error('Access denied. Admin privileges required.');
+        throw new Error('Admin profile not found');
       }
 
       onLogin(adminUser);

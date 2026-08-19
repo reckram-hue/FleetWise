@@ -1,7 +1,16 @@
 rules_version = '2';
 // PROPOSED FleetWise Firestore rules — least privilege, default deny.
-// NOT deployed. This is a design/local-validation artifact for WP5B.
-// Cloud Functions (Admin SDK) bypass these rules, so the bridge keeps working.
+// NOT deployed. This is a design/local-validation artifact for WP5B/WP5C.
+// Cloud Functions (Admin SDK) bypass these rules, so the secure bridge keeps working.
+//
+// WP5C STATUS: All user/defect operations are now behind secure callable functions.
+// The browser no longer needs direct reads/writes to the users collection.
+// Defect creation by drivers goes through the reportDefect callable (PIN-verified).
+// Admin CRUD goes through createDriver/updateDriver/deleteDriver/updateEmploymentStatus callables.
+// Admin creation goes through createAdminUser callable (Admin Auth server-side).
+// Safe user listing for driver-selection uses listDriversSafe callable.
+// Admin user listing uses listUsersAdmin callable.
+// Admin profile uses getAdminProfile callable.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -15,7 +24,12 @@ service cloud.firestore {
 
     // ---- users ----
     // DENY all direct client access. Firestore rules cannot redact fields, and the
-    // documents contain pinHash. User list/create/update must move to Cloud Functions.
+    // documents contain pinHash. All user operations go through Cloud Functions:
+    //   - listDriversSafe (public, safe fields only)
+    //   - getAdminProfile (auth required)
+    //   - listUsersAdmin (admin only)
+    //   - createDriver, updateDriver, deleteDriver, updateEmploymentStatus (admin only)
+    //   - createAdminUser (admin only)
     match /users/{userId} {
       allow read, write: if false;
     }
@@ -35,8 +49,9 @@ service cloud.firestore {
     }
 
     // ---- defects ----
-    // Public read; admin update/delete. Driver create is BLOCKED (no auth identity)
-    // and must move behind a Cloud Function before live lockdown.
+    // Public read for driver defect visibility.
+    // Direct create is BLOCKED — driver defect creation goes through reportDefect callable (PIN-verified).
+    // Admin can update/delete defects directly (status changes, assignments, resolution).
     match /defects/{defectId} {
       allow read: if true;
       allow create: if false;
@@ -58,7 +73,8 @@ service cloud.firestore {
 
     // ---- driver-logged fuel/charge ----
     // Readable for stats; writes are BLOCKED (no driver auth identity) and must move
-    // behind Cloud Functions before live lockdown. (Forms are currently unwired anyway.)
+    // behind Cloud Functions before live lockdown. (Forms are currently unwired.)
+    // NOT implemented in WP5C — deferred to dedicated energy/fuel work package.
     match /refuelRecords/{id} {
       allow read: if true;
       allow create, update, delete: if false;

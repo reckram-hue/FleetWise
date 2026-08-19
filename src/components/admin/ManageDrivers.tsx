@@ -4,7 +4,7 @@ import { User, UserRole, AppSettings, EmploymentStatus } from '../../types';
 import api from '../../services/firebaseApi';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
-import { UserPlus, Edit, Trash2, X, Upload, UserCheck, UserX, MessageCircle, Copy, Key, Search } from 'lucide-react';
+import { UserPlus, Edit, Archive, X, Upload, UserCheck, UserX, MessageCircle, Copy, Key, Search } from 'lucide-react';
 
 const emptyDriver: Omit<User, 'id' | 'role'> = {
     firstName: '',
@@ -39,6 +39,8 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
     const [newlyCreatedDriver, setNewlyCreatedDriver] = useState<User | null>(null);
     const [showSetPinModal, setShowSetPinModal] = useState(false);
     const [selectedDriverForPin, setSelectedDriverForPin] = useState<User | null>(null);
+    const [showArchiveModal, setShowArchiveModal] = useState(false);
+    const [selectedDriverForArchive, setSelectedDriverForArchive] = useState<User | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
 
     const fetchDrivers = async () => {
@@ -124,24 +126,9 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
         setShowEmploymentStatusModal(true);
     };
 
-    const handleDeleteClick = async (driver: User) => {
-        try {
-            const validation = await api.canDeleteDriver(driver.id);
-
-            if (!validation.canDelete) {
-                alert(`Cannot delete driver ${driver.firstName} ${driver.surname}:\n\n${validation.reasons.join('\n')}\n\nConsider changing their employment status to Inactive or Terminated instead.`);
-                return;
-            }
-
-            if (window.confirm(`Are you sure you want to permanently delete driver ${driver.firstName} ${driver.surname}?\n\nThis action cannot be undone and will remove all their data from the system.`)) {
-                await api.deleteDriver(driver.id);
-                fetchDrivers();
-                alert('Driver deleted successfully.');
-            }
-        } catch (error) {
-            console.error('Failed to delete driver:', error);
-            alert('Error deleting driver: ' + (error as Error).message);
-        }
+    const handleArchiveClick = (driver: User) => {
+        setSelectedDriverForArchive(driver);
+        setShowArchiveModal(true);
     };
 
     const getExpiryStatus = (expiryDate?: string) => {
@@ -451,8 +438,8 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
                                                         <button onClick={() => handleSetPinClick(driver)} className="text-green-600 hover:text-green-900" title="Set/Reset PIN">
                                                             <Key className="h-4 w-4" />
                                                         </button>
-                                                        <button onClick={() => handleDeleteClick(driver)} className="text-red-600 hover:text-red-900" title="Delete Driver">
-                                                            <Trash2 className="h-4 w-4" />
+                                                        <button onClick={() => handleArchiveClick(driver)} className="text-orange-600 hover:text-orange-900" title="Archive Driver">
+                                                            <Archive className="h-4 w-4" />
                                                         </button>
                                                     </div>
                                                 </td>
@@ -504,6 +491,22 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
                             setShowSetPinModal(false);
                             setSelectedDriverForPin(null);
                             alert('PIN set successfully!');
+                        }}
+                    />
+                )}
+
+                {/* Archive Driver Modal */}
+                {showArchiveModal && selectedDriverForArchive && (
+                    <ArchiveDriverModal
+                        driver={selectedDriverForArchive}
+                        onClose={() => {
+                            setShowArchiveModal(false);
+                            setSelectedDriverForArchive(null);
+                        }}
+                        onSuccess={() => {
+                            setShowArchiveModal(false);
+                            setSelectedDriverForArchive(null);
+                            fetchDrivers();
                         }}
                     />
                 )}
@@ -858,6 +861,236 @@ const TelegramLinkModal = ({
                         <strong>Note:</strong> The driver needs to click this link and follow the Telegram bot instructions to complete setup.
                     </p>
                 </div>
+            </Card>
+        </div>
+    );
+};
+
+// Archive Driver Modal Component
+const RETENTION_PRESETS = [
+    { months: 6,   label: '6 months' },
+    { months: 12,  label: '1 year (12 months)' },
+    { months: 24,  label: '2 years (24 months)' },
+    { months: 36,  label: '3 years (36 months)' },
+    { months: 60,  label: '5 years (60 months)' },
+    { months: 84,  label: '7 years (84 months)' },
+    { months: 120, label: '10 years (120 months)' },
+    { months: 0,   label: 'Custom...' },
+];
+
+const ArchiveDriverModal = ({
+    driver,
+    onClose,
+    onSuccess,
+}: {
+    driver: User;
+    onClose: () => void;
+    onSuccess: () => void;
+}) => {
+    const [inactiveReason, setInactiveReason] = useState('');
+    const [presetMonths, setPresetMonths] = useState<number>(12);
+    const [customMonths, setCustomMonths] = useState<string>('');
+    const [retentionReason, setRetentionReason] = useState('');
+    const [legalHold, setLegalHold] = useState(false);
+    const [legalHoldReason, setLegalHoldReason] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [serverError, setServerError] = useState('');
+
+    const isCustom = presetMonths === 0;
+
+    const effectiveMonths = (): number | null => {
+        if (!isCustom) return presetMonths;
+        const n = parseInt(customMonths, 10);
+        return Number.isInteger(n) && n > 0 ? n : null;
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setServerError('');
+
+        if (legalHold && !legalHoldReason.trim()) {
+            setServerError('Legal hold reason is required when a legal hold is applied.');
+            return;
+        }
+
+        const months = effectiveMonths();
+        if (!months) {
+            setServerError('Please enter a valid number of months (must be a positive whole number).');
+            return;
+        }
+
+        setIsSubmitting(true);
+        try {
+            const result = await api.archiveDriver({
+                driverId: driver.id,
+                inactiveReason: inactiveReason.trim(),
+                retentionPeriodMonths: months,
+                retentionReason: retentionReason.trim() || undefined,
+                legalHold,
+                legalHoldReason: legalHold ? legalHoldReason.trim() : undefined,
+            });
+            const holdNote = legalHold ? ' — legal hold applied, no purge eligibility while hold is active' : '';
+            alert(`Driver archived. Record retained until ${result.archiveUntil}${holdNote}.`);
+            onSuccess();
+        } catch (error: any) {
+            console.error('Failed to archive driver:', error);
+            setServerError(error.message || 'Failed to archive driver. Please try again.');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    const submitDisabled = isSubmitting
+        || !inactiveReason.trim()
+        || (isCustom && !effectiveMonths())
+        || (legalHold && !legalHoldReason.trim());
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
+            <Card className="w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                        <Archive className="text-orange-600" />
+                        Archive Driver
+                    </h3>
+                    <button onClick={onClose} className="p-1 rounded-full hover:bg-gray-200">
+                        <X size={20} />
+                    </button>
+                </div>
+
+                <div className="mb-4 p-3 bg-orange-50 border-l-4 border-orange-400 rounded">
+                    <p className="text-sm text-orange-800">
+                        <strong>{driver.firstName} {driver.surname}</strong> will be set to <strong>Inactive</strong>.
+                        Their record, shift history, and all associated data will be fully preserved.
+                        This action does not delete any data.
+                    </p>
+                </div>
+
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Reason for Inactivation <span className="text-red-500">*</span>
+                        </label>
+                        <textarea
+                            value={inactiveReason}
+                            onChange={(e) => setInactiveReason(e.target.value)}
+                            placeholder="e.g. Resignation, contract end, redundancy..."
+                            className="w-full p-2 border border-gray-300 rounded-md text-sm"
+                            rows={3}
+                            required
+                        />
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Record Retention Period <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                            value={presetMonths}
+                            onChange={(e) => {
+                                setPresetMonths(Number(e.target.value));
+                                setCustomMonths('');
+                            }}
+                            className="w-full p-2 border border-gray-300 rounded-md text-sm"
+                        >
+                            {RETENTION_PRESETS.map(opt => (
+                                <option key={opt.months === 0 ? 'custom' : opt.months} value={opt.months}>
+                                    {opt.label}
+                                </option>
+                            ))}
+                        </select>
+                        {isCustom && (
+                            <div className="mt-2 flex items-center gap-2">
+                                <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={customMonths}
+                                    onChange={(e) => setCustomMonths(e.target.value)}
+                                    placeholder="Number of months"
+                                    className="w-40 p-2 border border-gray-300 rounded-md text-sm"
+                                    required={isCustom}
+                                    autoFocus
+                                />
+                                <span className="text-sm text-gray-600">months</span>
+                            </div>
+                        )}
+                        <p className="text-xs text-gray-500 mt-1">
+                            Calculated from today. A legal hold (below) overrides this — no purge eligibility while the hold is active regardless of this date.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Retention Reason <span className="text-gray-400">(optional)</span>
+                        </label>
+                        <input
+                            type="text"
+                            value={retentionReason}
+                            onChange={(e) => setRetentionReason(e.target.value)}
+                            placeholder="e.g. Statutory requirement, CCMA pending, insurance claim..."
+                            className="w-full p-2 border border-gray-300 rounded-md text-sm"
+                        />
+                    </div>
+
+                    <div className="border border-gray-200 rounded-md p-3 space-y-3">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={legalHold}
+                                onChange={(e) => {
+                                    setLegalHold(e.target.checked);
+                                    if (!e.target.checked) setLegalHoldReason('');
+                                }}
+                                className="h-4 w-4 text-orange-600 border-gray-300 rounded"
+                            />
+                            <span className="text-sm font-medium text-gray-700">Apply Legal / Disciplinary Hold</span>
+                        </label>
+                        <p className="text-xs text-gray-500">
+                            Use for pending disciplinary proceedings, CCMA/labour matters, litigation, insurance or accident investigations.
+                            While active, the record is not eligible for permanent purge regardless of the retention period above.
+                        </p>
+                        {legalHold && (
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Legal Hold Reason <span className="text-red-500">*</span>
+                                </label>
+                                <textarea
+                                    value={legalHoldReason}
+                                    onChange={(e) => setLegalHoldReason(e.target.value)}
+                                    placeholder="e.g. CCMA referral dated 2026-08-01, case ref 123/2026..."
+                                    className="w-full p-2 border border-gray-300 rounded-md text-sm"
+                                    rows={2}
+                                    required={legalHold}
+                                />
+                            </div>
+                        )}
+                    </div>
+
+                    {serverError && (
+                        <div className="bg-red-50 border-l-4 border-red-400 p-3 rounded">
+                            <p className="text-sm text-red-700">{serverError}</p>
+                        </div>
+                    )}
+
+                    <div className="flex justify-end space-x-3 pt-4">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            disabled={isSubmitting}
+                            className="bg-gray-200 text-gray-800 font-bold py-2 px-4 rounded-lg hover:bg-gray-300 disabled:opacity-50"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={submitDisabled}
+                            className="bg-orange-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-orange-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                        >
+                            {isSubmitting ? 'Archiving...' : 'Archive Driver'}
+                        </button>
+                    </div>
+                </form>
             </Card>
         </div>
     );

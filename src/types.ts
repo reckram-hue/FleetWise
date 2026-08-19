@@ -27,6 +27,17 @@ export interface User {
     employmentEndDate?: string; // YYYY-MM-DD when employment ended
     pinHash?: string;
     pinLastUpdated?: any; // Timestamp
+    // Archive / retention fields (set by archiveDriver callable)
+    inactiveAt?: Date;
+    inactiveBy?: string;
+    inactiveReason?: string;
+    retentionPeriodMonths?: number;
+    retentionReason?: string;
+    archiveUntil?: string; // YYYY-MM-DD — earliest date a permanent purge could be considered
+    legalHold?: boolean;
+    legalHoldReason?: string;
+    // Seed / test data marker — never set on real driver records
+    isTestData?: boolean;
 }
 
 export enum VehicleType {
@@ -178,6 +189,8 @@ export interface Vehicle {
     lastLicenseRenewalDate?: string; // YYYY-MM-DD when license was last renewed
     licenseNumber?: string; // License/registration number for tracking
     licenseDiscNumber?: string; // Licence disc number (renewal disc)
+    // Seed / test data marker — never set on real vehicle records
+    isTestData?: boolean;
 }
 
 export enum ShiftStatus {

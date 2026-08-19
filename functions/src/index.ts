@@ -711,3 +711,640 @@ export const getActiveShift = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('internal', 'Failed to get active shift: ' + error.message);
   }
 });
+
+// =============================================================================
+// ADMIN AUTHORIZATION HELPER
+// =============================================================================
+
+/**
+ * Require that the caller is an authenticated admin.
+ * Reads users/{uid} and confirms role == 'admin'.
+ * Returns the admin user data for audit logging.
+ * Throws HttpsError('unauthenticated' | 'permission-denied') otherwise.
+ */
+async function requireAdmin(context: functions.https.CallableContext): Promise<{ uid: string; data: FirebaseFirestore.DocumentData }> {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+  }
+
+  const uid = context.auth.uid;
+  const userDoc = await db.collection('users').doc(uid).get();
+
+  if (!userDoc.exists) {
+    throw new functions.https.HttpsError('permission-denied', 'User profile not found');
+  }
+
+  const userData = userDoc.data()!;
+  if (userData.role !== 'admin') {
+    throw new functions.https.HttpsError('permission-denied', 'Admin privileges required');
+  }
+
+  return { uid, data: userData };
+}
+
+/**
+ * Strip pinHash and other server-only fields from a user document.
+ * Returns a safe copy for client transmission.
+ */
+function stripSensitiveFields(userData: FirebaseFirestore.DocumentData, id: string): Record<string, any> {
+  const { pinHash, ...safe } = userData;
+  return { id, ...safe };
+}
+
+/**
+ * Strip to only driver-selection-safe fields.
+ * Returns minimal data for the driver selection screen.
+ */
+function stripToDriverSafe(userData: FirebaseFirestore.DocumentData, id: string): Record<string, any> {
+  return {
+    id,
+    firstName: userData.firstName || '',
+    surname: userData.surname || '',
+    area: userData.area || '',
+    department: userData.department || '',
+    employmentStatus: userData.employmentStatus || 'Active',
+    role: userData.role || 'driver',
+  };
+}
+
+// =============================================================================
+// NEW VALIDATION SCHEMAS
+// =============================================================================
+
+const CreateDriverSchema = z.object({
+  firstName: z.string().min(1, 'First name is required'),
+  surname: z.string().min(1, 'Surname is required'),
+  email: z.string().email('Valid email required').optional().or(z.literal('')),
+  idNumber: z.string().optional().or(z.literal('')),
+  driversLicenceNumber: z.string().optional().or(z.literal('')),
+  driversLicenceExpiry: z.string().optional().or(z.literal('')),
+  contactNumber: z.string().optional().or(z.literal('')),
+  driversLicenceImageUrl: z.string().optional().or(z.literal('')),
+  area: z.string().optional().or(z.literal('')),
+  department: z.string().optional().or(z.literal('')),
+  employmentStatus: z.enum(['Active', 'Inactive', 'Terminated']).optional(),
+});
+
+const UpdateDriverSchema = z.object({
+  id: z.string().min(1, 'Driver ID is required'),
+  firstName: z.string().min(1).optional(),
+  surname: z.string().min(1).optional(),
+  email: z.string().optional(),
+  idNumber: z.string().optional(),
+  driversLicenceNumber: z.string().optional(),
+  driversLicenceExpiry: z.string().optional(),
+  contactNumber: z.string().optional(),
+  driversLicenceImageUrl: z.string().optional(),
+  area: z.string().optional(),
+  department: z.string().optional(),
+  employmentStatus: z.enum(['Active', 'Inactive', 'Terminated']).optional(),
+  employmentEndDate: z.string().optional().nullable(),
+}).passthrough(); // Allow additional fields from existing schema
+
+const UpdateEmploymentStatusSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  status: z.enum(['Active', 'Inactive', 'Terminated']),
+  endDate: z.string().optional(),
+});
+
+const CreateAdminSchema = z.object({
+  firstName: z.string().min(1, 'First name is required'),
+  surname: z.string().min(1, 'Surname is required'),
+  email: z.string().email('Valid email required'),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+});
+
+const ArchiveDriverSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  inactiveReason: z.string().min(1, 'Reason for inactivation is required'),
+  retentionPeriodMonths: z.number().int().min(1).max(999).optional().default(12),
+  retentionReason: z.string().optional(),
+  legalHold: z.boolean().optional().default(false),
+  legalHoldReason: z.string().optional(),
+});
+
+const ReportDefectSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  pin: z.string().regex(/^\d{4}$/, 'PIN must be exactly 4 digits'),
+  vehicleId: z.string().min(1, 'Vehicle ID is required'),
+  category: z.string().min(1, 'Category is required'),
+  description: z.string().min(1, 'Description is required'),
+  urgency: z.string().min(1, 'Urgency is required'),
+  location: z.string().optional(),
+  notes: z.string().optional(),
+  photos: z.array(z.string()).optional(),
+  deviceId: optionalString,
+});
+
+// =============================================================================
+// USER LISTING / PROFILE CALLABLES
+// =============================================================================
+
+/**
+ * List drivers with only safe fields for the driver-selection screen.
+ * No authentication required (drivers are PIN-authenticated, not Firebase Auth).
+ * Returns: id, firstName, surname, area, department, employmentStatus, role
+ * NEVER returns: pinHash, idNumber, driversLicenceImageUrl, email, contactNumber
+ */
+export const listDriversSafe = functions.https.onCall(async (_data, _context) => {
+  try {
+    const snapshot = await db.collection('users').get();
+    const drivers = snapshot.docs
+      .filter(doc => {
+        const data = doc.data();
+        return data.role === 'driver' && data.employmentStatus === 'Active';
+      })
+      .map(doc => stripToDriverSafe(doc.data(), doc.id));
+
+    return { success: true, users: drivers };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error('Error in listDriversSafe:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to list drivers');
+  }
+});
+
+/**
+ * Get the authenticated admin's profile.
+ * Requires context.auth. Reads users/{uid}, verifies role == 'admin'.
+ * Returns all fields except pinHash.
+ */
+export const getAdminProfile = functions.https.onCall(async (_data, context) => {
+  try {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+    }
+
+    const uid = context.auth.uid;
+    const userDoc = await db.collection('users').doc(uid).get();
+
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Admin profile not found');
+    }
+
+    const userData = userDoc.data()!;
+    if (userData.role !== 'admin') {
+      throw new functions.https.HttpsError('permission-denied', 'Not an admin account');
+    }
+
+    return { success: true, user: stripSensitiveFields(userData, uid) };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error('Error in getAdminProfile:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to get admin profile');
+  }
+});
+
+/**
+ * List all users for admin screens. Requires admin authentication.
+ * Returns all fields EXCEPT pinHash.
+ * Used by ManageDrivers, AdminDashboard, Reports, ManageDefects, ManageIncidents, Settings.
+ */
+export const listUsersAdmin = functions.https.onCall(async (_data, context) => {
+  try {
+    await requireAdmin(context);
+
+    const snapshot = await db.collection('users').get();
+    const users = snapshot.docs.map(doc => stripSensitiveFields(doc.data(), doc.id));
+
+    return { success: true, users };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error('Error in listUsersAdmin:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to list users');
+  }
+});
+
+// =============================================================================
+// ADMIN DRIVER CRUD CALLABLES
+// =============================================================================
+
+/**
+ * Create a new driver. Admin-only.
+ * Creates a users document with role: 'driver'.
+ * Does NOT set pinHash — admin must use adminSetDriverPin separately.
+ */
+export const createDriver = functions.https.onCall(async (data, context) => {
+  try {
+    const { uid: adminUid } = await requireAdmin(context);
+    const validated = CreateDriverSchema.parse(data);
+
+    const newDriver: Record<string, any> = {
+      ...validated,
+      role: 'driver',
+      employmentStatus: validated.employmentStatus || 'Active',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdBy: adminUid,
+    };
+
+    // Never allow pinHash to be set through this callable
+    delete newDriver.pinHash;
+
+    const docRef = await db.collection('users').add(newDriver);
+
+    return {
+      success: true,
+      driverId: docRef.id,
+      message: 'Driver created successfully. Set their PIN using the Set PIN function.',
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in createDriver:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to create driver: ' + error.message);
+  }
+});
+
+/**
+ * Update a driver's profile. Admin-only.
+ * Patch update — only modifies fields provided.
+ * CANNOT set pinHash — strips it from payload.
+ */
+export const updateDriver = functions.https.onCall(async (data, context) => {
+  try {
+    const { uid: adminUid } = await requireAdmin(context);
+    const validated = UpdateDriverSchema.parse(data);
+
+    const { id: driverId, ...updateFields } = validated;
+
+    // Verify driver exists
+    const driverRef = db.collection('users').doc(driverId);
+    const driverDoc = await driverRef.get();
+
+    if (!driverDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Driver not found');
+    }
+
+    // Never allow pinHash to be set through this callable
+    delete (updateFields as any).pinHash;
+    delete (updateFields as any).pinLastUpdated;
+    delete (updateFields as any).pinLastUpdatedBy;
+
+    // Clean undefined values (Firestore does not accept undefined)
+    const cleanedUpdate: Record<string, any> = {};
+    for (const [key, value] of Object.entries(updateFields)) {
+      if (value !== undefined) {
+        cleanedUpdate[key] = value;
+      }
+    }
+
+    cleanedUpdate.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    cleanedUpdate.updatedBy = adminUid;
+
+    await driverRef.update(cleanedUpdate);
+
+    // Return the updated driver (minus pinHash)
+    const updatedDoc = await driverRef.get();
+    return {
+      success: true,
+      user: stripSensitiveFields(updatedDoc.data()!, driverId),
+      message: 'Driver updated successfully',
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in updateDriver:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to update driver: ' + error.message);
+  }
+});
+
+/**
+ * Archive (inactivate) a driver. Admin-only.
+ *
+ * Business rule: driver records are NEVER physically deleted as a normal admin action.
+ * This callable sets employmentStatus = 'Inactive', records the inactivation metadata,
+ * and applies the admin-specified retention period and optional legal/disciplinary hold.
+ *
+ * Permanent purge is a separate future privileged process that may only run after
+ * retention eligibility (archiveUntil) is reached AND legalHold is false.
+ *
+ * Fields written:
+ *   employmentStatus    → 'Inactive'
+ *   employmentEndDate   → today (YYYY-MM-DD)
+ *   inactiveAt          → server timestamp
+ *   inactiveBy          → admin UID
+ *   inactiveReason      → admin-supplied reason (required)
+ *   retentionPeriodMonths → months to retain (default 84 = 7 years)
+ *   retentionReason     → why this retention period applies (optional)
+ *   archiveUntil        → YYYY-MM-DD (inactiveAt + retentionPeriodMonths)
+ *   legalHold           → boolean (default false)
+ *   legalHoldReason     → required when legalHold = true
+ */
+export const archiveDriver = functions.https.onCall(async (data, context) => {
+  try {
+    const { uid: adminUid } = await requireAdmin(context);
+    const validated = ArchiveDriverSchema.parse(data);
+    const {
+      driverId,
+      inactiveReason,
+      retentionPeriodMonths,
+      retentionReason,
+      legalHold,
+      legalHoldReason,
+    } = validated;
+
+    if (legalHold && !legalHoldReason?.trim()) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'Legal hold reason is required when a legal hold is applied.'
+      );
+    }
+
+    // Verify driver exists
+    const driverRef = db.collection('users').doc(driverId);
+    const driverDoc = await driverRef.get();
+
+    if (!driverDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Driver not found');
+    }
+
+    const driverData = driverDoc.data()!;
+
+    // Block if driver has an active shift — end the shift first
+    if (driverData.activeShiftId) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Driver has an active shift. End the shift before archiving the driver.'
+      );
+    }
+
+    const activeShifts = await db.collection('shifts')
+      .where('driverId', '==', driverId)
+      .get();
+    const hasActive = activeShifts.docs.some(d => d.data().status === 'Active');
+    if (hasActive) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Driver has an active shift. End the shift before archiving the driver.'
+      );
+    }
+
+    // Compute archiveUntil date
+    const today = new Date();
+    const archiveUntilDate = new Date(today);
+    archiveUntilDate.setMonth(archiveUntilDate.getMonth() + retentionPeriodMonths);
+    const archiveUntil = archiveUntilDate.toISOString().split('T')[0]; // YYYY-MM-DD
+
+    const updatePayload: Record<string, any> = {
+      employmentStatus: 'Inactive',
+      employmentEndDate: today.toISOString().split('T')[0],
+      inactiveAt: admin.firestore.FieldValue.serverTimestamp(),
+      inactiveBy: adminUid,
+      inactiveReason,
+      retentionPeriodMonths,
+      archiveUntil,
+      legalHold: legalHold ?? false,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedBy: adminUid,
+    };
+
+    if (retentionReason) updatePayload.retentionReason = retentionReason;
+    if (legalHold && legalHoldReason) updatePayload.legalHoldReason = legalHoldReason;
+
+    await driverRef.update(updatePayload);
+
+    return {
+      success: true,
+      archiveUntil,
+      message: `Driver archived. Record retained until ${archiveUntil}${legalHold ? ' (legal hold active)' : ''}.`,
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in archiveDriver:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to archive driver: ' + error.message);
+  }
+});
+
+/**
+ * Update a driver's employment status. Admin-only.
+ */
+export const updateEmploymentStatus = functions.https.onCall(async (data, context) => {
+  try {
+    const { uid: adminUid } = await requireAdmin(context);
+    const validated = UpdateEmploymentStatusSchema.parse(data);
+    const { driverId, status, endDate } = validated;
+
+    // Verify driver exists
+    const driverRef = db.collection('users').doc(driverId);
+    const driverDoc = await driverRef.get();
+
+    if (!driverDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Driver not found');
+    }
+
+    const updateData: Record<string, any> = {
+      employmentStatus: status,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedBy: adminUid,
+    };
+
+    if (endDate) {
+      updateData.employmentEndDate = endDate;
+    } else if (status === 'Active') {
+      // Clear end date when reactivating
+      updateData.employmentEndDate = admin.firestore.FieldValue.delete();
+    }
+
+    await driverRef.update(updateData);
+
+    // Return updated user
+    const updatedDoc = await driverRef.get();
+    return {
+      success: true,
+      user: stripSensitiveFields(updatedDoc.data()!, driverId),
+      message: `Employment status updated to ${status}`,
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in updateEmploymentStatus:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to update employment status: ' + error.message);
+  }
+});
+
+// =============================================================================
+// ADMIN USER CREATION
+// =============================================================================
+
+/**
+ * Create a new admin user. Requires an existing authenticated admin.
+ * Creates a Firebase Auth account AND a matching users/{uid} document.
+ * Uses Firebase Admin Auth (server-side) — no secondary app hack needed.
+ */
+export const createAdminUser = functions.https.onCall(async (data, context) => {
+  try {
+    await requireAdmin(context);
+    const validated = CreateAdminSchema.parse(data);
+    const { firstName, surname, email, password } = validated;
+
+    // Create Firebase Auth user via Admin SDK
+    const authUser = await admin.auth().createUser({
+      email,
+      password,
+      displayName: `${firstName} ${surname}`,
+    });
+
+    // Create matching Firestore document
+    const userData = {
+      firstName,
+      surname,
+      email,
+      role: 'admin',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    await db.collection('users').doc(authUser.uid).set(userData);
+
+    return {
+      success: true,
+      userId: authUser.uid,
+      message: 'Admin user created successfully',
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+
+    // Handle Firebase Auth specific errors
+    if (error.code === 'auth/email-already-exists') {
+      throw new functions.https.HttpsError('already-exists', 'An account with this email already exists');
+    }
+    if (error.code === 'auth/invalid-email') {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid email address');
+    }
+    if (error.code === 'auth/weak-password') {
+      throw new functions.https.HttpsError('invalid-argument', 'Password is too weak');
+    }
+
+    console.error('Error in createAdminUser:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to create admin user: ' + error.message);
+  }
+});
+
+// =============================================================================
+// DEFECT REPORTING (PIN-VERIFIED)
+// =============================================================================
+
+/**
+ * Report a vehicle defect. Requires PIN verification since drivers
+ * have no Firebase Auth identity.
+ * 
+ * Security model:
+ * - Validates driverId + pin server-side (same pattern as validateDriverPin)
+ * - Rate-limits by driverId
+ * - Only then creates the defect document
+ */
+export const reportDefect = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = ReportDefectSchema.parse(data);
+    const {
+      driverId,
+      pin,
+      vehicleId,
+      category,
+      description,
+      urgency,
+      location,
+      notes,
+      photos,
+      deviceId = 'unknown',
+    } = validated;
+
+    // Rate limit
+    await checkRateLimit(driverId, deviceId);
+
+    // Verify driver exists and is active
+    const driverDoc = await db.collection('users').doc(driverId).get();
+    if (!driverDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Driver not found');
+    }
+
+    const driverData = driverDoc.data()!;
+    if (driverData.employmentStatus !== 'Active') {
+      throw new functions.https.HttpsError('failed-precondition', 'Driver is not active');
+    }
+
+    // Verify PIN
+    const storedHash = driverData.pinHash;
+    if (!storedHash) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Driver does not have a PIN set. Please contact admin.'
+      );
+    }
+
+    const pinValid = await bcrypt.compare(pin, storedHash);
+    if (!pinValid) {
+      throw new functions.https.HttpsError('permission-denied', 'Invalid PIN');
+    }
+
+    // Clear rate limit on successful verification
+    await clearRateLimit(driverId, deviceId);
+
+    // Verify vehicle exists
+    const vehicleDoc = await db.collection('vehicles').doc(vehicleId).get();
+    if (!vehicleDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle not found');
+    }
+
+    // Create defect document
+    const defectData: Record<string, any> = {
+      vehicleId,
+      driverId,
+      category,
+      description,
+      urgency,
+      status: 'Open',
+      isVisibleToDriver: true,
+      reportedDateTime: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    if (location) defectData.location = location;
+    if (notes) defectData.notes = notes;
+    if (photos && photos.length > 0) defectData.photos = photos;
+
+    const defectRef = await db.collection('defects').add(defectData);
+
+    return {
+      success: true,
+      defectId: defectRef.id,
+      message: 'Defect report submitted successfully',
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in reportDefect:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to report defect: ' + error.message);
+  }
+});

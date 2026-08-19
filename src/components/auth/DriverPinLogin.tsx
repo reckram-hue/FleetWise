@@ -2,7 +2,7 @@
 // PIN-based login for drivers
 
 import React, { useState, useEffect } from 'react';
-import { User, UserRole, EmploymentStatus } from '../../types';
+import { User } from '../../types';
 import api from '../../services/firebaseApi';
 import { ShieldCheck, User as UserIcon, Lock, AlertCircle, Loader } from 'lucide-react';
 import Card from '../shared/Card';
@@ -27,14 +27,13 @@ const DriverPinLogin: React.FC<DriverPinLoginProps> = ({ onLogin, onAdminLogin }
     driver.area?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Load active drivers on mount
+  // Load active drivers on mount (safe listing — no PII or pinHash)
   useEffect(() => {
     const loadDrivers = async () => {
       try {
-        const users = await api.getUsers();
-        const activeDrivers = users.filter(
-          u => u.role === UserRole.Driver && u.employmentStatus === EmploymentStatus.Active
-        );
+        // listDriversSafe returns only: id, firstName, surname, area, department, employmentStatus, role
+        // Never returns pinHash, idNumber, email, contactNumber, driversLicenceImageUrl
+        const activeDrivers = await api.listDriversSafe();
         setDrivers(activeDrivers);
       } catch (err) {
         console.error('Failed to load drivers:', err);

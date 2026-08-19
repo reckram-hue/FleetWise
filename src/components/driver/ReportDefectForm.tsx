@@ -26,6 +26,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
     const [loading, setLoading] = useState(false);
     const [showSimilar, setShowSimilar] = useState(false);
     const [photos, setPhotos] = useState<string[]>([]);
+    const [pinInput, setPinInput] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState({
@@ -127,12 +128,15 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
                 urgency: formData.urgency,
                 location: formData.location || undefined,
                 notes: formData.notes || undefined,
-                photos: photos.length > 0 ? photos : undefined
+                photos: photos.length > 0 ? photos : undefined,
+                pin: pinInput || undefined,
             });
 
             alert('Defect report submitted successfully! The maintenance team will review it shortly.');
+            setPinInput('');
             onBack();
         } catch (err) {
+            setPinInput('');
             alert('Failed to submit defect report. Please try again.');
         } finally {
             setLoading(false);
@@ -370,12 +374,29 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
                                     </div>
                                 </div>
 
+                                {/* PIN Confirmation */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Confirm with your PIN *
+                                    </label>
+                                    <input
+                                        type="password"
+                                        inputMode="numeric"
+                                        maxLength={4}
+                                        value={pinInput}
+                                        onChange={(e) => setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                                        placeholder="••••"
+                                        className="w-32 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-center tracking-widest text-lg"
+                                        required
+                                    />
+                                </div>
+
                                 {/* Submit */}
                                 <div className="flex justify-end">
                                     <button
                                         type="submit"
-                                        disabled={loading || !formData.vehicleId || !formData.description}
-                                        className={`px-6 py-3 rounded-lg font-medium transition ${loading || !formData.vehicleId || !formData.description
+                                        disabled={loading || !formData.vehicleId || !formData.description || pinInput.length !== 4}
+                                        className={`px-6 py-3 rounded-lg font-medium transition ${loading || !formData.vehicleId || !formData.description || pinInput.length !== 4
                                             ? 'bg-gray-400 cursor-not-allowed text-white'
                                             : 'bg-red-600 hover:bg-red-700 text-white'
                                             }`}

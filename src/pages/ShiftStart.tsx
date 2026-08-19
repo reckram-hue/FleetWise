@@ -28,6 +28,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
   const [newDefectDescription, setNewDefectDescription] = useState('');
   const [newDefectUrgency, setNewDefectUrgency] = useState<DefectUrgency>(DefectUrgency.Low);
   const [newDefectPhotos, setNewDefectPhotos] = useState<string[]>([]);
+  const [defectPin, setDefectPin] = useState('');
   const [submittingDefect, setSubmittingDefect] = useState(false);
 
   // State for wizard steps (1 = Vehicle, 2 = Confirm & Start)
@@ -215,18 +216,21 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
         description: newDefectDescription,
         urgency: newDefectUrgency,
         photos: newDefectPhotos,
-        location: 'Reported at Shift Start'
+        location: 'Reported at Shift Start',
+        pin: defectPin || undefined,
       });
 
       // Reset form
       setNewDefectDescription('');
       setNewDefectPhotos([]);
+      setDefectPin('');
       setShowDefectModal(false);
 
       // Refresh defects
       const defects = await api.getVehicleDefects(selectedVehicle.id);
       setActiveDefects(defects);
     } catch (err) {
+      setDefectPin('');
       console.error("Failed to report defect:", err);
       alert("Failed to report defect. Please try again.");
     } finally {
@@ -551,7 +555,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
             <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto">
               <div className="p-4 border-b flex justify-between items-center sticky top-0 bg-white">
                 <h3 className="text-lg font-bold">Report New Defect</h3>
-                <button onClick={() => setShowDefectModal(false)} className="text-gray-500 hover:text-gray-700">
+                <button onClick={() => { setShowDefectModal(false); setDefectPin(''); }} className="text-gray-500 hover:text-gray-700">
                   <X size={24} />
                 </button>
               </div>
@@ -622,9 +626,23 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
                   </div>
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium mb-1">Your PIN *</label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={defectPin}
+                    onChange={(e) => setDefectPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="••••"
+                    className="w-28 border p-2 rounded-lg text-center tracking-widest text-lg"
+                    required
+                  />
+                </div>
+
                 <button
                   type="submit"
-                  disabled={submittingDefect}
+                  disabled={submittingDefect || defectPin.length !== 4}
                   className="w-full py-3 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 disabled:opacity-50"
                 >
                   {submittingDefect ? 'Reporting...' : 'Submit Defect Report'}

@@ -1,6 +1,7 @@
 /**
  * Firebase API Service
  * Replaces mockApi with Firestore persistence
+ * WP5C: User/defect operations migrated to secure Cloud Function callables
  */
 
 import {
@@ -13,15 +14,9 @@ import {
   deleteDoc,
   query,
   where,
-  orderBy,
-  Timestamp,
-  writeBatch,
   serverTimestamp,
-  setDoc
 } from 'firebase/firestore';
-import { getApp, initializeApp, deleteApp } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { db, firebaseConfigured, callFunction } from '../lib/firebase';
+import { db, callFunction } from '../lib/firebase';
 import {
   User,
   UserRole,
@@ -88,163 +83,111 @@ const convertTimestamps = (data: any): any => {
 };
 
 const api = {
-  // ==================== USERS / DRIVERS ====================
+  // ==================== USERS / DRIVERS (SECURE CALLABLE BRIDGE) ====================
+
+  /**
+   * List all users via secure admin callable.
+   * pinHash is stripped server-side — never crosses the network.
+   * Requires Firebase Auth (admin) — the callable verifies role == 'admin'.
+   */
   getUsers: async (): Promise<User[]> => {
-    const snapshot = await getDocs(collection(db, COLLECTIONS.users));
-    return snapshot.docs.map(doc => {
-      const user = convertTimestamps({ id: doc.id, ...doc.data() }) as User;
-      delete (user as any).pinHash; // never send PIN hashes to the client
-      return user;
-    });
+    const data = await callFunction<{ success: boolean; users: any[] }>('listUsersAdmin', {});
+    return data.users.map(u => convertTimestamps(u) as User);
   },
 
+  /**
+   * List admin users via secure callable. Filters result client-side.
+   */
   getAdminUsers: async (): Promise<User[]> => {
-    const q = query(collection(db, COLLECTIONS.users), where('role', '==', UserRole.Admin));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as User);
+    const data = await callFunction<{ success: boolean; users: any[] }>('listUsersAdmin', {});
+    return data.users
+      .filter((u: any) => u.role === UserRole.Admin)
+      .map(u => convertTimestamps(u) as User);
   },
 
+  /**
+   * List only safe driver fields for the driver-selection screen.
+   * No authentication required — callable returns only: id, firstName, surname, area, department, employmentStatus, role.
+   * NEVER returns pinHash, idNumber, email, contactNumber, driversLicenceImageUrl.
+   */
+  listDriversSafe: async (): Promise<User[]> => {
+    const data = await callFunction<{ success: boolean; users: any[] }>('listDriversSafe', {});
+    return data.users.map(u => convertTimestamps(u) as User);
+  },
+
+  /**
+   * Get the authenticated admin's profile via secure callable.
+   * Uses context.auth.uid — no need to scan all users.
+   */
+  getAdminProfile: async (): Promise<User> => {
+    const data = await callFunction<{ success: boolean; user: any }>('getAdminProfile', {});
+    return convertTimestamps(data.user) as User;
+  },
+
+  /**
+   * Create a new admin user via secure callable.
+   * Server-side: creates Firebase Auth account + Firestore profile using Admin SDK.
+   * No secondary app hack needed.
+   */
   createAdminUser: async (userData: { firstName: string; surname: string; email: string; password: string }): Promise<User> => {
-    // 1. Get current config to initialize a secondary app
-    // This allows creating key without logging out the current user
-    const app = getApp();
-    const config = app.options;
-
-    // 2. Init secondary app
-    const secondaryAppName = `SecondaryApp-${Date.now()}`;
-    const secondaryApp = initializeApp(config, secondaryAppName);
-    const secondaryAuth = getAuth(secondaryApp);
-
-    try {
-      // 3. Create User in Auth
-      const userCred = await createUserWithEmailAndPassword(secondaryAuth, userData.email, userData.password);
-      const uid = userCred.user.uid;
-
-      // 4. Create User in Firestore (using main app DB)
-      const newUser: User = {
-        id: uid,
-        firstName: userData.firstName,
-        surname: userData.surname,
-        email: userData.email,
-        role: UserRole.Admin,
-        // @ts-ignore - serverTimestamp type mismatch with generic
-        createdAt: serverTimestamp()
-      };
-
-      // We use setDoc to specify ID matches Auth UID
-      await setDoc(doc(db, COLLECTIONS.users, uid), newUser);
-
-      // Sign out from secondary app just in case
-      await signOut(secondaryAuth);
-
-      return newUser;
-    } catch (error) {
-      console.error("Failed to create admin:", error);
-      throw error;
-    } finally {
-      // 5. Cleanup
-      await deleteApp(secondaryApp);
-    }
+    const data = await callFunction<{ success: boolean; userId: string; message: string }>('createAdminUser', userData);
+    return {
+      id: data.userId,
+      firstName: userData.firstName,
+      surname: userData.surname,
+      email: userData.email,
+      role: UserRole.Admin,
+    } as User;
   },
 
+  /**
+   * Create a new driver via secure callable. Admin-only.
+   * PIN is NOT set here — use adminSetDriverPin separately.
+   */
   addDriver: async (driverData: Omit<User, 'id' | 'role'>): Promise<User> => {
-    // PIN is NOT written here. Admins set the driver PIN server-side via adminSetDriverPin.
-    const newDriver = {
-      ...driverData,
-      role: UserRole.Driver,
-      createdAt: serverTimestamp()
-    };
-    const docRef = await addDoc(collection(db, COLLECTIONS.users), newDriver);
-    const createdDriver = { id: docRef.id, ...driverData, role: UserRole.Driver } as User;
-
-    console.log(`Driver created (PIN must be set by an admin): ${docRef.id}`);
-
-    // NOTE: Telegram sync disabled for Firebase deployment
-    // The Express server on localhost:3001 is not available in production
-    // Telegram integration should be handled via Cloud Functions if needed
-    /*
-    try {
-      await fetch('http://localhost:3001/api/drivers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: docRef.id,
-          firstName: driverData.firstName,
-          surname: driverData.surname,
-          isActive: true
-        })
-      });
-    } catch (error) {
-      console.warn('Failed to sync driver with backend server:', error);
-    }
-    */
-
+    const data = await callFunction<{ success: boolean; driverId: string; message: string }>('createDriver', driverData);
+    const createdDriver = { id: data.driverId, ...driverData, role: UserRole.Driver } as User;
+    console.log(`Driver created via callable (PIN must be set by an admin): ${data.driverId}`);
     return createdDriver;
   },
 
+  /**
+   * Update a driver via secure callable. Admin-only.
+   * Cannot set pinHash — server strips it.
+   */
   updateDriver: async (driverData: User): Promise<User> => {
-    const { id, ...updateData } = driverData;
-    await updateDoc(doc(db, COLLECTIONS.users, id), { ...updateData, updatedAt: serverTimestamp() });
-    return driverData;
+    const data = await callFunction<{ success: boolean; user: any; message: string }>('updateDriver', driverData);
+    return convertTimestamps(data.user) as User;
   },
 
-  deleteDriver: async (driverId: string): Promise<{ success: boolean }> => {
-    await deleteDoc(doc(db, COLLECTIONS.users, driverId));
-    return { success: true };
+  /**
+   * Archive (inactivate) a driver via secure callable. Admin-only.
+   * Never physically deletes the document — sets employmentStatus to 'Inactive'
+   * and records retention period and optional legal/disciplinary hold.
+   * The callable blocks if the driver has an active shift.
+   */
+  archiveDriver: async (payload: {
+    driverId: string;
+    inactiveReason: string;
+    retentionPeriodMonths?: number;
+    retentionReason?: string;
+    legalHold?: boolean;
+    legalHoldReason?: string;
+  }): Promise<{ success: boolean; archiveUntil: string; message: string }> => {
+    const data = await callFunction<{ success: boolean; archiveUntil: string; message: string }>('archiveDriver', payload);
+    return { success: data.success, archiveUntil: data.archiveUntil, message: data.message };
   },
 
-  canDeleteDriver: async (driverId: string): Promise<{ canDelete: boolean; reasons: string[] }> => {
-    const reasons: string[] = [];
-
-    // Check for active shifts
-    const activeShift = await api.getActiveShift(driverId);
-    if (activeShift) {
-      reasons.push('Driver has an active shift');
-    }
-
-    // Check for completed shifts
-    const shifts = await api.getDriverShifts(driverId);
-    const completedShifts = shifts.filter(s => s.status === ShiftStatus.Completed);
-    if (completedShifts.length > 0) {
-      reasons.push(`Driver has ${completedShifts.length} completed shift(s) in the system`);
-    }
-
-    // Check for fines
-    const fines = await api.getDriverFines(driverId);
-    if (fines.length > 0) {
-      reasons.push(`Driver has ${fines.length} fine(s) recorded`);
-    }
-
-    // Check for damages (where driver is responsible)
-    const allDamages = await api.getVehicleDamages();
-    const driverDamages = allDamages.filter(d => d.driverId === driverId);
-    if (driverDamages.length > 0) {
-      reasons.push(`Driver has ${driverDamages.length} damage report(s)`);
-    }
-
-    return {
-      canDelete: reasons.length === 0,
-      reasons
-    };
-  },
-
+  /**
+   * Update employment status via secure callable. Admin-only.
+   */
   updateEmploymentStatus: async (driverId: string, status: any, endDate?: string): Promise<User> => {
-    const driverRef = doc(db, COLLECTIONS.users, driverId);
-    const updateData: any = {
-      employmentStatus: status,
-      updatedAt: serverTimestamp()
-    };
-
-    if (endDate) {
-      updateData.employmentEndDate = endDate;
-    } else {
-      // Remove end date if status is Active
-      updateData.employmentEndDate = null;
-    }
-
-    await updateDoc(driverRef, updateData);
-    const updatedDoc = await getDoc(driverRef);
-    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as User;
+    const data = await callFunction<{ success: boolean; user: any; message: string }>('updateEmploymentStatus', {
+      driverId,
+      status,
+      endDate,
+    });
+    return convertTimestamps(data.user) as User;
   },
 
   // ==================== VEHICLES ====================
@@ -449,21 +392,36 @@ const api = {
     return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as DefectReport);
   },
 
-  addDefectReport: async (defectData: Omit<DefectReport, 'id' | 'reportedDateTime' | 'status' | 'isVisibleToDriver'>): Promise<DefectReport> => {
-    const newDefect = {
-      ...defectData,
-      reportedDateTime: serverTimestamp(),
-      status: DefectStatus.Open,
-      isVisibleToDriver: true,
-      createdAt: serverTimestamp()
-    };
-    const docRef = await addDoc(collection(db, COLLECTIONS.defects), newDefect);
+  /**
+   * Report a defect via secure callable. Drivers must supply their PIN for server-side
+   * verification. The PIN comes from local component state (per-operation, not session).
+   *
+   * Direct Firestore writes to /defects are blocked by the proposed rules (allow create: if false).
+   * All defect creation must go through the reportDefect callable.
+   */
+  addDefectReport: async (defectData: Omit<DefectReport, 'id' | 'reportedDateTime' | 'status' | 'isVisibleToDriver'> & { pin?: string }): Promise<DefectReport> => {
+    if (!defectData.pin) {
+      throw new Error('PIN is required to report a defect. The reportDefect callable enforces PIN verification.');
+    }
+
+    const { pin, ...rest } = defectData;
+    const data = await callFunction<{ success: boolean; defectId: string; message: string }>('reportDefect', {
+      driverId: rest.driverId,
+      pin,
+      vehicleId: rest.vehicleId,
+      category: rest.category,
+      description: rest.description,
+      urgency: rest.urgency,
+      location: rest.location,
+      notes: rest.notes,
+      photos: rest.photos,
+    });
     return {
-      id: docRef.id,
-      ...defectData,
+      id: data.defectId,
+      ...rest,
       reportedDateTime: new Date(),
       status: DefectStatus.Open,
-      isVisibleToDriver: true
+      isVisibleToDriver: true,
     } as DefectReport;
   },
 
@@ -750,13 +708,16 @@ const api = {
 
   // ==================== STATISTICS & REPORTS ====================
   getLeaderboard: async (): Promise<LeaderboardEntry[]> => {
-    // Calculate from shifts and other data
-    const shifts = await getDocs(collection(db, COLLECTIONS.shifts));
-    const users = await api.getUsers();
+    // listDriversSafe is public (no auth required) and safe to call from driver context.
+    // getUsers() would require admin auth and break the driver-facing leaderboard route.
+    const [shiftsSnap, drivers] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.shifts)),
+      api.listDriversSafe(),
+    ]);
 
     const driverStats = new Map<string, { trips: number; totalKm: number }>();
 
-    shifts.forEach(shiftDoc => {
+    shiftsSnap.forEach(shiftDoc => {
       const shift = shiftDoc.data() as Shift;
       if (shift.status === ShiftStatus.Completed && shift.endOdometer && shift.startOdometer) {
         const km = shift.endOdometer - shift.startOdometer;
@@ -768,15 +729,9 @@ const api = {
       }
     });
 
-    const leaderboard: LeaderboardEntry[] = [];
-    users.forEach(user => {
-      if (user.role === UserRole.Driver) {
-        const stats = driverStats.get(user.id) || { trips: 0, totalKm: 0 };
-        leaderboard.push({
-          driver: user,
-          totalKmDriven: stats.totalKm
-        });
-      }
+    const leaderboard: LeaderboardEntry[] = drivers.map(user => {
+      const stats = driverStats.get(user.id) || { trips: 0, totalKm: 0 };
+      return { driver: user, totalKmDriven: stats.totalKm };
     });
 
     return leaderboard.sort((a, b) => b.totalKmDriven - a.totalKmDriven);
