@@ -13,12 +13,18 @@ const db = admin.firestore();
 // RATE LIMITING HELPERS
 // =============================================================================
 
+// Derives a safe, fixed-length Firestore document ID for rate-limit records.
+// Hashing avoids `/` path separators and oversized IDs from user-agent strings.
+function getRateLimitKey(driverId: string, deviceId: string): string {
+  return crypto.createHash('sha256').update(`${driverId}:${deviceId}`).digest('hex');
+}
+
 /**
  * Check and update rate limiting for PIN attempts
  * Allows max 6 failed attempts in 10 minutes per driver/device
  */
 async function checkRateLimit(driverId: string, deviceId: string = 'unknown'): Promise<void> {
-  const rateLimitRef = db.collection('rateLimits').doc(`${driverId}_${deviceId}`);
+  const rateLimitRef = db.collection('rateLimits').doc(getRateLimitKey(driverId, deviceId));
   const now = admin.firestore.Timestamp.now();
   const tenMinutesAgo = admin.firestore.Timestamp.fromMillis(now.toMillis() - 10 * 60 * 1000);
 
@@ -66,7 +72,7 @@ async function checkRateLimit(driverId: string, deviceId: string = 'unknown'): P
  * Clear rate limit after successful authentication
  */
 async function clearRateLimit(driverId: string, deviceId: string = 'unknown'): Promise<void> {
-  const rateLimitRef = db.collection('rateLimits').doc(`${driverId}_${deviceId}`);
+  const rateLimitRef = db.collection('rateLimits').doc(getRateLimitKey(driverId, deviceId));
   await rateLimitRef.delete();
 }
 
