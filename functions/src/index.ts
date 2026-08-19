@@ -830,8 +830,8 @@ const ReportDefectSchema = z.object({
   category: z.string().min(1, 'Category is required'),
   description: z.string().min(1, 'Description is required'),
   urgency: z.string().min(1, 'Urgency is required'),
-  location: z.string().optional(),
-  notes: z.string().optional(),
+  location: optionalString,
+  notes: optionalString,
   photos: z.array(z.string()).optional(),
   deviceId: optionalString,
 });
