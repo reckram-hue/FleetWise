@@ -27,6 +27,7 @@ import {
   VehicleAssignmentTransitionReason,
   VehicleInspection,
   VehicleInspectionBoundary,
+  VehicleInspectionPhotoRole,
   VehicleReturnIntent,
   DefectReport,
   DefectStatus,
@@ -429,11 +430,18 @@ const api = {
     inspectionId: string;
     hasDamage: boolean;
     damageDescription?: string;
-    exteriorPhotoCaptured: boolean;
-    interiorPhotoCaptured: boolean;
   }): Promise<VehicleInspection> => {
     const data = await callFunction<{ success: boolean; inspection: any }>('completeVehicleInspection', inspectionData);
     return convertTimestamps(data.inspection) as VehicleInspection;
+  },
+
+  /**
+   * Upload one inspection photo (server-mediated). The server derives the authoritative
+   * Storage path and persists metadata; the client never chooses a path (WP7D2).
+   */
+  uploadInspectionPhoto: async (driverId: string, sessionToken: string, assignmentId: string, boundaryType: VehicleInspectionBoundary, photoRole: VehicleInspectionPhotoRole, imageDataUrl: string): Promise<{ photoPath: string }> => {
+    const data = await callFunction<{ success: boolean; photoPath: string }>('uploadInspectionPhoto', { driverId, sessionToken, assignmentId, boundaryType, photoRole, imageDataUrl });
+    return { photoPath: data.photoPath };
   },
 
   /**

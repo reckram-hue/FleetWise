@@ -1,0 +1,21 @@
+rules_version = '2';
+// FleetWise Storage rules — least privilege, default deny.
+// NOT deployed. Design/local-validation artifact for WP7D2.
+//
+// Inspection photo evidence is written and read EXCLUSIVELY by Cloud Functions via the
+// Admin SDK (which bypasses these rules). Drivers authenticate with an application-level
+// opaque sessionToken (not Firebase Auth), so Storage security rules cannot map a driver
+// to request.auth.uid. Therefore ALL direct client access to inspection evidence is denied.
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Server-only inspection evidence.
+    match /vehicle-inspections/{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // Default deny — nothing else is client-accessible.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

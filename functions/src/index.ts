@@ -233,7 +233,10 @@ const EndVehicleAssignmentSchema = z.object({
     z.number().min(0, 'End odometer must be positive').optional()
   ),
   endChargePercent: optionalChargePercent,
-  transitionReason: z.enum(['VEHICLE_SWAP', 'SHIFT_END', 'CANCELLED']),
+  // CANCELLED is intentionally NOT accepted here: ordinary driver sessions must not be
+  // able to bypass RETURN-inspection enforcement via a cancellation reason (WP7D2).
+  // Cancellation belongs to a future admin/recovery callable.
+  transitionReason: z.enum(['VEHICLE_SWAP', 'SHIFT_END']),
   deviceId: optionalString,
 });
 
@@ -267,8 +270,15 @@ const CompleteVehicleInspectionSchema = z.object({
   inspectionId: z.string().min(1, 'Inspection ID is required'),
   hasDamage: z.boolean(),
   damageDescription: optionalString,
-  exteriorPhotoCaptured: z.boolean().optional().default(false),
-  interiorPhotoCaptured: z.boolean().optional().default(false),
+});
+
+const UploadInspectionPhotoSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  assignmentId: z.string().min(1, 'Assignment ID is required'),
+  boundaryType: z.enum(['PICKUP', 'RETURN']),
+  photoRole: z.enum(['EXTERIOR', 'INTERIOR']),
+  imageDataUrl: z.string().min(1, 'Image data is required'),
 });
 
 const GetAssignmentInspectionsSchema = z.object({
@@ -2334,17 +2344,13 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
     }
     if (!vehicleDoc.exists) throw new functions.https.HttpsError('not-found', 'Vehicle not found');
 
-    // WP7D1: a RETURN inspection must be COMPLETED before the assignment may be closed via
-    // the driver's return flows (VEHICLE_SWAP / SHIFT_END). Cancellation is exempt.
-    // TODO(WP7D1A): before this RETURN-inspection enforcement is deployed to production,
-    // ensure driver-session callers cannot use transitionReason='CANCELLED' as an
-    // inspection-bypass path (e.g. a driver-supplied CANCELLED reason).
-    if (transitionReason !== 'CANCELLED') {
-      const returnInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN'));
-      const returnInspectionDoc = await returnInspectionRef.get();
-      if (!returnInspectionDoc.exists || returnInspectionDoc.data()!.status !== 'COMPLETED') {
-        throw new functions.https.HttpsError('failed-precondition', 'A completed return inspection is required before returning the vehicle.');
-      }
+    // WP7D2: a RETURN inspection must be COMPLETED before the assignment may be closed.
+    // CANCELLED has been removed from the driver-session schema, so ordinary drivers cannot
+    // bypass this guard; future admin cancellation belongs to a separate recovery callable.
+    const returnInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN'));
+    const returnInspectionDoc = await returnInspectionRef.get();
+    if (!returnInspectionDoc.exists || returnInspectionDoc.data()!.status !== 'COMPLETED') {
+      throw new functions.https.HttpsError('failed-precondition', 'A completed return inspection is required before returning the vehicle.');
     }
 
     if (assignmentData.startOdometer != null && endOdometer !== undefined && endOdometer < assignmentData.startOdometer) {
@@ -2368,9 +2374,8 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
         throw new functions.https.HttpsError('failed-precondition', 'This assignment was already cancelled.');
       }
 
-      const isCancelled = transitionReason === 'CANCELLED';
       const assignmentUpdate: any = {
-        status: isCancelled ? 'CANCELLED' : 'COMPLETED',
+        status: 'COMPLETED',
         endedAt: admin.firestore.FieldValue.serverTimestamp(),
         transitionReason,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2507,6 +2512,23 @@ function inspectionDocId(assignmentId: string, boundaryType: 'PICKUP' | 'RETURN'
 const ROUTINE_INSPECTION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * The project's Firebase Storage bucket (matches VITE_FIREBASE_STORAGE_BUCKET).
+ * Inspection photo binaries are written here via the Admin SDK only — the client never
+ * chooses a path and Storage rules deny direct client access.
+ */
+const INSPECTION_STORAGE_BUCKET = 'fleetwise-9ab3a.firebasestorage.app';
+
+/** Accepted inspection photo MIME types (rejected content is never stored). */
+const INSPECTION_PHOTO_MIME_TYPES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
+
+/** Maximum decoded inspection photo size (bytes) after client-side compression. */
+const INSPECTION_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
  * Create a PENDING inspection for an ACTIVE assignment (idempotent).
  * The deterministic ID guarantees at most one PICKUP and one RETURN inspection per assignment.
  */
@@ -2579,6 +2601,99 @@ export const createVehicleInspection = functions.https.onCall(async (data, conte
 });
 
 /**
+ * Upload one inspection photo (EXTERIOR or INTERIOR) to Cloud Storage (WP7D2).
+ * Server-mediated: the client sends compressed image data; the server validates the
+ * session/assignment/inspection, derives an authoritative path, stores the object, and
+ * persists the object path + metadata. The client NEVER chooses a Storage path.
+ */
+export const uploadInspectionPhoto = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = UploadInspectionPhotoSchema.parse(data);
+    const {
+      driverId: reqDriverId,
+      sessionToken,
+      assignmentId,
+      boundaryType,
+      photoRole,
+      imageDataUrl,
+    } = validated;
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
+    const assignmentDoc = await assignmentRef.get();
+    if (!assignmentDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
+    }
+    const assignmentData = assignmentDoc.data()!;
+    if (assignmentData.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'You can only upload photos for your own assignment.');
+    }
+    if (assignmentData.status !== 'ACTIVE') {
+      throw new functions.https.HttpsError('failed-precondition', 'The assignment is no longer active.');
+    }
+
+    const inspectionId = inspectionDocId(assignmentId, boundaryType);
+    const inspectionRef = db.collection('vehicleInspections').doc(inspectionId);
+    const inspectionDoc = await inspectionRef.get();
+    if (!inspectionDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle inspection not found');
+    }
+    const inspectionData = inspectionDoc.data()!;
+    if (inspectionData.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'You can only upload photos for your own inspection.');
+    }
+    if (inspectionData.boundaryType !== boundaryType) {
+      throw new functions.https.HttpsError('invalid-argument', 'Photo boundary does not match the inspection.');
+    }
+    if (inspectionData.status !== 'PENDING') {
+      throw new functions.https.HttpsError('failed-precondition', 'The inspection is already completed.');
+    }
+
+    // Validate the image content (MIME + size), never the filename.
+    const match = imageDataUrl.match(/^data:(image\/jpeg|image\/png|image\/webp);base64,([A-Za-z0-9+/=]+)$/);
+    if (!match) {
+      throw new functions.https.HttpsError('invalid-argument', 'Unsupported image format. Use JPEG, PNG, or WebP.');
+    }
+    const mimeType = match[1];
+    const ext = INSPECTION_PHOTO_MIME_TYPES[mimeType];
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length === 0 || buffer.length > INSPECTION_PHOTO_MAX_BYTES) {
+      throw new functions.https.HttpsError('invalid-argument', 'Image must be between 1 byte and 5 MB.');
+    }
+
+    // Authoritative, deterministic object path (server-derived; no client path control).
+    const orgId = assignmentData.orgId || DEFAULT_ORG_ID;
+    const roleSegment = photoRole.toLowerCase();
+    const objectPath = `vehicle-inspections/${orgId}/${assignmentId}/${boundaryType}/${roleSegment}.${ext}`;
+
+    const bucket = admin.storage().bucket(INSPECTION_STORAGE_BUCKET);
+    const file = bucket.file(objectPath);
+    await file.save(buffer, { contentType: mimeType, resumable: false });
+
+    const update: any = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (photoRole === 'EXTERIOR') {
+      update.exteriorPhotoPath = objectPath;
+      update.exteriorPhotoSize = buffer.length;
+      update.exteriorPhotoContentType = mimeType;
+    } else {
+      update.interiorPhotoPath = objectPath;
+      update.interiorPhotoSize = buffer.length;
+      update.interiorPhotoContentType = mimeType;
+    }
+    await inspectionRef.update(update);
+
+    return { success: true, photoRole, photoPath: objectPath };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in uploadInspectionPhoto:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to upload inspection photo: ' + error.message);
+  }
+});
+
+/**
  * Complete a PENDING inspection with damage + photo capture markers.
  * retentionClass is determined SERVER-SIDE from hasDamage (never trusted from the client).
  * A COMPLETED inspection cannot be rewritten.
@@ -2592,8 +2707,6 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
       inspectionId,
       hasDamage,
       damageDescription,
-      exteriorPhotoCaptured,
-      interiorPhotoCaptured,
     } = validated;
     const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
 
@@ -2633,12 +2746,25 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
     if (hasDamage && (!damageDescription || damageDescription.trim() === '')) {
       throw new functions.https.HttpsError('invalid-argument', 'A damage description is required when damage is reported.');
     }
-    // Both condition photos are required at completion.
-    if (!exteriorPhotoCaptured) {
-      throw new functions.https.HttpsError('invalid-argument', 'An exterior condition photo is required.');
+
+    // WP7D2: real photo evidence is required. Verify the Storage objects actually exist at
+    // the authoritative paths before allowing the inspection to become COMPLETED.
+    // The client cannot satisfy this with booleans — only server-verified objects count.
+    const bucket = admin.storage().bucket(INSPECTION_STORAGE_BUCKET);
+    const extPath: string | undefined = inspectionData.exteriorPhotoPath;
+    const intPath: string | undefined = inspectionData.interiorPhotoPath;
+    if (!extPath || !intPath) {
+      throw new functions.https.HttpsError('failed-precondition', 'Both inspection photos must be uploaded before completing the inspection.');
     }
-    if (!interiorPhotoCaptured) {
-      throw new functions.https.HttpsError('invalid-argument', 'An interior/dashboard photo is required.');
+    const [extExists, intExists] = await Promise.all([
+      bucket.file(extPath).exists(),
+      bucket.file(intPath).exists(),
+    ]);
+    if (!extExists[0]) {
+      throw new functions.https.HttpsError('failed-precondition', 'The exterior inspection photo is missing.');
+    }
+    if (!intExists[0]) {
+      throw new functions.https.HttpsError('failed-precondition', 'The interior inspection photo is missing.');
     }
 
     const retentionClass = hasDamage ? 'EVIDENCE' : 'ROUTINE';
@@ -2652,8 +2778,9 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
       completedAt: admin.firestore.FieldValue.serverTimestamp(),
       hasDamage,
       damageDescription: hasDamage ? damageDescription!.trim() : null,
-      exteriorPhotoCaptured: !!exteriorPhotoCaptured,
-      interiorPhotoCaptured: !!interiorPhotoCaptured,
+      // Derived convenience fields — true only because the objects were verified above.
+      exteriorPhotoCaptured: true,
+      interiorPhotoCaptured: true,
       retentionClass,
       expiresAt,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),

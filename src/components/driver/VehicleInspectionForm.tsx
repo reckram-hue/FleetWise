@@ -1,11 +1,12 @@
-// src/components/driver/VehicleInspectionForm.tsx — PICKUP/RETURN inspection capture (WP7D1).
-// Photo fields are local previews only (NOT uploaded). Cloud Storage arrives in WP7D2.
-import React, { useState } from 'react';
+// src/components/driver/VehicleInspectionForm.tsx — PICKUP/RETURN inspection capture (WP7D2).
+// Photos are captured, compressed client-side, uploaded via the server-mediated callable,
+// and persisted as Cloud Storage object paths (never public URLs).
+import React, { useState, useEffect } from 'react';
 import api from '../../services/firebaseApi';
-import { VehicleReturnIntent } from '../../types';
+import { VehicleReturnIntent, VehicleInspectionPhotoRole } from '../../types';
 import { getDriverSession } from '../../store/session';
 import Card from '../shared/Card';
-import { Camera, CheckCircle, AlertCircle, Loader, Car, Gauge, Battery } from 'lucide-react';
+import { Camera, CheckCircle, AlertCircle, Loader, Car, RefreshCw } from 'lucide-react';
 
 export interface VehicleInspectionResult {
   endOdometer?: number;
@@ -24,11 +25,59 @@ interface VehicleInspectionFormProps {
   onBack?: () => void;
 }
 
+type PhotoStatus = 'empty' | 'ready' | 'uploading' | 'uploaded' | 'failed';
+
+interface PhotoSlot {
+  status: PhotoStatus;
+  preview: string | null;
+}
+
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('Failed to read the image file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Unsupported or unreadable image format.'));
+    img.src = src;
+  });
+}
+
+// Compress + normalize to JPEG. Strips EXIF via Canvas re-encode (privacy) and applies
+// the browser's EXIF orientation automatically on decode.
+async function compressImage(file: File): Promise<string> {
+  if (file.type === 'image/heic' || file.type === 'image/heif') {
+    throw new Error('HEIC/HEIF images are not supported on this device. Please take a JPEG photo.');
+  }
+  const raw = await readFileAsDataURL(file);
+  const img = await loadImage(raw);
+  const maxEdge = 1600;
+  const w0 = img.naturalWidth || 1;
+  const h0 = img.naturalHeight || 1;
+  const scale = Math.min(1, maxEdge / Math.max(w0, h0));
+  const w = Math.max(1, Math.round(w0 * scale));
+  const h = Math.max(1, Math.round(h0 * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Unable to process the image.');
+  ctx.drawImage(img, 0, 0, w, h);
+  return canvas.toDataURL('image/jpeg', 0.8);
+}
+
 const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
   boundaryType, assignmentId, driverId, vehicle, startOdo, returnIntent, onCompleted, onBack,
 }) => {
-  const [exteriorPreview, setExteriorPreview] = useState<string | null>(null);
-  const [interiorPreview, setInteriorPreview] = useState<string | null>(null);
+  const [exterior, setExterior] = useState<PhotoSlot>({ status: 'empty', preview: null });
+  const [interior, setInterior] = useState<PhotoSlot>({ status: 'empty', preview: null });
   const [hasDamage, setHasDamage] = useState(false);
   const [damageDescription, setDamageDescription] = useState('');
   const [endOdo, setEndOdo] = useState('');
@@ -39,18 +88,59 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
   const isReturn = boundaryType === 'RETURN';
   const isEV = vehicle.vehicleType === 'EV';
 
-  const readFile = (setter: (v: string | null) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onloadend = () => setter(reader.result as string);
-    reader.readAsDataURL(file);
+  // Restore already-uploaded photo state on resume (partial upload recovery).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const session = getDriverSession();
+      if (!session) return;
+      try {
+        const inspections = await api.getAssignmentInspections(driverId, session.sessionToken, assignmentId);
+        const insp = inspections.find(i => i.boundaryType === boundaryType);
+        if (cancelled) return;
+        if (insp && insp.exteriorPhotoPath) setExterior({ status: 'uploaded', preview: null });
+        if (insp && insp.interiorPhotoPath) setInterior({ status: 'uploaded', preview: null });
+      } catch {
+        // Ignore — the form will create/upload on submit.
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [driverId, assignmentId, boundaryType]);
+
+  const handleFile = async (role: VehicleInspectionPhotoRole, file: File) => {
+    try {
+      const dataUrl = await compressImage(file);
+      if (role === 'EXTERIOR') setExterior({ status: 'ready', preview: dataUrl });
+      else setInterior({ status: 'ready', preview: dataUrl });
+      setError(null);
+    } catch (e: any) {
+      if (role === 'EXTERIOR') setExterior({ status: 'failed', preview: null });
+      else setInterior({ status: 'failed', preview: null });
+      setError(e?.message || 'Failed to process image.');
+    }
+  };
+
+  const doUpload = async (role: VehicleInspectionPhotoRole, sessionToken: string): Promise<boolean> => {
+    const slot = role === 'EXTERIOR' ? exterior : interior;
+    if (!slot.preview) return false;
+    const setSlot = role === 'EXTERIOR' ? setExterior : setInterior;
+    setSlot({ status: 'uploading', preview: slot.preview });
+    try {
+      await api.uploadInspectionPhoto(driverId, sessionToken, assignmentId, boundaryType, role, slot.preview);
+      setSlot({ status: 'uploaded', preview: null });
+      return true;
+    } catch (e: any) {
+      setSlot({ status: 'failed', preview: slot.preview });
+      const code = String(e?.code || '');
+      let msg = e?.message || 'Upload failed.';
+      if (code.includes('invalid-argument')) { const m = msg.match(/invalid-argument: (.+)/); if (m) msg = m[1]; }
+      setError(`${role === 'EXTERIOR' ? 'Exterior' : 'Interior'} photo: ${msg}`);
+      return false;
+    }
   };
 
   const handleSubmit = async () => {
-    // Photo capture markers (local preview only — no upload in WP7D1).
-    if (!exteriorPreview) { setError('Please capture the exterior condition photo.'); return; }
-    if (!interiorPreview) { setError('Please capture the interior/dashboard photo.'); return; }
     if (hasDamage && !damageDescription.trim()) { setError('Please describe the damage.'); return; }
 
     let endOdometer: number | undefined;
@@ -72,18 +162,30 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
     try {
       const session = getDriverSession();
       if (!session) throw new Error('Your session has expired. Please log in again.');
-      // Idempotent create (deterministic doc ID) then complete.
+
+      // Idempotent create (deterministic doc ID).
       const created = await api.createVehicleInspection(driverId, session.sessionToken, assignmentId, boundaryType, returnIntent);
+
+      // Upload any photo not already stored (resume keeps previously uploaded photos).
+      if (exterior.status !== 'uploaded') {
+        if (exterior.status !== 'ready' || !exterior.preview) { setError('Please capture the exterior photo.'); setSubmitting(false); return; }
+        const ok = await doUpload('EXTERIOR', session.sessionToken);
+        if (!ok) { setSubmitting(false); return; }
+      }
+      if (interior.status !== 'uploaded') {
+        if (interior.status !== 'ready' || !interior.preview) { setError('Please capture the interior/dashboard photo.'); setSubmitting(false); return; }
+        const ok = await doUpload('INTERIOR', session.sessionToken);
+        if (!ok) { setSubmitting(false); return; }
+      }
+
+      // Complete (server verifies both Storage objects exist).
       const completed = await api.completeVehicleInspection({
         driverId,
         sessionToken: session.sessionToken,
         inspectionId: created.id,
         hasDamage,
         damageDescription: hasDamage ? damageDescription.trim() : undefined,
-        exteriorPhotoCaptured: true,
-        interiorPhotoCaptured: true,
       });
-      // Use the server-authoritative return intent (never stale local state).
       onCompleted({ endOdometer, endChargePercent, returnIntent: completed.returnIntent ?? undefined });
     } catch (e: any) {
       const code = String(e?.code || '');
@@ -95,22 +197,32 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
     }
   };
 
-  const PhotoField = ({ label, preview, onFile }: { label: string; preview: string | null; onFile: (e: React.ChangeEvent<HTMLInputElement>) => void }) => (
+  const PhotoField = ({ label, slot, role }: { label: string; slot: PhotoSlot; role: VehicleInspectionPhotoRole }) => (
     <div className='border border-gray-200 rounded-lg p-4'>
       <label className='block text-sm font-semibold text-gray-700 mb-2'>{label} <span className='text-red-500'>*</span></label>
-      {preview ? (
+      {slot.preview ? (
         <div className='relative'>
-          <img src={preview} alt={label} className='w-full h-40 object-cover rounded-lg' />
-          <span className='absolute top-2 right-2 bg-green-600 text-white text-xs px-2 py-1 rounded-full flex items-center'><CheckCircle className='h-3 w-3 mr-1' /> Captured</span>
+          <img src={slot.preview} alt={label} className='w-full h-40 object-cover rounded-lg' />
+          <span className={`absolute top-2 right-2 text-white text-xs px-2 py-1 rounded-full flex items-center ${slot.status === 'ready' ? 'bg-blue-600' : slot.status === 'uploading' ? 'bg-yellow-600' : 'bg-red-600'}`}>
+            {slot.status === 'ready' ? 'Ready' : slot.status === 'uploading' ? 'Uploading...' : 'Failed — retake'}
+          </span>
+        </div>
+      ) : slot.status === 'uploaded' ? (
+        <div className='flex items-center justify-center w-full h-24 border-2 border-green-300 bg-green-50 rounded-lg'>
+          <span className='text-green-700 font-semibold flex items-center'><CheckCircle className='h-5 w-5 mr-2' /> Uploaded</span>
         </div>
       ) : (
         <label className='flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400'>
           <Camera className='h-8 w-8 text-gray-400 mb-1' />
           <span className='text-sm text-gray-600 font-medium'>Take Photo</span>
-          <input type='file' accept='image/*' capture='environment' onChange={onFile} className='hidden' />
+          <input type='file' accept='image/*' capture='environment' onChange={e => { const f = e.target.files && e.target.files[0]; if (f) handleFile(role, f); }} className='hidden' />
         </label>
       )}
-      <p className='text-xs text-gray-500 mt-2'>Local preview only — cloud upload arrives in a later update.</p>
+      <label className='mt-2 inline-flex items-center text-sm text-blue-600 font-medium cursor-pointer'>
+        <RefreshCw className='h-4 w-4 mr-1' /> {slot.preview || slot.status === 'uploaded' ? 'Replace' : 'Retake'}
+        <input type='file' accept='image/*' capture='environment' onChange={e => { const f = e.target.files && e.target.files[0]; if (f) handleFile(role, f); }} className='hidden' />
+      </label>
+      <p className='text-xs text-gray-500 mt-1'>Photo is stored as chain-of-custody evidence after upload.</p>
     </div>
   );
 
@@ -144,8 +256,8 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
       )}
 
       <div className='space-y-4'>
-        <PhotoField label='Exterior condition photo' preview={exteriorPreview} onFile={readFile(setExteriorPreview)} />
-        <PhotoField label='Interior / dashboard photo' preview={interiorPreview} onFile={readFile(setInteriorPreview)} />
+        <PhotoField label='Exterior condition photo' slot={exterior} role='EXTERIOR' />
+        <PhotoField label='Interior / dashboard photo' slot={interior} role='INTERIOR' />
       </div>
 
       <div className='mt-4'>

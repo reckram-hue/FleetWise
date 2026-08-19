@@ -254,6 +254,9 @@ export type RetentionClass = 'ROUTINE' | 'EVIDENCE';
 // What the driver intends to do AFTER a RETURN inspection is completed.
 export type VehicleReturnIntent = 'VEHICLE_SWAP' | 'SHIFT_END';
 
+// The two required routine inspection photo roles.
+export type VehicleInspectionPhotoRole = 'EXTERIOR' | 'INTERIOR';
+
 export interface VehicleInspection {
     id: string;
     orgId: string;
@@ -267,8 +270,14 @@ export interface VehicleInspection {
     returnIntent?: VehicleReturnIntent | null;
     capturedAt?: Date | null;
     completedAt?: Date | null;
+    // Storage OBJECT PATHS (not public URLs). Written server-side only.
     exteriorPhotoPath?: string | null;
     interiorPhotoPath?: string | null;
+    exteriorPhotoSize?: number | null;
+    interiorPhotoSize?: number | null;
+    exteriorPhotoContentType?: string | null;
+    interiorPhotoContentType?: string | null;
+    // Derived convenience fields (server-set to true only after real objects are verified).
     exteriorPhotoCaptured: boolean;
     interiorPhotoCaptured: boolean;
     hasDamage: boolean;
