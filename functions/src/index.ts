@@ -2678,47 +2678,36 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
       throw new functions.https.HttpsError('invalid-argument', 'Image must be between 1 byte and 5 MB.');
     }
 
-    // Authoritative, deterministic object path (server-derived; no client path control).
+    // Server-derived UNIQUE PERMANENT object path (no shared canonical role path; no
+    // temp/promote). Every upload writes a fresh distinct object, so a late/in-flight upload
+    // can NEVER overwrite bytes already referenced by a COMPLETED inspection.
     const orgId = assignmentData.orgId || DEFAULT_ORG_ID;
     const roleSegment = photoRole.toLowerCase();
-    const objectPath = `vehicle-inspections/${orgId}/${assignmentId}/${boundaryType}/${roleSegment}.${ext}`;
-    // Temporary unique path. The canonical evidence path is only touched at the promote step,
-    // AFTER re-verifying the inspection is still PENDING (prevents a stale in-flight upload
-    // from overwriting evidence backing a COMPLETED inspection).
-    const tempPath = `vehicle-inspections/${orgId}/${assignmentId}/${boundaryType}/.tmp/${roleSegment}-${crypto.randomUUID()}.${ext}`;
+    const objectPath = `vehicle-inspections/${orgId}/${assignmentId}/${boundaryType}/${roleSegment}-${crypto.randomUUID()}.${ext}`;
 
     const bucket = admin.storage().bucket(INSPECTION_STORAGE_BUCKET);
 
-    // Step 1 — write bytes to the temporary path (never the canonical path yet).
-    await bucket.file(tempPath).save(buffer, { contentType: mimeType, resumable: false });
+    // Save bytes directly to the unique permanent path.
+    await bucket.file(objectPath).save(buffer, { contentType: mimeType, resumable: false });
 
-    // Step 2 — re-read the inspection before promoting (the gate).
-    const prePromoteDoc = await inspectionRef.get();
-    if (!prePromoteDoc.exists) {
-      await bucket.file(tempPath).delete().catch(() => {});
+    // Re-read the inspection before touching Firestore metadata. The unique path guarantees
+    // the object write could not have clobbered completed evidence even if completion raced it.
+    const recheckDoc = await inspectionRef.get();
+    if (!recheckDoc.exists) {
+      await bucket.file(objectPath).delete().catch(() => {});
       throw new functions.https.HttpsError('not-found', 'Vehicle inspection not found');
     }
-    const prePromote = prePromoteDoc.data()!;
-    if (prePromote.driverId !== driverId || prePromote.boundaryType !== boundaryType) {
-      await bucket.file(tempPath).delete().catch(() => {});
+    const recheck = recheckDoc.data()!;
+    if (recheck.driverId !== driverId || recheck.boundaryType !== boundaryType) {
+      await bucket.file(objectPath).delete().catch(() => {});
       throw new functions.https.HttpsError('failed-precondition', 'The inspection changed while the photo was uploading.');
     }
-    if (prePromote.status !== 'PENDING') {
-      await bucket.file(tempPath).delete().catch(() => {});
+    if (recheck.status !== 'PENDING') {
+      await bucket.file(objectPath).delete().catch(() => {});
       throw new functions.https.HttpsError('failed-precondition', 'This inspection was completed while the photo was uploading.');
     }
 
-    // Step 3 — promote the temporary object to the canonical evidence path.
-    await bucket.file(tempPath).copy(objectPath);
-
-    // Step 4 — re-read again after the promote, before touching Firestore metadata.
-    const postPromoteDoc = await inspectionRef.get();
-    if (!postPromoteDoc.exists || postPromoteDoc.data()!.status !== 'PENDING') {
-      await bucket.file(tempPath).delete().catch(() => {});
-      throw new functions.https.HttpsError('failed-precondition', 'This inspection was completed while the photo was uploading.');
-    }
-
-    // Step 5 — persist authoritative metadata (only while still PENDING).
+    // Persist authoritative metadata (only while still PENDING).
     const update: any = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     if (photoRole === 'EXTERIOR') {
       update.exteriorPhotoPath = objectPath;
@@ -2730,9 +2719,6 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
       update.interiorPhotoContentType = mimeType;
     }
     await inspectionRef.update(update);
-
-    // Clean up the temporary object.
-    await bucket.file(tempPath).delete().catch(() => {});
 
     return { success: true, photoRole, photoPath: objectPath };
   } catch (error: any) {
@@ -2830,6 +2816,10 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
       completedAt: admin.firestore.FieldValue.serverTimestamp(),
       hasDamage,
       damageDescription: hasDamage ? damageDescription!.trim() : null,
+      // Explicitly freeze the EXACT verified object paths (WP7D2B). A concurrent replacement
+      // upload writes a distinct unique object, so these frozen bytes can never be overwritten.
+      exteriorPhotoPath: extPath,
+      interiorPhotoPath: intPath,
       // Derived convenience fields — true only because the objects were verified above.
       exteriorPhotoCaptured: true,
       interiorPhotoCaptured: true,
