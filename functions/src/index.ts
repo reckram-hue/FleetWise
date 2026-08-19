@@ -207,6 +207,37 @@ const ReportDefectWithSessionSchema = z.object({
 });
 
 // =============================================================================
+// VEHICLE ASSIGNMENT CALLABLE SCHEMAS (WP7B)
+// =============================================================================
+
+const StartVehicleAssignmentSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  shiftId: z.string().min(1, 'Shift ID is required'),
+  vehicleId: z.string().min(1, 'Vehicle ID is required'),
+  startOdometer: z.number().min(0, 'Start odometer must be positive').optional(),
+  startChargePercent: optionalChargePercent,
+  transitionReason: z.enum(['SHIFT_START', 'VEHICLE_SWAP']).optional(),
+  deviceId: optionalString,
+});
+
+const EndVehicleAssignmentSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  assignmentId: z.string().min(1, 'Assignment ID is required'),
+  endOdometer: z.number().min(0, 'End odometer must be positive').optional(),
+  endChargePercent: optionalChargePercent,
+  transitionReason: z.enum(['VEHICLE_SWAP', 'SHIFT_END', 'CANCELLED']),
+  deviceId: optionalString,
+});
+
+const GetActiveVehicleAssignmentSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  shiftId: z.string().min(1, 'Shift ID is required').optional(),
+});
+
+// =============================================================================
 // CLOUD FUNCTIONS
 // =============================================================================
 
@@ -1964,6 +1995,14 @@ export const endShiftWithSession = functions.https.onCall(async (data, context) 
       throw new functions.https.HttpsError('failed-precondition', 'This shift has already been ended');
     }
 
+    // WP7B: prevent ending the shift while a vehicle assignment is still active.
+    if (shiftData.activeAssignmentId) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'You still have a vehicle assigned. Please return the vehicle before ending your shift.'
+      );
+    }
+
     if (shiftData.startOdometer && endOdometer < shiftData.startOdometer) {
       throw new functions.https.HttpsError(
         'invalid-argument',
@@ -1976,6 +2015,15 @@ export const endShiftWithSession = functions.https.onCall(async (data, context) 
     await db.runTransaction(async (transaction) => {
       const driverRef = db.collection('users').doc(driverId);
       const vehicleRef = db.collection('vehicles').doc(vehicleId);
+
+      // Re-check the active-assignment pointer inside the transaction (race protection).
+      const txShift = await transaction.get(shiftRef);
+      if (txShift.data()?.activeAssignmentId) {
+        throw new functions.https.HttpsError(
+          'failed-precondition',
+          'You still have a vehicle assigned. Please return the vehicle before ending your shift.'
+        );
+      }
 
       // Legacy-compatible shift update; endChargePercent is EV-only.
       const shiftUpdate: any = {
@@ -2064,3 +2112,297 @@ export const getActiveShiftWithSession = functions.https.onCall(async (data, con
     throw new functions.https.HttpsError('internal', 'Failed to get active shift: ' + error.message);
   }
 });
+
+// =============================================================================
+// VEHICLE ASSIGNMENT CALLABLES (WP7B)
+// =============================================================================
+
+/**
+ * Start a VehicleAssignment under an existing Active shift. Session-authenticated;
+ * no PIN re-entry. Enforces one ACTIVE assignment per shift and per vehicle.
+ */
+export const startVehicleAssignment = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = StartVehicleAssignmentSchema.parse(data);
+    const {
+      driverId: reqDriverId,
+      sessionToken,
+      shiftId,
+      vehicleId,
+      startOdometer,
+      startChargePercent,
+      transitionReason = 'SHIFT_START',
+    } = validated;
+
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    const [shiftDoc, vehicleDoc] = await Promise.all([
+      db.collection('shifts').doc(shiftId).get(),
+      db.collection('vehicles').doc(vehicleId).get(),
+    ]);
+
+    if (!shiftDoc.exists) throw new functions.https.HttpsError('not-found', 'Shift not found');
+    const shiftData = shiftDoc.data()!;
+
+    if (shiftData.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'You can only use your own shift.');
+    }
+    if (shiftData.status !== 'Active') {
+      throw new functions.https.HttpsError('failed-precondition', 'The shift is not active.');
+    }
+
+    if (!vehicleDoc.exists) throw new functions.https.HttpsError('not-found', 'Vehicle not found');
+    const vehicleData = vehicleDoc.data()!;
+    if (vehicleData.status !== 'Active') {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Vehicle is ' + vehicleData.status + ' and cannot be used.'
+      );
+    }
+
+    const assignmentRef = db.collection('vehicleAssignments').doc();
+    const assignmentId = assignmentRef.id;
+
+    await db.runTransaction(async (transaction) => {
+      const [txShiftDoc, txVehicleDoc] = await Promise.all([
+        transaction.get(shiftDoc.ref),
+        transaction.get(vehicleDoc.ref),
+      ]);
+
+      // A. Shift remains Active.
+      if (txShiftDoc.data()?.status !== 'Active') {
+        throw new functions.https.HttpsError('failed-precondition', 'The shift is no longer active.');
+      }
+      // B. Shift still belongs to this driver.
+      if (txShiftDoc.data()?.driverId !== driverId) {
+        throw new functions.https.HttpsError('permission-denied', 'Shift ownership changed.');
+      }
+      // C. Shift has no other ACTIVE assignment.
+      if (txShiftDoc.data()?.activeAssignmentId) {
+        throw new functions.https.HttpsError('failed-precondition', 'The shift already has an active vehicle assignment.');
+      }
+      // D. Vehicle has no other ACTIVE assignment.
+      if (txVehicleDoc.data()?.activeAssignmentId) {
+        throw new functions.https.HttpsError('failed-precondition', 'This vehicle already has an active assignment.');
+      }
+      // E/F. Vehicle activeShiftId must be absent OR equal to this same shift (legacy bridge).
+      const vehicleActiveShiftId = txVehicleDoc.data()?.activeShiftId;
+      if (vehicleActiveShiftId && vehicleActiveShiftId !== shiftId) {
+        throw new functions.https.HttpsError('failed-precondition', 'This vehicle belongs to another active shift.');
+      }
+
+      const assignmentData: any = {
+        orgId: DEFAULT_ORG_ID,
+        driverId,
+        shiftId,
+        vehicleId,
+        status: 'ACTIVE',
+        startedAt: admin.firestore.FieldValue.serverTimestamp(),
+        endedAt: null,
+        startOdometer: startOdometer ?? null,
+        endOdometer: null,
+        startChargePercent: startChargePercent ?? null,
+        endChargePercent: null,
+        transitionReason,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      transaction.set(assignmentRef, assignmentData);
+
+      transaction.update(shiftDoc.ref, {
+        activeAssignmentId: assignmentId,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      transaction.update(vehicleDoc.ref, {
+        activeAssignmentId: assignmentId,
+        activeShiftId: shiftId,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    return { success: true, assignmentId, message: 'Vehicle assignment started' };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => e.path.join('.') + ': ' + e.message).join(', '));
+    }
+    console.error('Error in startVehicleAssignment:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to start vehicle assignment: ' + error.message);
+  }
+});
+
+/**
+ * End a VehicleAssignment. Session-authenticated. Clears the shift/vehicle pointers only
+ * when they still point to this assignment/shift. Idempotent on COMPLETED.
+ */
+export const endVehicleAssignment = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = EndVehicleAssignmentSchema.parse(data);
+    const {
+      driverId: reqDriverId,
+      sessionToken,
+      assignmentId,
+      endOdometer,
+      endChargePercent,
+      transitionReason,
+    } = validated;
+
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
+    const assignmentDoc = await assignmentRef.get();
+    if (!assignmentDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
+    }
+    const assignmentData = assignmentDoc.data()!;
+
+    if (assignmentData.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'You can only end your own vehicle assignment.');
+    }
+
+    const shiftId = assignmentData.shiftId;
+    const vehicleId = assignmentData.vehicleId;
+
+    const [shiftDoc, vehicleDoc] = await Promise.all([
+      db.collection('shifts').doc(shiftId).get(),
+      db.collection('vehicles').doc(vehicleId).get(),
+    ]);
+
+    if (!shiftDoc.exists) throw new functions.https.HttpsError('not-found', 'Shift not found');
+    if (shiftDoc.data()!.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'Shift does not belong to this driver.');
+    }
+    if (!vehicleDoc.exists) throw new functions.https.HttpsError('not-found', 'Vehicle not found');
+
+    if (assignmentData.startOdometer != null && endOdometer !== undefined && endOdometer < assignmentData.startOdometer) {
+      throw new functions.https.HttpsError('invalid-argument', 'End odometer must be greater than or equal to start odometer');
+    }
+
+    await db.runTransaction(async (transaction) => {
+      const [txAssignmentDoc, txShiftDoc, txVehicleDoc] = await Promise.all([
+        transaction.get(assignmentRef),
+        transaction.get(shiftDoc.ref),
+        transaction.get(vehicleDoc.ref),
+      ]);
+
+      const txAssignment = txAssignmentDoc.data()!;
+
+      // Idempotency: already completed -> no-op (no duplicate pointer mutations).
+      if (txAssignment.status === 'COMPLETED') {
+        return;
+      }
+      if (txAssignment.status === 'CANCELLED') {
+        throw new functions.https.HttpsError('failed-precondition', 'This assignment was already cancelled.');
+      }
+
+      const isCancelled = transitionReason === 'CANCELLED';
+      const assignmentUpdate: any = {
+        status: isCancelled ? 'CANCELLED' : 'COMPLETED',
+        endedAt: admin.firestore.FieldValue.serverTimestamp(),
+        transitionReason,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (endOdometer !== undefined) assignmentUpdate.endOdometer = endOdometer;
+      if (endChargePercent !== undefined) assignmentUpdate.endChargePercent = endChargePercent;
+      transaction.update(assignmentRef, assignmentUpdate);
+
+      // Clear shift pointer only if it still points to this assignment.
+      if (txShiftDoc.data()?.activeAssignmentId === assignmentId) {
+        transaction.update(shiftDoc.ref, { activeAssignmentId: admin.firestore.FieldValue.delete() });
+      }
+      // Clear vehicle pointers only if they still belong to this assignment/shift.
+      if (txVehicleDoc.data()?.activeAssignmentId === assignmentId) {
+        transaction.update(vehicleDoc.ref, { activeAssignmentId: admin.firestore.FieldValue.delete() });
+      }
+      if (txVehicleDoc.data()?.activeShiftId === shiftId) {
+        transaction.update(vehicleDoc.ref, { activeShiftId: admin.firestore.FieldValue.delete() });
+      }
+    });
+
+    return { success: true, message: 'Vehicle assignment ended' };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => e.path.join('.') + ': ' + e.message).join(', '));
+    }
+    console.error('Error in endVehicleAssignment:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to end vehicle assignment: ' + error.message);
+  }
+});
+
+/**
+ * Get the driver's current ACTIVE VehicleAssignment (O(1) via shift.activeAssignmentId).
+ * Session-authenticated. Returns null for legacy shifts that have no assignment.
+ */
+export const getActiveVehicleAssignment = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = GetActiveVehicleAssignmentSchema.parse(data);
+    const { driverId: reqDriverId, sessionToken, shiftId: reqShiftId } = validated;
+
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    let shiftId: string | undefined = reqShiftId;
+    let shiftData: any = null;
+
+    if (shiftId) {
+      const shiftDoc = await db.collection('shifts').doc(shiftId).get();
+      if (!shiftDoc.exists) throw new functions.https.HttpsError('not-found', 'Shift not found');
+      const sd = shiftDoc.data()!;
+      if (sd.driverId !== driverId) {
+        throw new functions.https.HttpsError('permission-denied', 'You can only view your own shift.');
+      }
+      if (sd.status !== 'Active') {
+        throw new functions.https.HttpsError('failed-precondition', 'The shift is not active.');
+      }
+      shiftData = sd;
+    } else {
+      const driverDoc = await db.collection('users').doc(driverId).get();
+      const activeShiftId = driverDoc.exists ? driverDoc.data()?.activeShiftId : null;
+      if (activeShiftId) {
+        const shiftDoc = await db.collection('shifts').doc(activeShiftId).get();
+        if (shiftDoc.exists && shiftDoc.data()?.status === 'Active') {
+          shiftId = activeShiftId;
+          shiftData = shiftDoc.data()!;
+        }
+      }
+      if (!shiftId) {
+        const snapshot = await db.collection('shifts').where('driverId', '==', driverId).get();
+        for (const d of snapshot.docs) {
+          if (d.data()?.status === 'Active') {
+            shiftId = d.id;
+            shiftData = d.data()!;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!shiftId || !shiftData) {
+      return { success: true, hasActiveAssignment: false, assignment: null };
+    }
+
+    const activeAssignmentId = shiftData.activeAssignmentId;
+    if (!activeAssignmentId) {
+      return { success: true, hasActiveAssignment: false, assignment: null };
+    }
+
+    const assignmentDoc = await db.collection('vehicleAssignments').doc(activeAssignmentId).get();
+    if (!assignmentDoc.exists || assignmentDoc.data()?.status !== 'ACTIVE') {
+      return { success: true, hasActiveAssignment: false, assignment: null };
+    }
+    const assignmentData = assignmentDoc.data()!;
+    if (assignmentData.shiftId !== shiftId || assignmentData.driverId !== driverId) {
+      return { success: true, hasActiveAssignment: false, assignment: null };
+    }
+
+    return { success: true, hasActiveAssignment: true, assignment: { id: assignmentDoc.id, ...assignmentData } };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => e.path.join('.') + ': ' + e.message).join(', '));
+    }
+    console.error('Error in getActiveVehicleAssignment:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to get active vehicle assignment: ' + error.message);
+  }
+});
+

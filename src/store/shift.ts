@@ -17,6 +17,7 @@ export interface ActiveShiftState {
   startAt: string; // ISO date string
   startOdo?: number;
   startChargePercent?: number;
+  assignmentId?: string; // optional — legacy shifts have no VehicleAssignment
 }
 
 // localStorage key

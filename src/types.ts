@@ -211,6 +211,37 @@ export interface Shift {
     status: ShiftStatus;
 }
 
+// A VehicleAssignment represents "this driver possessed/used this vehicle during this
+// portion of the shift." A shift may have many assignments over time (e.g. EV swaps).
+export type VehicleAssignmentStatus =
+    | 'ACTIVE'
+    | 'COMPLETED'
+    | 'CANCELLED';
+
+export type VehicleAssignmentTransitionReason =
+    | 'SHIFT_START'
+    | 'VEHICLE_SWAP'
+    | 'SHIFT_END'
+    | 'CANCELLED';
+
+export interface VehicleAssignment {
+    id: string;
+    orgId: string;
+    driverId: string;
+    shiftId: string;
+    vehicleId: string;
+    status: VehicleAssignmentStatus;
+    startedAt: Date;
+    endedAt?: Date | null;
+    startOdometer?: number | null;
+    endOdometer?: number | null;
+    startChargePercent?: number | null;
+    endChargePercent?: number | null;
+    transitionReason: VehicleAssignmentTransitionReason;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
 export enum DefectUrgency {
     Critical = 'Critical',
     High = 'High',
