@@ -155,6 +155,50 @@ const RequireSessionSchema = z.object({
 });
 
 // =============================================================================
+// DRIVER SESSION CALLABLE SCHEMAS (WP6B)
+// =============================================================================
+
+const StartShiftWithSessionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  vehicleId: z.string().min(1, 'Vehicle ID is required'),
+  deviceId: optionalString,
+  startOdometer: z.number().min(0, 'Start odometer must be positive').optional(),
+  startChargePercent: optionalChargePercent,
+});
+
+const EndShiftWithSessionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  shiftId: z.string().min(1, 'Shift ID is required'),
+  endOdometer: z.number().min(0, 'End odometer must be positive'),
+  endChargePercent: optionalChargePercent,
+  notes: optionalNotes,
+  deviceId: optionalString,
+});
+
+const GetActiveShiftWithSessionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+});
+
+const ReportDefectWithSessionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  vehicleId: z.string().min(1, 'Vehicle ID is required'),
+  category: z.string().min(1, 'Category is required'),
+  description: z.string().min(1, 'Description is required'),
+  urgency: z.string().min(1, 'Urgency is required'),
+  location: optionalString,
+  notes: optionalString,
+  photos: z.preprocess(
+    (value) => value === null ? undefined : value,
+    z.array(z.string()).optional()
+  ),
+  deviceId: optionalString,
+});
+
+// =============================================================================
 // CLOUD FUNCTIONS
 // =============================================================================
 
@@ -1642,5 +1686,373 @@ export const reportDefect = functions.https.onCall(async (data, context) => {
     }
     console.error('Error in reportDefect:', error);
     throw new functions.https.HttpsError('internal', 'Failed to report defect: ' + error.message);
+  }
+});
+
+// =============================================================================
+// SESSION-AUTHENTICATED DRIVER CALLABLES (WP6B)
+// These callables replace PIN-per-action with a session bearer token.
+// Each one calls requireDriverSession() as the SOLE authentication mechanism.
+// The raw sessionToken is NEVER logged or written to Firestore.
+// Legacy PIN-based callables (startShiftWithPin, reportDefect, endShift,
+// getActiveShift) remain live for rollback until WP6C frontend migration is
+// complete and runtime-tested.
+// =============================================================================
+
+/**
+ * Start a shift using a driver session token instead of a PIN.
+ *
+ * The driver logs in once via driverLogin (PIN → sessionToken). This callable
+ * accepts that sessionToken as the credential — no PIN re-entry required.
+ * All shift collision and vehicle-availability logic is identical to
+ * startShiftWithPin; the only difference is the authentication path.
+ */
+export const startShift = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = StartShiftWithSessionSchema.parse(data);
+    const {
+      driverId: reqDriverId,
+      sessionToken,
+      vehicleId,
+      startOdometer,
+      startChargePercent,
+    } = validated;
+
+    // Session validation is the sole authentication step — no PIN, no rate limit.
+    // requireDriverSession cross-validates driverId against the stored session,
+    // checks revocation/expiry, and confirms the driver is still Active.
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    // Parallel reads — driverDoc needed for allowedVehicles and activeShiftId checks.
+    const [driverDoc, vehicleDoc] = await Promise.all([
+      db.collection('users').doc(driverId).get(),
+      db.collection('vehicles').doc(vehicleId).get(),
+    ]);
+
+    if (!driverDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Driver not found');
+    }
+    const driverData = driverDoc.data()!;
+
+    // requireDriverSession already checked these, but we re-check for defence-in-depth
+    // and to guard against any race between session validation and this read.
+    if (driverData.employmentStatus !== 'Active') {
+      throw new functions.https.HttpsError('failed-precondition', 'Driver is not active and cannot start shifts');
+    }
+    if (driverData.role && driverData.role !== 'driver') {
+      throw new functions.https.HttpsError('failed-precondition', 'Only drivers can start shifts');
+    }
+
+    if (!vehicleDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle not found');
+    }
+    const vehicleData = vehicleDoc.data()!;
+
+    if (vehicleData.status !== 'Active') {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        `Vehicle is ${vehicleData.status} and cannot be used for shifts`
+      );
+    }
+
+    // Active-shift collision prevention via pointer field
+    if (driverData.activeShiftId) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Driver already has an active shift. Please end your current shift first.'
+      );
+    }
+    if (vehicleData.activeShiftId) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'This vehicle is already in use by another driver. Please select a different vehicle.'
+      );
+    }
+
+    // Allowed-vehicles check (optional per-driver restriction)
+    if (driverData.allowedVehicles && Array.isArray(driverData.allowedVehicles)) {
+      if (!driverData.allowedVehicles.includes(vehicleId)) {
+        throw new functions.https.HttpsError('permission-denied', 'You are not authorized to use this vehicle');
+      }
+    }
+
+    // Legacy shift-collision detection: scans by driverId/vehicleId for docs
+    // that predate the activeShiftId pointer field. Single-field queries — no
+    // composite index required.
+    const [driverShifts, vehicleShifts] = await Promise.all([
+      db.collection('shifts').where('driverId', '==', driverId).get(),
+      db.collection('shifts').where('vehicleId', '==', vehicleId).get(),
+    ]);
+    if (driverShifts.docs.some(d => d.data().status === 'Active')) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Driver already has an active shift. Please end your current shift first.'
+      );
+    }
+    if (vehicleShifts.docs.some(d => d.data().status === 'Active')) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'This vehicle is already in use by another driver. Please select a different vehicle.'
+      );
+    }
+
+    // Create shift document in a transaction so pointer updates are atomic.
+    const shiftRef = db.collection('shifts').doc();
+    const shiftId = shiftRef.id;
+
+    await db.runTransaction(async (transaction) => {
+      // Re-check pointer fields inside the transaction to prevent TOCTOU races.
+      const [txDriverDoc, txVehicleDoc] = await Promise.all([
+        transaction.get(driverDoc.ref),
+        transaction.get(vehicleDoc.ref),
+      ]);
+
+      if (txDriverDoc.data()?.activeShiftId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Driver already has an active shift');
+      }
+      if (txVehicleDoc.data()?.activeShiftId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Vehicle is already in use');
+      }
+
+      // Legacy-compatible shift document schema; startChargePercent is EV-only.
+      const shiftData: any = {
+        driverId,
+        vehicleId,
+        startTime: admin.firestore.FieldValue.serverTimestamp(),
+        endTime: null,
+        startOdometer: startOdometer ?? null,
+        endOdometer: null,
+        endChargePercent: null,
+        status: 'Active',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (typeof startChargePercent === 'number') {
+        shiftData.startChargePercent = startChargePercent;
+      }
+      transaction.set(shiftRef, shiftData);
+
+      transaction.update(driverDoc.ref, {
+        activeShiftId: shiftId,
+        lastShiftStart: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      transaction.update(vehicleDoc.ref, {
+        activeShiftId: shiftId,
+        lastShiftStart: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    return { success: true, shiftId, message: 'Shift started successfully' };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in startShift:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to start shift: ' + error.message);
+  }
+});
+
+/**
+ * Report a vehicle defect using a session token instead of a PIN.
+ * The driverId used in the defect document is always the one returned by
+ * requireDriverSession — the client-supplied value is cross-validated against
+ * the stored session to prevent impersonation.
+ */
+export const reportDefectWithSession = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = ReportDefectWithSessionSchema.parse(data);
+    const {
+      driverId: reqDriverId,
+      sessionToken,
+      vehicleId,
+      category,
+      description,
+      urgency,
+      location,
+      notes,
+      photos,
+    } = validated;
+
+    // Session validation — no rate limiting for routine actions post-login.
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    // Vehicle must exist (no status restriction — defects can be reported on any vehicle)
+    const vehicleDoc = await db.collection('vehicles').doc(vehicleId).get();
+    if (!vehicleDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle not found');
+    }
+
+    // Build defect document using the same schema as reportDefect.
+    const defectData: Record<string, any> = {
+      vehicleId,
+      driverId,   // authoritative: from session, not raw client input
+      category,
+      description,
+      urgency,
+      status: 'Open',
+      isVisibleToDriver: true,
+      reportedDateTime: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    if (location) defectData.location = location;
+    if (notes) defectData.notes = notes;
+    if (photos && photos.length > 0) defectData.photos = photos;
+
+    const defectRef = await db.collection('defects').add(defectData);
+
+    return {
+      success: true,
+      defectId: defectRef.id,
+      message: 'Defect report submitted successfully',
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in reportDefectWithSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to report defect: ' + error.message);
+  }
+});
+
+/**
+ * End a shift using a session token.
+ *
+ * Unlike the legacy endShift (which accepts any shiftId without a driver
+ * credential), this callable enforces that the authenticated driver can only
+ * end their OWN shift — preventing cross-driver shift termination.
+ */
+export const endShiftWithSession = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = EndShiftWithSessionSchema.parse(data);
+    const { driverId: reqDriverId, sessionToken, shiftId, endOdometer, endChargePercent, notes } = validated;
+
+    // Session validation — returns the authoritative driverId.
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    const shiftRef = db.collection('shifts').doc(shiftId);
+    const shiftDoc = await shiftRef.get();
+
+    if (!shiftDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Shift not found');
+    }
+
+    const shiftData = shiftDoc.data()!;
+
+    // Enforce shift ownership — a driver may only end their own shift.
+    if (shiftData.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'You can only end your own shift.');
+    }
+
+    if (shiftData.status !== 'Active') {
+      throw new functions.https.HttpsError('failed-precondition', 'This shift has already been ended');
+    }
+
+    if (shiftData.startOdometer && endOdometer < shiftData.startOdometer) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        `End odometer (${endOdometer}) must be greater than or equal to start odometer (${shiftData.startOdometer})`
+      );
+    }
+
+    const vehicleId = shiftData.vehicleId;
+
+    await db.runTransaction(async (transaction) => {
+      const driverRef = db.collection('users').doc(driverId);
+      const vehicleRef = db.collection('vehicles').doc(vehicleId);
+
+      // Legacy-compatible shift update; endChargePercent is EV-only.
+      const shiftUpdate: any = {
+        endTime: admin.firestore.FieldValue.serverTimestamp(),
+        status: 'Completed',
+        endOdometer,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (typeof notes === 'string' && notes.trim()) {
+        shiftUpdate.notes = notes;
+      }
+      if (typeof endChargePercent === 'number') {
+        shiftUpdate.endChargePercent = endChargePercent;
+      }
+      transaction.update(shiftRef, shiftUpdate);
+
+      // Clear additive pointer fields (no-op on legacy docs that never had them).
+      transaction.update(driverRef, { activeShiftId: admin.firestore.FieldValue.delete() });
+      transaction.update(vehicleRef, { activeShiftId: admin.firestore.FieldValue.delete() });
+    });
+
+    return { success: true, message: 'Shift ended successfully' };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in endShiftWithSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to end shift: ' + error.message);
+  }
+});
+
+/**
+ * Get the active shift for the authenticated driver.
+ *
+ * Unlike the legacy getActiveShift (which accepts any driverId without a
+ * credential), this callable enforces that the query is restricted to the
+ * authenticated driver — preventing cross-driver shift data leakage.
+ */
+export const getActiveShiftWithSession = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = GetActiveShiftWithSessionSchema.parse(data);
+    const { driverId: reqDriverId, sessionToken } = validated;
+
+    // Session validation — the query is scoped to this authoritative driverId only.
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    const driverRef = db.collection('users').doc(driverId);
+    const driverDoc = await driverRef.get();
+    if (!driverDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Driver not found');
+    }
+
+    // A. Fast path: additive activeShiftId pointer on new-style driver documents.
+    const activeShiftId = driverDoc.data()?.activeShiftId;
+    if (activeShiftId) {
+      const shiftDoc = await db.collection('shifts').doc(activeShiftId).get();
+      if (shiftDoc.exists && shiftDoc.data()?.status === 'Active') {
+        return { success: true, hasActiveShift: true, shift: { id: shiftDoc.id, ...shiftDoc.data() } };
+      }
+      // Stale pointer — fall through to legacy scan.
+    }
+
+    // B. Legacy scan: query by driverId, filter Active in-memory. Single-field
+    // query avoids the need for a composite index. Scoped to this driver only.
+    const snapshot = await db.collection('shifts').where('driverId', '==', driverId).get();
+    let active: any = null;
+    snapshot.docs.forEach(d => {
+      const sd = d.data();
+      if (!active && sd && sd.status === 'Active') {
+        active = { id: d.id, ...sd };
+      }
+    });
+
+    if (active) {
+      return { success: true, hasActiveShift: true, shift: active };
+    }
+
+    return { success: true, hasActiveShift: false, shift: null };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error('Error in getActiveShiftWithSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to get active shift: ' + error.message);
   }
 });
