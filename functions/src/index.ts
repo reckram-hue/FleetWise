@@ -3,6 +3,7 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import * as crypto from 'crypto';
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -122,6 +123,35 @@ const ChangePinSchema = z.object({
   driverId: z.string().min(1, 'Driver ID is required'),
   currentPin: z.string().regex(/^\d{4}$/, 'Current PIN must be exactly 4 digits'),
   newPin: z.string().regex(/^\d{4}$/, 'New PIN must be exactly 4 digits'),
+});
+
+// =============================================================================
+// DRIVER SESSION SCHEMAS AND CONSTANTS (WP6A)
+// =============================================================================
+
+/** Maximum driver session duration. Covers a 12-hour shift plus a 4-hour buffer. */
+const SESSION_DURATION_MS = 16 * 60 * 60 * 1000;
+
+/**
+ * Placeholder orgId for single-tenant operation.
+ * Will be resolved per-tenant from the driver's organisation record in a future SaaS work package.
+ */
+const DEFAULT_ORG_ID = 'default';
+
+const DriverLoginSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  pin: z.string().regex(/^\d{4}$/, 'PIN must be exactly 4 digits'),
+  deviceId: optionalString,
+});
+
+const DriverLogoutSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+});
+
+const RequireSessionSchema = z.object({
+  driverId: z.string().min(1),
+  sessionToken: z.string().min(1),
 });
 
 // =============================================================================
@@ -470,6 +500,9 @@ export const adminSetDriverPin = functions.https.onCall(async (data, context) =>
     });
     await batch.commit();
 
+    // Revoke all active sessions for this driver — an admin PIN reset invalidates existing sessions.
+    await revokeActiveDriverSessions(driverId, 'pin_reset');
+
     return {
       success: true,
       message: 'Driver PIN set successfully',
@@ -713,6 +746,143 @@ export const getActiveShift = functions.https.onCall(async (data, context) => {
 });
 
 // =============================================================================
+// DRIVER SESSION CALLABLES (WP6A)
+// =============================================================================
+
+/**
+ * Authenticate a driver with their PIN and establish a secure session.
+ *
+ * The driver enters their PIN once here. Subsequent routine actions (startShift,
+ * reportDefect, etc.) use the returned sessionToken as a bearer credential instead
+ * of repeating the PIN.
+ *
+ * Security:
+ *   - PIN is verified with bcrypt and then discarded. It is NEVER logged or returned.
+ *   - sessionToken is a cryptographically random 32-byte opaque bearer credential.
+ *     Only its SHA-256 hash is stored in Firestore (driverSessions/{sessionHash}).
+ *     The token is returned to the client exactly once and must be stored in
+ *     localStorage by the caller — NOT in sessionStorage (cleared on PWA suspend),
+ *     NOT in React context or component state, and NOT in any log.
+ */
+export const driverLogin = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = DriverLoginSchema.parse(data);
+    const { driverId, pin, deviceId = 'unknown' } = validated;
+
+    // Apply rate limiting before touching driver data (same policy as validateDriverPin)
+    await checkRateLimit(driverId, deviceId);
+
+    const driverDoc = await db.collection('users').doc(driverId).get();
+    if (!driverDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Driver not found.');
+    }
+
+    const driverData = driverDoc.data()!;
+
+    if (driverData.employmentStatus !== 'Active') {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Your account is not active. Please contact your administrator.'
+      );
+    }
+
+    if (driverData.role && driverData.role !== 'driver') {
+      throw new functions.https.HttpsError('failed-precondition', 'This account is not a driver account.');
+    }
+
+    const storedHash = driverData.pinHash;
+    if (!storedHash) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'PIN not set. Please contact your administrator.'
+      );
+    }
+
+    // PIN verification — the only point in this callable where the PIN value is used
+    const pinValid = await bcrypt.compare(pin, storedHash);
+    if (!pinValid) {
+      throw new functions.https.HttpsError('permission-denied', 'Invalid PIN.');
+    }
+
+    // PIN is correct. Clear rate limit; the PIN reference is discarded after this point.
+    await clearRateLimit(driverId, deviceId);
+
+    // Generate session token.
+    // SECURITY: The raw token is a bearer credential — it must NOT be logged or stored server-side.
+    const sessionToken = crypto.randomBytes(32).toString('base64url');
+    const sessionHash = hashSessionToken(sessionToken);
+
+    const expiresAtMs = Date.now() + SESSION_DURATION_MS;
+    const expiresAtTimestamp = admin.firestore.Timestamp.fromMillis(expiresAtMs);
+
+    await db.collection('driverSessions').doc(sessionHash).set({
+      driverId,
+      orgId: DEFAULT_ORG_ID,
+      deviceId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      expiresAt: expiresAtTimestamp,
+      lastSeenAt: admin.firestore.FieldValue.serverTimestamp(),
+      isRevoked: false,
+    });
+
+    const requiresPinChange = pin === '1234';
+
+    return {
+      sessionToken,
+      driverId,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      requiresPinChange,
+      driver: stripToDriverSafe(driverData, driverId),
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in driverLogin:', error);
+    throw new functions.https.HttpsError('internal', 'Login failed.');
+  }
+});
+
+/**
+ * Revoke the driver's current session (logout).
+ *
+ * The sessionToken is a bearer credential — it is validated by hash lookup and then
+ * immediately revoked. The client must clear it from localStorage on success.
+ * The raw sessionToken must NEVER be logged.
+ */
+export const driverLogout = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = DriverLogoutSchema.parse(data);
+    const { driverId, sessionToken } = validated;
+
+    // Validate session before revoking (confirms it exists and belongs to this driver)
+    const { sessionHash } = await requireDriverSession({ driverId, sessionToken });
+
+    await db.collection('driverSessions').doc(sessionHash).update({
+      isRevoked: true,
+      revokedAt: admin.firestore.FieldValue.serverTimestamp(),
+      revokedReason: 'logout',
+    });
+
+    return { success: true, message: 'Logged out successfully.' };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in driverLogout:', error);
+    throw new functions.https.HttpsError('internal', 'Logout failed.');
+  }
+});
+
+// =============================================================================
 // ADMIN AUTHORIZATION HELPER
 // =============================================================================
 
@@ -764,6 +934,126 @@ function stripToDriverSafe(userData: FirebaseFirestore.DocumentData, id: string)
     department: userData.department || '',
     employmentStatus: userData.employmentStatus || 'Active',
     role: userData.role || 'driver',
+  };
+}
+
+// =============================================================================
+// DRIVER SESSION HELPERS (WP6A)
+// =============================================================================
+
+/**
+ * Compute the SHA-256 hash of a session token.
+ * The hash is used as the Firestore document ID so the raw token — a bearer credential —
+ * is never stored server-side.
+ */
+function hashSessionToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * Revoke all non-revoked sessions for a given driver.
+ * Called automatically by adminSetDriverPin (PIN reset) and archiveDriver.
+ * Idempotent: already-revoked sessions retain their original revocation metadata.
+ */
+async function revokeActiveDriverSessions(
+  driverId: string,
+  reason: 'admin_revoked' | 'pin_reset' | 'driver_archived'
+): Promise<void> {
+  const sessionDocs = await db.collection('driverSessions')
+    .where('driverId', '==', driverId)
+    .get();
+
+  if (sessionDocs.empty) return;
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const batch = db.batch();
+  let pendingCount = 0;
+
+  sessionDocs.docs.forEach((doc) => {
+    if (!doc.data().isRevoked) {
+      batch.update(doc.ref, {
+        isRevoked: true,
+        revokedAt: now,
+        revokedReason: reason,
+      });
+      pendingCount++;
+    }
+  });
+
+  if (pendingCount > 0) {
+    await batch.commit();
+  }
+}
+
+/**
+ * Validate a driver session token and return the verified session context.
+ *
+ * Security model:
+ *   - The session token is an opaque bearer credential issued by driverLogin.
+ *   - Only its SHA-256 hash is stored in Firestore (as the document ID).
+ *   - O(1) document lookup — no secondary index needed.
+ *   - The raw sessionToken must NEVER be logged or stored server-side.
+ *
+ * @returns Safe session context { driverId, orgId, sessionHash, deviceId }
+ * @throws HttpsError('unauthenticated') — session missing, revoked, or expired
+ * @throws HttpsError('permission-denied') — driverId mismatch or driver not active
+ */
+async function requireDriverSession(data: {
+  driverId: string;
+  sessionToken: string;
+}): Promise<{ driverId: string; orgId: string; sessionHash: string; deviceId: string }> {
+  const validated = RequireSessionSchema.parse(data);
+  const { driverId, sessionToken } = validated;
+
+  const sessionHash = hashSessionToken(sessionToken);
+  const sessionRef = db.collection('driverSessions').doc(sessionHash);
+  const sessionDoc = await sessionRef.get();
+
+  if (!sessionDoc.exists) {
+    throw new functions.https.HttpsError('unauthenticated', 'Session not found. Please log in again.');
+  }
+
+  const session = sessionDoc.data()!;
+
+  if (session.driverId !== driverId) {
+    throw new functions.https.HttpsError('permission-denied', 'Session does not belong to this driver.');
+  }
+
+  if (session.isRevoked) {
+    throw new functions.https.HttpsError('unauthenticated', 'Session has been revoked. Please log in again.');
+  }
+
+  if (session.expiresAt.toMillis() < Date.now()) {
+    throw new functions.https.HttpsError('unauthenticated', 'Session has expired. Please log in again.');
+  }
+
+  // Confirm driver still exists and is active (catches archival/inactivation mid-session)
+  const driverDoc = await db.collection('users').doc(driverId).get();
+  if (!driverDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Driver account not found.');
+  }
+  const driverData = driverDoc.data()!;
+  if (driverData.employmentStatus !== 'Active') {
+    throw new functions.https.HttpsError('permission-denied', 'Driver account is not active.');
+  }
+  if (driverData.role && driverData.role !== 'driver') {
+    throw new functions.https.HttpsError('permission-denied', 'Account is not a driver account.');
+  }
+
+  // Update lastSeenAt — throttled: only if more than 5 minutes since the last update.
+  // Fire-and-forget so session activity tracking does not add latency to the caller's response.
+  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+  if (session.lastSeenAt.toMillis() < fiveMinutesAgo) {
+    sessionRef
+      .update({ lastSeenAt: admin.firestore.FieldValue.serverTimestamp() })
+      .catch((err) => console.error('requireDriverSession: lastSeenAt update failed:', err));
+  }
+
+  return {
+    driverId: session.driverId,
+    orgId: session.orgId,
+    sessionHash,
+    deviceId: session.deviceId,
   };
 }
 
@@ -1115,6 +1405,9 @@ export const archiveDriver = functions.https.onCall(async (data, context) => {
     if (legalHold && legalHoldReason) updatePayload.legalHoldReason = legalHoldReason;
 
     await driverRef.update(updatePayload);
+
+    // Revoke all active sessions — an archived driver may not continue operating.
+    await revokeActiveDriverSessions(driverId, 'driver_archived');
 
     return {
       success: true,

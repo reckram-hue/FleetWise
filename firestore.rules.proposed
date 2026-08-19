@@ -87,6 +87,12 @@ service cloud.firestore {
     // ---- server-only ----
     match /rateLimits/{id} { allow read, write: if false; }
 
+    // ---- driverSessions ----
+    // Bearer-credential session store (WP6A). All reads and writes go through Cloud Functions
+    // via the Admin SDK. The document ID is the SHA-256 hash of the session token.
+    // Client access is unconditionally denied — the hash must never be readable by browsers.
+    match /driverSessions/{sessionId} { allow read, write: if false; }
+
     // ---- default deny ----
     match /{document=**} {
       allow read, write: if false;
