@@ -99,6 +99,10 @@ const DriverDashboard: React.FC = () => {
     }, [currentUser, localActiveShift]);
 
     const activeVehicle = vehicles.find(v => v.id === activeShift?.vehicleId);
+    // Vehicle-dependent actions (Log Refuel/Charge, Report a Fault) are only valid when the
+    // driver has an active Shift AND an active VehicleAssignment (WP7C1). The store's
+    // assignmentId is the authoritative client-side signal (reconciled from the server).
+    const hasActiveAssignment = !!localActiveShift?.assignmentId;
 
     const MainButton = ({ icon, text, onClick, color }: { icon: React.ReactNode, text: string, onClick: () => void, color: string }) => (
         <button onClick={onClick} className={`flex flex-col items-center justify-center p-6 rounded-lg shadow-lg text-white font-semibold transform transition hover:scale-105 ${color}`}>
@@ -171,7 +175,7 @@ const DriverDashboard: React.FC = () => {
                             }}
                             color={activeShift ? "bg-red-500 hover:bg-red-600" : "bg-blue-500 hover:bg-blue-600"}
                         />
-                        {activeVehicle?.vehicleType === VehicleType.EV ? (
+                        {hasActiveAssignment && (activeVehicle?.vehicleType === VehicleType.EV ? (
                             <MainButton
                                 icon={<Bolt size={48} />}
                                 text="Log Charge"
@@ -185,13 +189,15 @@ const DriverDashboard: React.FC = () => {
                                 onClick={() => setShowLogRefuel(true)}
                                 color="bg-orange-500 hover:bg-orange-600"
                             />
+                        ))}
+                        {hasActiveAssignment && (
+                            <MainButton
+                                icon={<AlertTriangle size={48} />}
+                                text="Report a Fault"
+                                onClick={() => setShowReportDefect(true)}
+                                color="bg-yellow-500 hover:bg-yellow-600"
+                            />
                         )}
-                        <MainButton
-                            icon={<AlertTriangle size={48} />}
-                            text="Report a Fault"
-                            onClick={() => setShowReportDefect(true)}
-                            color="bg-yellow-500 hover:bg-yellow-600"
-                        />
                         <MainButton
                             icon={<BarChart2 size={48} />}
                             text="View My Stats"
