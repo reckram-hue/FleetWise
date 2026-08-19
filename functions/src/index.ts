@@ -13,10 +13,12 @@ const db = admin.firestore();
 // RATE LIMITING HELPERS
 // =============================================================================
 
-// Derives a safe, fixed-length Firestore document ID for rate-limit records.
-// Hashing avoids `/` path separators and oversized IDs from user-agent strings.
+// Derives a safe Firestore document ID for rate-limit records.
+// The driverId prefix is kept plain so per-driver range queries remain functional.
+// The deviceId is hashed to strip `/` and other path-separator characters.
 function getRateLimitKey(driverId: string, deviceId: string): string {
-  return crypto.createHash('sha256').update(`${driverId}:${deviceId}`).digest('hex');
+  const deviceHash = crypto.createHash('sha256').update(deviceId || 'unknown').digest('hex');
+  return `${driverId}_${deviceHash}`;
 }
 
 /**
