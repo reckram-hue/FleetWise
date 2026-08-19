@@ -7,17 +7,23 @@ export interface ActiveShiftState {
   shiftId: string;
   driverId: string;
   driverName: string;
-  vehicleId: string;
-  vehicle: {
+  startAt: string; // ISO date string
+  // Shift-level (original) start context — preserved for legacy shifts and shift-start display.
+  startOdo?: number;
+  startChargePercent?: number;
+  // Current VehicleAssignment (absent while no vehicle is assigned to the active shift).
+  assignmentId?: string;
+  assignmentStartOdo?: number;
+  assignmentStartChargePercent?: number;
+  // Current/assigned vehicle. May also hold the legacy shift's vehicle as a "continue with"
+  // suggestion when the shift has no assignment yet.
+  vehicleId?: string;
+  vehicle?: {
     id: string;
     registration: string;
     alias?: string;
     vehicleType: 'ICE' | 'EV';
   };
-  startAt: string; // ISO date string
-  startOdo?: number;
-  startChargePercent?: number;
-  assignmentId?: string; // optional — legacy shifts have no VehicleAssignment
 }
 
 // localStorage key
@@ -140,6 +146,49 @@ class ShiftStore {
       this.notifyListeners();
     }
   }
+
+  /**
+   * Attach the current VehicleAssignment (vehicle + its start readings) to the active shift.
+   * The work Shift itself stays active; only the assigned-vehicle portion changes.
+   */
+  setVehicleAssignment(assignment: {
+    assignmentId: string;
+    vehicleId: string;
+    vehicle: NonNullable<ActiveShiftState['vehicle']>;
+    startOdo?: number;
+    startChargePercent?: number;
+  }): void {
+    if (!this.currentState) return;
+    this.currentState = {
+      ...this.currentState,
+      assignmentId: assignment.assignmentId,
+      vehicleId: assignment.vehicleId,
+      vehicle: assignment.vehicle,
+      assignmentStartOdo: assignment.startOdo,
+      assignmentStartChargePercent: assignment.startChargePercent,
+    };
+    this.saveToStorage();
+    this.notifyListeners();
+  }
+
+  /**
+   * Clear the current VehicleAssignment while KEEPING the work Shift active.
+   * Preserves shiftId/driverId/driverName/startAt/shift-level start readings.
+   */
+  clearVehicleAssignment(): void {
+    if (!this.currentState) return;
+    const { shiftId, driverId, driverName, startAt, startOdo, startChargePercent } = this.currentState;
+    this.currentState = {
+      shiftId,
+      driverId,
+      driverName,
+      startAt,
+      startOdo,
+      startChargePercent,
+    };
+    this.saveToStorage();
+    this.notifyListeners();
+  }
 }
 
 // Create singleton instance
@@ -152,6 +201,14 @@ export function useShiftStore(): {
   setActiveShift: (shift: ActiveShiftState) => void;
   clearActiveShift: () => void;
   updateShift: (updates: Partial<ActiveShiftState>) => void;
+  setVehicleAssignment: (assignment: {
+    assignmentId: string;
+    vehicleId: string;
+    vehicle: NonNullable<ActiveShiftState['vehicle']>;
+    startOdo?: number;
+    startChargePercent?: number;
+  }) => void;
+  clearVehicleAssignment: () => void;
 } {
   const [activeShift, setActiveShiftState] = React.useState<ActiveShiftState | null>(
     shiftStore.getActiveShift()
@@ -171,6 +228,8 @@ export function useShiftStore(): {
     setActiveShift: (shift: ActiveShiftState) => shiftStore.setActiveShift(shift),
     clearActiveShift: () => shiftStore.clearActiveShift(),
     updateShift: (updates: Partial<ActiveShiftState>) => shiftStore.updateShift(updates),
+    setVehicleAssignment: (assignment) => shiftStore.setVehicleAssignment(assignment),
+    clearVehicleAssignment: () => shiftStore.clearVehicleAssignment(),
   };
 }
 

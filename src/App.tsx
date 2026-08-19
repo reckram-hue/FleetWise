@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { UserRole, Shift, Vehicle } from './types';
+import { UserRole } from './types';
 import AdminDashboard from './components/admin/AdminDashboard';
 import AdminHealth from './components/admin/AdminHealth';
 import DriverDashboard from './components/driver/DriverDashboard';
@@ -13,6 +13,7 @@ import { User } from './types';
 import { getDriverSession, clearDriverSession, isSessionLocallyExpired } from './store/session';
 import { shiftStore } from './store/shift';
 import api from './services/firebaseApi';
+import { resolveActiveShiftState } from './lib/resolveActiveShift';
 import DriverPinLogin from './components/auth/DriverPinLogin';
 import AdminLogin from './components/auth/AdminLogin';
 import ChangePinFlow from './components/auth/ChangePinFlow';
@@ -70,36 +71,6 @@ const RoleSelectionScreen = ({
   );
 };
 
-// Reconcile the local active-shift cache with a server-provided shift, then it can be
-// routed to the Active Shift screen. The server remains authoritative.
-async function reconcileActiveShiftCache(shift: Shift, driver: User): Promise<void> {
-  let vehicle: Vehicle | null = null;
-  try {
-    vehicle = await api.getVehicle(shift.vehicleId);
-  } catch {
-    vehicle = null;
-  }
-  const startDate = new Date(shift.startTime as any);
-  if (isNaN(startDate.getTime())) {
-    throw new Error('Active shift has an unreadable startTime from the server');
-  }
-  shiftStore.setActiveShift({
-    shiftId: shift.id,
-    driverId: driver.id,
-    driverName: `${driver.firstName} ${driver.surname}`,
-    vehicleId: shift.vehicleId,
-    vehicle: {
-      id: shift.vehicleId,
-      registration: vehicle?.registration || 'Unknown',
-      alias: vehicle?.alias,
-      vehicleType: vehicle?.vehicleType || 'ICE',
-    },
-    startAt: startDate.toISOString(),
-    startOdo: shift.startOdometer,
-    startChargePercent: shift.startChargePercent,
-  });
-}
-
 function App() {
   const [appState, setAppState] = useState<AppState>({ screen: 'choose-role' });
 
@@ -114,24 +85,30 @@ function App() {
         return;
       }
       try {
-        // Validate the session server-side and retrieve any active shift.
-        const activeShift = await api.getActiveShiftWithSession(session.driverId, session.sessionToken);
         // Fetch the safe driver profile from the server (not from local storage).
         const drivers = await api.listDriversSafe();
         const profile = drivers.find((d: User) => d.id === session.driverId);
         if (cancelled) return;
-        if (profile) {
-          if (activeShift) {
-            // Resume the existing shift — the server is authoritative.
-            await reconcileActiveShiftCache(activeShift, profile);
+        if (!profile) {
+          clearDriverSession();
+          return;
+        }
+        try {
+          // Resolve the active shift + its active VehicleAssignment. Server remains authoritative.
+          const activeState = await resolveActiveShiftState(profile);
+          if (cancelled) return;
+          if (activeState) {
+            shiftStore.setActiveShift(activeState);
             window.location.hash = '/driver/shift/active';
           } else {
             shiftStore.clearActiveShift();
           }
-          setAppState({ screen: 'app', user: profile });
-        } else {
-          clearDriverSession();
+        } catch {
+          // Fail closed: an inconsistent/inaccessible server state must not present a
+          // "start new shift" path. Route to Active Shift, which surfaces a retryable error.
+          if (!cancelled) window.location.hash = '/driver/shift/active';
         }
+        if (!cancelled) setAppState({ screen: 'app', user: profile });
       } catch (e: any) {
         const code = String(e?.code || '');
         if (code.includes('unauthenticated') || code.includes('permission-denied')) {
@@ -155,9 +132,9 @@ function App() {
     try {
       const session = getDriverSession();
       if (session && !isSessionLocallyExpired(session)) {
-        const activeShift = await api.getActiveShiftWithSession(session.driverId, session.sessionToken);
-        if (activeShift) {
-          await reconcileActiveShiftCache(activeShift, driver);
+        const activeState = await resolveActiveShiftState(driver);
+        if (activeState) {
+          shiftStore.setActiveShift(activeState);
           window.location.hash = '/driver/shift/active';
         } else {
           shiftStore.clearActiveShift();

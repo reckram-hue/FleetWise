@@ -23,6 +23,8 @@ import {
   Vehicle,
   Shift,
   ShiftStatus,
+  VehicleAssignment,
+  VehicleAssignmentTransitionReason,
   DefectReport,
   DefectStatus,
   DefectCategory,
@@ -333,6 +335,73 @@ const api = {
     const data = await callFunction<{ success: boolean; hasActiveShift: boolean; shift: any | null }>('getActiveShiftWithSession', { driverId, sessionToken });
     if (data.hasActiveShift && data.shift) {
       return convertTimestamps(data.shift) as Shift;
+    }
+    return null;
+  },
+
+  /**
+   * Start a VehicleAssignment under an existing active shift (WP7B). Session-authenticated;
+   * no PIN re-entry. Enforces one ACTIVE assignment per shift and per vehicle server-side.
+   */
+  startVehicleAssignment: async (assignmentData: {
+    driverId: string;
+    sessionToken: string;
+    shiftId: string;
+    vehicleId: string;
+    startOdometer?: number;
+    startChargePercent?: number;
+    transitionReason?: VehicleAssignmentTransitionReason;
+    deviceId?: string;
+  }): Promise<{ assignmentId: string }> => {
+    const payload: any = {
+      driverId: assignmentData.driverId,
+      sessionToken: assignmentData.sessionToken,
+      shiftId: assignmentData.shiftId,
+      vehicleId: assignmentData.vehicleId,
+      deviceId: assignmentData.deviceId,
+    };
+    if (typeof assignmentData.startOdometer === 'number') payload.startOdometer = assignmentData.startOdometer;
+    if (typeof assignmentData.startChargePercent === 'number') payload.startChargePercent = assignmentData.startChargePercent;
+    if (assignmentData.transitionReason) payload.transitionReason = assignmentData.transitionReason;
+    const data = await callFunction<{ success: boolean; assignmentId: string; message: string }>('startVehicleAssignment', payload);
+    return { assignmentId: data.assignmentId };
+  },
+
+  /**
+   * End a VehicleAssignment (WP7B). Session-authenticated; no PIN re-entry.
+   * Clears the shift/vehicle pointers only when they still point to this assignment.
+   */
+  endVehicleAssignment: async (endData: {
+    driverId: string;
+    sessionToken: string;
+    assignmentId: string;
+    endOdometer?: number;
+    endChargePercent?: number;
+    transitionReason: VehicleAssignmentTransitionReason;
+    deviceId?: string;
+  }): Promise<void> => {
+    const payload: any = {
+      driverId: endData.driverId,
+      sessionToken: endData.sessionToken,
+      assignmentId: endData.assignmentId,
+      transitionReason: endData.transitionReason,
+      deviceId: endData.deviceId,
+    };
+    if (typeof endData.endOdometer === 'number') payload.endOdometer = endData.endOdometer;
+    if (typeof endData.endChargePercent === 'number') payload.endChargePercent = endData.endChargePercent;
+    await callFunction<{ success: boolean; message: string }>('endVehicleAssignment', payload);
+  },
+
+  /**
+   * Get the driver's current ACTIVE VehicleAssignment (WP7B), or null when the shift has
+   * none (e.g. a legacy shift with no assignment, or after a vehicle has been returned).
+   */
+  getActiveVehicleAssignment: async (driverId: string, sessionToken: string, shiftId?: string): Promise<VehicleAssignment | null> => {
+    const payload: any = { driverId, sessionToken };
+    if (shiftId) payload.shiftId = shiftId;
+    const data = await callFunction<{ success: boolean; hasActiveAssignment: boolean; assignment: any | null }>('getActiveVehicleAssignment', payload);
+    if (data.hasActiveAssignment && data.assignment) {
+      return convertTimestamps(data.assignment) as VehicleAssignment;
     }
     return null;
   },

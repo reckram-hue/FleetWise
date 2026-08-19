@@ -294,21 +294,57 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
         deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });
 
-      shiftStore.setActiveShift({
-        shiftId: result.id,
-        driverId: currentUser.id,
-        driverName: `${currentUser.firstName} ${currentUser.surname}`,
-        vehicleId: selectedVehicle.id,
-        vehicle: {
-          id: selectedVehicle.id,
-          registration: selectedVehicle.registration,
-          alias: selectedVehicle.alias,
-          vehicleType: selectedVehicle.vehicleType,
-        },
-        startAt: new Date().toISOString(),
-        startOdo: startOdometer,
-        startChargePercent: startChargePercent,
-      });
+      const shiftId = result.id;
+      const startAtIso = result.startTime ? new Date(result.startTime).toISOString() : new Date().toISOString();
+      const vehicle = {
+        id: selectedVehicle.id,
+        registration: selectedVehicle.registration,
+        alias: selectedVehicle.alias,
+        vehicleType: selectedVehicle.vehicleType,
+      };
+
+      try {
+        // Create the first VehicleAssignment bridge on the SAME shift + vehicle (WP7C).
+        const { assignmentId } = await api.startVehicleAssignment({
+          driverId: currentUser.id,
+          sessionToken: session.sessionToken,
+          shiftId,
+          vehicleId: selectedVehicle.id,
+          startOdometer,
+          startChargePercent,
+          transitionReason: 'SHIFT_START',
+          deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
+        });
+
+        shiftStore.setActiveShift({
+          shiftId,
+          driverId: currentUser.id,
+          driverName: `${currentUser.firstName} ${currentUser.surname}`,
+          startAt: startAtIso,
+          startOdo: startOdometer,
+          startChargePercent: startChargePercent,
+          assignmentId,
+          assignmentStartOdo: startOdometer,
+          assignmentStartChargePercent: startChargePercent,
+          vehicleId: selectedVehicle.id,
+          vehicle,
+        });
+      } catch (assignmentErr: any) {
+        // Shift created but the first assignment failed — DO NOT create another shift.
+        // Keep the shift active with the chosen vehicle as a "continue with" suggestion and
+        // route to Active Shift, which surfaces an explicit retry (recovery state).
+        console.error('First vehicle assignment failed after shift start:', assignmentErr);
+        shiftStore.setActiveShift({
+          shiftId,
+          driverId: currentUser.id,
+          driverName: `${currentUser.firstName} ${currentUser.surname}`,
+          startAt: startAtIso,
+          startOdo: startOdometer,
+          startChargePercent: startChargePercent,
+          vehicleId: selectedVehicle.id,
+          vehicle,
+        });
+      }
 
       onShiftStarted();
     } catch (err: any) {
