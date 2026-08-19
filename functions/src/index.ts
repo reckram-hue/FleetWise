@@ -2344,13 +2344,30 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
     }
     if (!vehicleDoc.exists) throw new functions.https.HttpsError('not-found', 'Vehicle not found');
 
-    // WP7D2: a RETURN inspection must be COMPLETED before the assignment may be closed.
-    // CANCELLED has been removed from the driver-session schema, so ordinary drivers cannot
-    // bypass this guard; future admin cancellation belongs to a separate recovery callable.
+    // WP7D2A: BOTH the PICKUP and RETURN inspections must be COMPLETED before the assignment
+    // may be closed. CANCELLED has been removed from the driver-session schema, so ordinary
+    // drivers cannot bypass this guard; future admin cancellation is a separate recovery callable.
+    // Deterministic IDs (${assignmentId}_PICKUP / _RETURN) guarantee the inspection's
+    // assignmentId + boundaryType by construction; we additionally verify the server-written
+    // driverId/shiftId/vehicleId match the assignment being closed.
+    const pickupInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'PICKUP'));
+    const pickupInspectionDoc = await pickupInspectionRef.get();
+    if (!pickupInspectionDoc.exists || pickupInspectionDoc.data()!.status !== 'COMPLETED') {
+      throw new functions.https.HttpsError('failed-precondition', 'A completed pickup inspection is required before returning the vehicle.');
+    }
+    const pickupData = pickupInspectionDoc.data()!;
+    if (pickupData.driverId !== driverId || pickupData.shiftId !== assignmentData.shiftId || pickupData.vehicleId !== assignmentData.vehicleId) {
+      throw new functions.https.HttpsError('failed-precondition', 'The pickup inspection does not match this assignment.');
+    }
+
     const returnInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN'));
     const returnInspectionDoc = await returnInspectionRef.get();
     if (!returnInspectionDoc.exists || returnInspectionDoc.data()!.status !== 'COMPLETED') {
       throw new functions.https.HttpsError('failed-precondition', 'A completed return inspection is required before returning the vehicle.');
+    }
+    const returnData = returnInspectionDoc.data()!;
+    if (returnData.driverId !== driverId || returnData.shiftId !== assignmentData.shiftId || returnData.vehicleId !== assignmentData.vehicleId) {
+      throw new functions.https.HttpsError('failed-precondition', 'The return inspection does not match this assignment.');
     }
 
     if (assignmentData.startOdometer != null && endOdometer !== undefined && endOdometer < assignmentData.startOdometer) {
@@ -2665,11 +2682,43 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
     const orgId = assignmentData.orgId || DEFAULT_ORG_ID;
     const roleSegment = photoRole.toLowerCase();
     const objectPath = `vehicle-inspections/${orgId}/${assignmentId}/${boundaryType}/${roleSegment}.${ext}`;
+    // Temporary unique path. The canonical evidence path is only touched at the promote step,
+    // AFTER re-verifying the inspection is still PENDING (prevents a stale in-flight upload
+    // from overwriting evidence backing a COMPLETED inspection).
+    const tempPath = `vehicle-inspections/${orgId}/${assignmentId}/${boundaryType}/.tmp/${roleSegment}-${crypto.randomUUID()}.${ext}`;
 
     const bucket = admin.storage().bucket(INSPECTION_STORAGE_BUCKET);
-    const file = bucket.file(objectPath);
-    await file.save(buffer, { contentType: mimeType, resumable: false });
 
+    // Step 1 — write bytes to the temporary path (never the canonical path yet).
+    await bucket.file(tempPath).save(buffer, { contentType: mimeType, resumable: false });
+
+    // Step 2 — re-read the inspection before promoting (the gate).
+    const prePromoteDoc = await inspectionRef.get();
+    if (!prePromoteDoc.exists) {
+      await bucket.file(tempPath).delete().catch(() => {});
+      throw new functions.https.HttpsError('not-found', 'Vehicle inspection not found');
+    }
+    const prePromote = prePromoteDoc.data()!;
+    if (prePromote.driverId !== driverId || prePromote.boundaryType !== boundaryType) {
+      await bucket.file(tempPath).delete().catch(() => {});
+      throw new functions.https.HttpsError('failed-precondition', 'The inspection changed while the photo was uploading.');
+    }
+    if (prePromote.status !== 'PENDING') {
+      await bucket.file(tempPath).delete().catch(() => {});
+      throw new functions.https.HttpsError('failed-precondition', 'This inspection was completed while the photo was uploading.');
+    }
+
+    // Step 3 — promote the temporary object to the canonical evidence path.
+    await bucket.file(tempPath).copy(objectPath);
+
+    // Step 4 — re-read again after the promote, before touching Firestore metadata.
+    const postPromoteDoc = await inspectionRef.get();
+    if (!postPromoteDoc.exists || postPromoteDoc.data()!.status !== 'PENDING') {
+      await bucket.file(tempPath).delete().catch(() => {});
+      throw new functions.https.HttpsError('failed-precondition', 'This inspection was completed while the photo was uploading.');
+    }
+
+    // Step 5 — persist authoritative metadata (only while still PENDING).
     const update: any = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     if (photoRole === 'EXTERIOR') {
       update.exteriorPhotoPath = objectPath;
@@ -2681,6 +2730,9 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
       update.interiorPhotoContentType = mimeType;
     }
     await inspectionRef.update(update);
+
+    // Clean up the temporary object.
+    await bucket.file(tempPath).delete().catch(() => {});
 
     return { success: true, photoRole, photoPath: objectPath };
   } catch (error: any) {
