@@ -412,8 +412,10 @@ const api = {
     const payload: any = {
       shiftId,
       endOdometer: endData.endOdometer,
-      notes: endData.notes,
     };
+    if (typeof endData.notes === 'string' && endData.notes.trim()) {
+      payload.notes = endData.notes.trim();
+    }
     if (typeof endData.endChargePercent === 'number') {
       payload.endChargePercent = endData.endChargePercent;
     }

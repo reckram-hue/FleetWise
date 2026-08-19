@@ -80,11 +80,23 @@ const optionalChargePercent = z.preprocess(
   z.number().min(0).max(100).optional()
 );
 
+// Optional string helper: normalize null/undefined/blank to undefined so optional
+// string fields can be omitted across the callable serialization boundary.
+const optionalString = z.preprocess(
+  (v) => (v === null || v === undefined || (typeof v === 'string' && v.trim() === '') ? undefined : v),
+  z.string().optional()
+);
+
+const optionalNotes = z.preprocess(
+  (v) => (v === null || v === undefined || (typeof v === 'string' && v.trim() === '') ? undefined : v),
+  z.string().max(500, 'Notes must be 500 characters or fewer').optional()
+);
+
 const StartShiftSchema = z.object({
   driverId: z.string().min(1, 'Driver ID is required'),
   vehicleId: z.string().min(1, 'Vehicle ID is required'),
   pin: z.string().regex(/^\d{4}$/, 'PIN must be exactly 4 digits'),
-  deviceId: z.string().optional(),
+  deviceId: optionalString,
   startOdometer: z.number().min(0, 'Start odometer must be positive').optional(),
   startChargePercent: optionalChargePercent,
 });
@@ -93,7 +105,7 @@ const EndShiftSchema = z.object({
   shiftId: z.string().min(1, 'Shift ID is required'),
   endOdometer: z.number().min(0, 'End odometer must be positive'),
   endChargePercent: optionalChargePercent,
-  notes: z.string().optional(),
+  notes: optionalNotes,
 });
 
 const SetPinSchema = z.object({
@@ -361,9 +373,11 @@ export const endShift = functions.https.onCall(async (data, context) => {
         endTime: admin.firestore.FieldValue.serverTimestamp(),
         status: 'Completed',
         endOdometer: endOdometer,
-        notes: notes ?? null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
+      if (typeof notes === 'string' && notes.trim()) {
+        shiftUpdate.notes = notes;
+      }
       if (typeof endChargePercent === 'number') {
         shiftUpdate.endChargePercent = endChargePercent;
       }
