@@ -11,6 +11,7 @@ import { resolveActiveShiftState } from '../lib/resolveActiveShift';
 import Card from '../components/shared/Card';
 import Header from '../components/shared/Header';
 import TakeVehicleForm, { TakeVehicleResult } from '../components/driver/TakeVehicleForm';
+import VehicleInspectionForm, { VehicleInspectionResult } from '../components/driver/VehicleInspectionForm';
 import ReportDefectForm from '../components/driver/ReportDefectForm';
 import LogChargeForm from '../components/driver/LogChargeForm';
 import LogRefuelForm from '../components/driver/LogRefuelForm';
@@ -30,7 +31,6 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
 
   // Form state
   const [endOdo, setEndOdo] = useState<string>('');
-  const [endCharge, setEndCharge] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
 
   // UI state
@@ -43,10 +43,40 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
   const [showReportFault, setShowReportFault] = useState(false);
   const [reconciling, setReconciling] = useState(true);
   const [lookupError, setLookupError] = useState<string | null>(null);
-  const [returning, setReturning] = useState<'VEHICLE_SWAP' | 'SHIFT_END' | null>(null);
+  const [inspecting, setInspecting] = useState<'PICKUP' | 'RETURN' | null>(null);
+  const [returnReason, setReturnReason] = useState<'VEHICLE_SWAP' | 'SHIFT_END' | null>(null);
   const [takingVehicle, setTakingVehicle] = useState(false);
 
-  // Reconcile local state with the authoritative server path (shift + active assignment).
+  // Resolve shift + active assignment + the required inspection boundary from the server.
+  // The server remains authoritative; never invent a "safe to use" state on failure.
+  const resolveAll = async () => {
+    if (!currentUser) return;
+    const state = await resolveActiveShiftState(currentUser);
+    if (!state) {
+      clearActiveShift();
+      setInspecting(null);
+      return;
+    }
+    setActiveShift(state);
+    if (state.assignmentId) {
+      const session = getDriverSession();
+      if (!session) { setInspecting(null); return; }
+      const inspections = await api.getAssignmentInspections(session.driverId, session.sessionToken, state.assignmentId);
+      const pickupDone = inspections.some(i => i.boundaryType === 'PICKUP' && i.status === 'COMPLETED');
+      if (!pickupDone) {
+        setInspecting('PICKUP');
+      } else if (inspections.some(i => i.boundaryType === 'RETURN' && i.status === 'PENDING')) {
+        setReturnReason('VEHICLE_SWAP');
+        setInspecting('RETURN');
+      } else {
+        setInspecting(null);
+      }
+    } else {
+      setInspecting(null);
+    }
+  };
+
+  // Reconcile local state with the authoritative server path on mount.
   useEffect(() => {
     let cancelled = false;
     const reconcile = async () => {
@@ -54,10 +84,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       setReconciling(true);
       setLookupError(null);
       try {
-        const state = await resolveActiveShiftState(currentUser);
-        if (cancelled) return;
-        if (state) setActiveShift(state);
-        else clearActiveShift();
+        await resolveAll();
       } catch (e: any) {
         if (!cancelled) setLookupError(e?.message || 'Failed to look up active shift');
       } finally {
@@ -69,16 +96,16 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser]);
 
-  // Re-query the authoritative server state after an ambiguous mutation (network errors).
-  const refreshFromServer = async () => {
-    if (!currentUser) return;
+  // Retry after a failed lookup.
+  const retryAll = async () => {
+    setReconciling(true);
+    setLookupError(null);
     try {
-      const state = await resolveActiveShiftState(currentUser);
-      if (state) setActiveShift(state);
-      else clearActiveShift();
-      setLookupError(null);
+      await resolveAll();
     } catch (e: any) {
       setLookupError(e?.message || 'Failed to look up active shift');
+    } finally {
+      setReconciling(false);
     }
   };
 
@@ -98,51 +125,36 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
     return () => clearInterval(interval);
   }, [activeShift]);
 
-  // ---- Return a vehicle (swap) or return-and-end-shift ----
-  const handleReturnVehicle = async (transitionReason: 'VEHICLE_SWAP' | 'SHIFT_END') => {
+  // ---- Complete a PICKUP or RETURN inspection (called by VehicleInspectionForm) ----
+  const handleInspectionCompleted = async (result: VehicleInspectionResult) => {
     if (!activeShift || !activeShift.assignmentId) return;
 
-    const endOdometer = parseFloat(endOdo);
-    if (!endOdo || isNaN(endOdometer) || endOdometer < 0) {
-      setError('Please enter a valid ending odometer reading');
-      return;
-    }
-    const startOdo = activeShift.assignmentStartOdo ?? activeShift.startOdo;
-    if (startOdo != null && endOdometer < startOdo) {
-      setError(`Ending odometer (${endOdometer} km) must be greater than or equal to starting odometer (${startOdo} km)`);
+    // PICKUP — return to the normal Active Shift screen.
+    if (inspecting !== 'RETURN') {
+      setInspecting(null);
+      setError(null);
       return;
     }
 
-    let endChargePercent: number | undefined;
-    const isEV = activeShift.vehicle?.vehicleType === 'EV';
-    if (isEV) {
-      const c = parseFloat(endCharge);
-      if (!endCharge || isNaN(c) || c < 0 || c > 100) {
-        setError('Please enter a valid end charge % (0-100)');
-        return;
-      }
-      endChargePercent = c;
+    const reason = returnReason || 'VEHICLE_SWAP';
+    const session = getDriverSession();
+    if (!session) {
+      setError('Your session has expired. Please log in again.');
+      return;
     }
 
     setSubmitting(true);
     setError(null);
 
-    const session = getDriverSession();
-    if (!session) {
-      setError('Your session has expired. Please log in again.');
-      setSubmitting(false);
-      return;
-    }
-
-    // Step 1 — end the vehicle assignment.
+    // Step 1 — end the vehicle assignment (RETURN inspection already completed server-side).
     try {
       await api.endVehicleAssignment({
         driverId: activeShift.driverId,
         sessionToken: session.sessionToken,
         assignmentId: activeShift.assignmentId,
-        endOdometer,
-        endChargePercent,
-        transitionReason,
+        endOdometer: result.endOdometer,
+        endChargePercent: result.endChargePercent,
+        transitionReason: reason,
         deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });
     } catch (err: any) {
@@ -152,19 +164,19 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       else if (code.includes('not-found')) msg = 'This vehicle assignment was already ended.';
       setError(msg);
       setSubmitting(false);
-      setReturning(null);
-      await refreshFromServer(); // decide actual state authoritatively before further action
+      setInspecting(null);
+      await resolveAll(); // decide actual state authoritatively before further action
       return;
     }
 
-    if (transitionReason === 'SHIFT_END') {
+    if (reason === 'SHIFT_END') {
       // Step 2 — end the work shift (vehicle already returned).
       try {
         await api.endShiftWithSession(activeShift.shiftId, {
           driverId: activeShift.driverId,
           sessionToken: session.sessionToken,
-          endOdometer,
-          endChargePercent,
+          endOdometer: result.endOdometer ?? 0,
+          endChargePercent: result.endChargePercent,
           notes: notes.trim() || undefined,
           deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
         });
@@ -174,17 +186,15 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
         console.error('End shift after final return failed:', err);
         setError('Vehicle returned, but ending the shift failed. Please retry End Shift.');
         setSubmitting(false);
-        setReturning(null);
-        await refreshFromServer(); // shift stays active with no assignment -> retry End Shift
+        setInspecting(null);
+        await resolveAll(); // shift stays active with no assignment -> retry End Shift
       }
       return;
     }
 
     // SWAP — keep the shift active and route to vehicle selection.
     clearVehicleAssignment();
-    setReturning(null);
-    setEndOdo('');
-    setEndCharge('');
+    setInspecting(null);
     setSubmitting(false);
     setTakingVehicle(true);
   };
@@ -199,6 +209,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       startChargePercent: result.startChargePercent,
     });
     setTakingVehicle(false);
+    setInspecting('PICKUP'); // a new assignment always requires a PICKUP inspection
     setError(null);
   };
 
@@ -260,7 +271,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
             <AlertCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
             <h2 className="text-2xl font-bold text-gray-800 mb-2">Could not check your shift</h2>
             <p className="text-red-600 mb-6">{lookupError}</p>
-            <button onClick={refreshFromServer} className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-semibold">Retry</button>
+            <button onClick={retryAll} className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-semibold">Retry</button>
           </Card>
         </main>
       </div>
@@ -314,36 +325,16 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
           </div>
         </Card>
 
-        {returning ? (
-          /* Return Vehicle form */
-          <Card>
-            <h3 className="text-xl font-bold text-gray-800 mb-4">{returning === 'SHIFT_END' ? 'Return Vehicle & End Shift' : 'Return / Change Vehicle'}</h3>
-            {error && <div className="mb-4 p-4 bg-red-50 border-l-4 border-red-500 rounded"><div className="flex items-center"><AlertCircle className="h-5 w-5 text-red-500 mr-2" /><p className="text-red-700 font-semibold">Error</p></div><p className="text-red-600 text-sm mt-1">{error}</p></div>}
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">End Odometer (km) <span className="text-red-500">*</span></label>
-                <input type="number" value={endOdo} onChange={e => setEndOdo(e.target.value)} placeholder="Enter ending odometer reading" className="w-full px-4 py-2 border border-gray-300 rounded-lg" required />
-                {displayStartOdo != null && <p className="text-xs text-gray-500 mt-1">Started at {displayStartOdo.toLocaleString()} km</p>}
-              </div>
-              {currentVehicle?.vehicleType === 'EV' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">End Charge (%) <span className="text-red-500">*</span></label>
-                  <input type="number" min="0" max="100" value={endCharge} onChange={e => setEndCharge(e.target.value)} placeholder="Enter ending charge percentage" className="w-full px-4 py-2 border border-gray-300 rounded-lg" />
-                  {displayStartCharge != null && <p className="text-xs text-gray-500 mt-1">Started at {displayStartCharge}%</p>}
-                </div>
-              )}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes (Optional)</label>
-                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Any notes about the vehicle condition, etc." className="w-full px-4 py-2 border border-gray-300 rounded-lg resize-none" />
-              </div>
-            </div>
-            <div className="mt-6 flex justify-between">
-              <button onClick={() => { setReturning(null); setError(null); }} disabled={submitting} className="px-6 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 font-semibold disabled:opacity-50">Cancel</button>
-              <button onClick={() => handleReturnVehicle(returning)} disabled={submitting} className="flex items-center px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold disabled:opacity-50">
-                {submitting ? (<><Loader className="animate-spin mr-2 h-5 w-5" />Processing...</>) : (returning === 'SHIFT_END' ? 'Return & End Shift' : 'Return Vehicle')}
-              </button>
-            </div>
-          </Card>
+        {inspecting && hasAssignment && currentVehicle ? (
+          <VehicleInspectionForm
+            boundaryType={inspecting}
+            assignmentId={activeShift.assignmentId || ''}
+            driverId={activeShift.driverId}
+            vehicle={currentVehicle}
+            startOdo={activeShift.assignmentStartOdo}
+            onCompleted={handleInspectionCompleted}
+            onBack={inspecting === 'RETURN' ? () => { setInspecting(null); setError(null); } : undefined}
+          />
         ) : takingVehicle ? (
           <TakeVehicleForm
             shiftId={activeShift.shiftId}
@@ -434,11 +425,11 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
 
               {hasAssignment ? (
                 <>
-                  <button onClick={() => { setReturning('VEHICLE_SWAP'); setEndOdo(''); setEndCharge(''); setError(null); }} className="flex flex-col items-center justify-center p-4 bg-white border border-blue-200 rounded-xl shadow-sm hover:shadow-md hover:bg-blue-50 transition-all active:scale-95">
+                  <button onClick={() => { setReturnReason('VEHICLE_SWAP'); setInspecting('RETURN'); setError(null); }} className="flex flex-col items-center justify-center p-4 bg-white border border-blue-200 rounded-xl shadow-sm hover:shadow-md hover:bg-blue-50 transition-all active:scale-95">
                     <div className="bg-blue-50 p-3 rounded-full mb-2"><Car className="h-6 w-6 text-blue-600" /></div>
                     <span className="font-semibold text-blue-700">Return / Change Vehicle</span>
                   </button>
-                  <button onClick={() => { setReturning('SHIFT_END'); setEndOdo(''); setEndCharge(''); setError(null); }} className="flex flex-col items-center justify-center p-4 bg-white border border-red-200 rounded-xl shadow-sm hover:shadow-md hover:bg-red-50 transition-all active:scale-95 col-span-2">
+                  <button onClick={() => { setReturnReason('SHIFT_END'); setInspecting('RETURN'); setError(null); }} className="flex flex-col items-center justify-center p-4 bg-white border border-red-200 rounded-xl shadow-sm hover:shadow-md hover:bg-red-50 transition-all active:scale-95 col-span-2">
                     <div className="bg-red-100 p-3 rounded-full mb-2"><Flag className="h-6 w-6 text-red-600" /></div>
                     <span className="font-bold text-red-700">Return Vehicle & End Shift</span>
                   </button>

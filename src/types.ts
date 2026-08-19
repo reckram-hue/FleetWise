@@ -242,6 +242,38 @@ export interface VehicleAssignment {
     updatedAt: Date;
 }
 
+// A VehicleInspection captures chain-of-custody / condition evidence at a
+// VehicleAssignment boundary (PICKUP or RETURN). Photo paths remain null until
+// WP7D2 adds real Cloud Storage; WP7D1 records capture-completion booleans only.
+export type VehicleInspectionBoundary = 'PICKUP' | 'RETURN';
+
+export type VehicleInspectionStatus = 'PENDING' | 'COMPLETED';
+
+export type RetentionClass = 'ROUTINE' | 'EVIDENCE';
+
+export interface VehicleInspection {
+    id: string;
+    orgId: string;
+    assignmentId: string;
+    shiftId: string;
+    driverId: string;
+    vehicleId: string;
+    boundaryType: VehicleInspectionBoundary;
+    status: VehicleInspectionStatus;
+    capturedAt?: Date | null;
+    completedAt?: Date | null;
+    exteriorPhotoPath?: string | null;
+    interiorPhotoPath?: string | null;
+    exteriorPhotoCaptured: boolean;
+    interiorPhotoCaptured: boolean;
+    hasDamage: boolean;
+    damageDescription?: string | null;
+    retentionClass: RetentionClass;
+    expiresAt?: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
 export enum DefectUrgency {
     Critical = 'Critical',
     High = 'High',

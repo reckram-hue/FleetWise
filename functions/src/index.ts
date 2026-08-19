@@ -247,6 +247,33 @@ const GetActiveVehicleAssignmentSchema = z.object({
 });
 
 // =============================================================================
+// VEHICLE INSPECTION CALLABLE SCHEMAS (WP7D1)
+// =============================================================================
+
+const CreateVehicleInspectionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  assignmentId: z.string().min(1, 'Assignment ID is required'),
+  boundaryType: z.enum(['PICKUP', 'RETURN']),
+});
+
+const CompleteVehicleInspectionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  inspectionId: z.string().min(1, 'Inspection ID is required'),
+  hasDamage: z.boolean(),
+  damageDescription: optionalString,
+  exteriorPhotoCaptured: z.boolean().optional().default(false),
+  interiorPhotoCaptured: z.boolean().optional().default(false),
+});
+
+const GetAssignmentInspectionsSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  assignmentId: z.string().min(1, 'Assignment ID is required'),
+});
+
+// =============================================================================
 // CLOUD FUNCTIONS
 // =============================================================================
 
@@ -2303,6 +2330,16 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
     }
     if (!vehicleDoc.exists) throw new functions.https.HttpsError('not-found', 'Vehicle not found');
 
+    // WP7D1: a RETURN inspection must be COMPLETED before the assignment may be closed via
+    // the driver's return flows (VEHICLE_SWAP / SHIFT_END). Cancellation is exempt.
+    if (transitionReason !== 'CANCELLED') {
+      const returnInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN'));
+      const returnInspectionDoc = await returnInspectionRef.get();
+      if (!returnInspectionDoc.exists || returnInspectionDoc.data()!.status !== 'COMPLETED') {
+        throw new functions.https.HttpsError('failed-precondition', 'A completed return inspection is required before returning the vehicle.');
+      }
+    }
+
     if (assignmentData.startOdometer != null && endOdometer !== undefined && endOdometer < assignmentData.startOdometer) {
       throw new functions.https.HttpsError('invalid-argument', 'End odometer must be greater than or equal to start odometer');
     }
@@ -2447,3 +2484,213 @@ export const getActiveVehicleAssignment = functions.https.onCall(async (data, co
   }
 });
 
+// =============================================================================
+// VEHICLE INSPECTION CALLABLES (WP7D1)
+// =============================================================================
+
+/**
+ * Deterministic inspection document ID: one PICKUP and one RETURN per assignment.
+ * Idempotent, retry-safe, O(1) reads — no index required.
+ */
+function inspectionDocId(assignmentId: string, boundaryType: 'PICKUP' | 'RETURN'): string {
+  return `${assignmentId}_${boundaryType}`;
+}
+
+/** ROUTINE inspection retention: 7 days. EVIDENCE inspections never auto-expire. */
+const ROUTINE_INSPECTION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Create a PENDING inspection for an ACTIVE assignment (idempotent).
+ * The deterministic ID guarantees at most one PICKUP and one RETURN inspection per assignment.
+ */
+export const createVehicleInspection = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = CreateVehicleInspectionSchema.parse(data);
+    const { driverId: reqDriverId, sessionToken, assignmentId, boundaryType } = validated;
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
+    const assignmentDoc = await assignmentRef.get();
+    if (!assignmentDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
+    }
+    const assignmentData = assignmentDoc.data()!;
+    if (assignmentData.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'You can only inspect your own vehicle assignment.');
+    }
+    if (assignmentData.status !== 'ACTIVE') {
+      throw new functions.https.HttpsError('failed-precondition', 'The assignment is no longer active.');
+    }
+
+    const inspectionId = inspectionDocId(assignmentId, boundaryType);
+    const inspectionRef = db.collection('vehicleInspections').doc(inspectionId);
+    const existing = await inspectionRef.get();
+    if (existing.exists) {
+      // Idempotent — never create a duplicate boundary inspection.
+      return { success: true, inspection: { id: inspectionId, ...existing.data() } };
+    }
+
+    const inspectionData = {
+      orgId: assignmentData.orgId || DEFAULT_ORG_ID,
+      assignmentId,
+      shiftId: assignmentData.shiftId,
+      driverId,
+      vehicleId: assignmentData.vehicleId,
+      boundaryType,
+      status: 'PENDING',
+      capturedAt: null,
+      completedAt: null,
+      exteriorPhotoPath: null,
+      interiorPhotoPath: null,
+      exteriorPhotoCaptured: false,
+      interiorPhotoCaptured: false,
+      hasDamage: false,
+      damageDescription: null,
+      retentionClass: 'ROUTINE',
+      expiresAt: null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    await inspectionRef.set(inspectionData);
+
+    return { success: true, inspection: { id: inspectionId, ...inspectionData } };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in createVehicleInspection:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to create vehicle inspection: ' + error.message);
+  }
+});
+
+/**
+ * Complete a PENDING inspection with damage + photo capture markers.
+ * retentionClass is determined SERVER-SIDE from hasDamage (never trusted from the client).
+ * A COMPLETED inspection cannot be rewritten.
+ */
+export const completeVehicleInspection = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = CompleteVehicleInspectionSchema.parse(data);
+    const {
+      driverId: reqDriverId,
+      sessionToken,
+      inspectionId,
+      hasDamage,
+      damageDescription,
+      exteriorPhotoCaptured,
+      interiorPhotoCaptured,
+    } = validated;
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    const inspectionRef = db.collection('vehicleInspections').doc(inspectionId);
+    const inspectionDoc = await inspectionRef.get();
+    if (!inspectionDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle inspection not found');
+    }
+    const inspectionData = inspectionDoc.data()!;
+    if (inspectionData.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'You can only complete your own inspection.');
+    }
+    if (inspectionData.status === 'COMPLETED') {
+      // Idempotent + immutable: return the existing record without rewriting it.
+      return { success: true, inspection: { id: inspectionId, ...inspectionData } };
+    }
+
+    // The inspection must still belong to an ACTIVE assignment owned by this driver.
+    const assignmentRef = db.collection('vehicleAssignments').doc(inspectionData.assignmentId);
+    const assignmentDoc = await assignmentRef.get();
+    if (!assignmentDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
+    }
+    const assignmentData = assignmentDoc.data()!;
+    if (assignmentData.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'Assignment does not belong to this driver.');
+    }
+    if (assignmentData.status !== 'ACTIVE') {
+      throw new functions.https.HttpsError('failed-precondition', 'The assignment is no longer active.');
+    }
+    // Cross-check the inspection links to the assignment's shift/vehicle.
+    if (inspectionData.shiftId !== assignmentData.shiftId || inspectionData.vehicleId !== assignmentData.vehicleId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Inspection does not match the assignment.');
+    }
+
+    // Damage description is required when damage is reported.
+    if (hasDamage && (!damageDescription || damageDescription.trim() === '')) {
+      throw new functions.https.HttpsError('invalid-argument', 'A damage description is required when damage is reported.');
+    }
+    // Both condition photos are required at completion.
+    if (!exteriorPhotoCaptured) {
+      throw new functions.https.HttpsError('invalid-argument', 'An exterior condition photo is required.');
+    }
+    if (!interiorPhotoCaptured) {
+      throw new functions.https.HttpsError('invalid-argument', 'An interior/dashboard photo is required.');
+    }
+
+    const retentionClass = hasDamage ? 'EVIDENCE' : 'ROUTINE';
+    const expiresAt = hasDamage
+      ? null
+      : admin.firestore.Timestamp.fromMillis(Date.now() + ROUTINE_INSPECTION_RETENTION_MS);
+
+    await inspectionRef.update({
+      status: 'COMPLETED',
+      capturedAt: admin.firestore.FieldValue.serverTimestamp(),
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      hasDamage,
+      damageDescription: hasDamage ? damageDescription!.trim() : null,
+      exteriorPhotoCaptured: !!exteriorPhotoCaptured,
+      interiorPhotoCaptured: !!interiorPhotoCaptured,
+      retentionClass,
+      expiresAt,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const updated = await inspectionRef.get();
+    return { success: true, inspection: { id: inspectionId, ...updated.data() } };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in completeVehicleInspection:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to complete vehicle inspection: ' + error.message);
+  }
+});
+
+/**
+ * List both boundary inspections for an assignment (O(1) deterministic reads).
+ */
+export const getAssignmentInspections = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = GetAssignmentInspectionsSchema.parse(data);
+    const { driverId: reqDriverId, sessionToken, assignmentId } = validated;
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+
+    const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
+    const assignmentDoc = await assignmentRef.get();
+    if (!assignmentDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
+    }
+    if (assignmentDoc.data()!.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'You can only view your own inspections.');
+    }
+
+    const [pickupDoc, returnDoc] = await Promise.all([
+      db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'PICKUP')).get(),
+      db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN')).get(),
+    ]);
+
+    const inspections: any[] = [];
+    if (pickupDoc.exists) inspections.push({ id: pickupDoc.id, ...pickupDoc.data() });
+    if (returnDoc.exists) inspections.push({ id: returnDoc.id, ...returnDoc.data() });
+
+    return { success: true, inspections };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in getAssignmentInspections:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to get assignment inspections: ' + error.message);
+  }
+});

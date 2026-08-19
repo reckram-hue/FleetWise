@@ -25,6 +25,8 @@ import {
   ShiftStatus,
   VehicleAssignment,
   VehicleAssignmentTransitionReason,
+  VehicleInspection,
+  VehicleInspectionBoundary,
   DefectReport,
   DefectStatus,
   DefectCategory,
@@ -404,6 +406,39 @@ const api = {
       return convertTimestamps(data.assignment) as VehicleAssignment;
     }
     return null;
+  },
+
+  /**
+   * Create (or return the existing) PENDING inspection for an ACTIVE assignment (WP7D1).
+   * Deterministic doc ID guarantees at most one PICKUP and one RETURN per assignment.
+   */
+  createVehicleInspection: async (driverId: string, sessionToken: string, assignmentId: string, boundaryType: VehicleInspectionBoundary): Promise<VehicleInspection> => {
+    const data = await callFunction<{ success: boolean; inspection: any }>('createVehicleInspection', { driverId, sessionToken, assignmentId, boundaryType });
+    return convertTimestamps(data.inspection) as VehicleInspection;
+  },
+
+  /**
+   * Complete a PENDING inspection (WP7D1). retentionClass is determined server-side.
+   */
+  completeVehicleInspection: async (inspectionData: {
+    driverId: string;
+    sessionToken: string;
+    inspectionId: string;
+    hasDamage: boolean;
+    damageDescription?: string;
+    exteriorPhotoCaptured: boolean;
+    interiorPhotoCaptured: boolean;
+  }): Promise<VehicleInspection> => {
+    const data = await callFunction<{ success: boolean; inspection: any }>('completeVehicleInspection', inspectionData);
+    return convertTimestamps(data.inspection) as VehicleInspection;
+  },
+
+  /**
+   * List the boundary inspections for an assignment (O(1) deterministic reads) (WP7D1).
+   */
+  getAssignmentInspections: async (driverId: string, sessionToken: string, assignmentId: string): Promise<VehicleInspection[]> => {
+    const data = await callFunction<{ success: boolean; inspections: any[] }>('getAssignmentInspections', { driverId, sessionToken, assignmentId });
+    return data.inspections.map(i => convertTimestamps(i) as VehicleInspection);
   },
 
   // ==================== VEHICLES ====================

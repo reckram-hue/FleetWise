@@ -98,6 +98,12 @@ service cloud.firestore {
     // Cloud Functions via the Admin SDK. Direct client access is denied.
     match /vehicleAssignments/{assignmentId} { allow read, write: if false; }
 
+    // ---- vehicleInspections ----
+    // Server-only (WP7D1). PICKUP/RETURN inspection metadata is created/completed/read
+    // exclusively through session-authenticated Cloud Functions via the Admin SDK.
+    // Direct client access is denied.
+    match /vehicleInspections/{inspectionId} { allow read, write: if false; }
+
     // ---- default deny ----
     match /{document=**} {
       allow read, write: if false;
