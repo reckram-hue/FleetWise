@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { UserRole } from './types';
 import AdminDashboard from './components/admin/AdminDashboard';
@@ -10,6 +10,8 @@ import ShiftStart from './pages/ShiftStart';
 import ActiveShift from './pages/ActiveShift';
 import { UserContext } from './contexts/UserContext';
 import { User } from './types';
+import { getDriverSession, clearDriverSession, isSessionLocallyExpired } from './store/session';
+import api from './services/firebaseApi';
 import DriverPinLogin from './components/auth/DriverPinLogin';
 import AdminLogin from './components/auth/AdminLogin';
 import ChangePinFlow from './components/auth/ChangePinFlow';
@@ -69,6 +71,39 @@ const RoleSelectionScreen = ({
 
 function App() {
   const [appState, setAppState] = useState<AppState>({ screen: 'choose-role' });
+
+  // Restore a driver session on app start (survives page refresh). The server remains
+  // authoritative; we never restore a profile from a locally cached full profile.
+  useEffect(() => {
+    let cancelled = false;
+    const restore = async () => {
+      const session = getDriverSession();
+      if (!session || isSessionLocallyExpired(session)) {
+        clearDriverSession();
+        return;
+      }
+      try {
+        // Validate the session server-side (throws if expired/revoked/invalid).
+        await api.getActiveShiftWithSession(session.driverId, session.sessionToken);
+        // Fetch the safe driver profile from the server (not from local storage).
+        const drivers = await api.listDriversSafe();
+        const profile = drivers.find((d: User) => d.id === session.driverId);
+        if (cancelled) return;
+        if (profile) {
+          setAppState({ screen: 'app', user: profile });
+        } else {
+          clearDriverSession();
+        }
+      } catch (e: any) {
+        const code = String(e?.code || '');
+        if (code.includes('unauthenticated') || code.includes('permission-denied')) {
+          clearDriverSession();
+        }
+      }
+    };
+    restore();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleDriverLogin = (driver: User, requiresPinChange: boolean) => {
     if (requiresPinChange) {

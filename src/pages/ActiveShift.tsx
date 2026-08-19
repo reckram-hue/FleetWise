@@ -4,6 +4,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useShiftStore } from '../store/shift';
 import { UserContext } from '../contexts/UserContext';
 import api from '../services/firebaseApi';
+import { getDriverSession } from '../store/session';
 import Card from '../components/shared/Card';
 import Header from '../components/shared/Header';
 import {
@@ -65,7 +66,11 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       setReconciling(true);
       setLookupError(null);
       try {
-        const shift = await api.getActiveShift(currentUser.id);
+        const session = getDriverSession();
+        if (!session) {
+          throw new Error('Your session has expired. Please log in again.');
+        }
+        const shift = await api.getActiveShiftWithSession(currentUser.id, session.sessionToken);
         if (cancelled) return;
         if (shift) {
           let vehicle = null;
@@ -168,12 +173,21 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
     setError(null);
 
     try {
-      // Call Cloud Function to end shift
-      await api.endShiftWithPin(
+      const session = getDriverSession();
+      if (!session) {
+        throw new Error('Your session has expired. Please log in again.');
+      }
+      // Call the session-authenticated Cloud Function to end the shift.
+      await api.endShiftWithSession(
         activeShift.shiftId,
-        endOdometer,
-        endChargePercent,
-        notes.trim() || undefined
+        {
+          driverId: activeShift.driverId,
+          sessionToken: session.sessionToken,
+          endOdometer: endOdometer,
+          endChargePercent: endChargePercent,
+          notes: notes.trim() || undefined,
+          deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
+        }
       );
 
       // Clear local shift state

@@ -4,6 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import { User } from '../../types';
 import api from '../../services/firebaseApi';
+import { setDriverSession } from '../../store/session';
 import { ShieldCheck, User as UserIcon, Lock, AlertCircle, Loader } from 'lucide-react';
 import Card from '../shared/Card';
 
@@ -77,29 +78,34 @@ const DriverPinLogin: React.FC<DriverPinLoginProps> = ({ onLogin, onAdminLogin }
         `browser_${navigator.userAgent.substring(0, 50)}`;
       localStorage.setItem('fleetwise_device_id', deviceId);
 
-      // Validate PIN by attempting to get active shift (this verifies the PIN)
-      // We use our client-side validation logic
-      const result = await api.validateDriverPin(selectedDriver.id, pin);
+      // Establish a server-issued driver session. The PIN is verified server-side and
+      // discarded; it is never persisted. The returned sessionToken is a bearer credential
+      // stored only in the dedicated session store.
+      const result = await api.driverLogin(selectedDriver.id, pin, deviceId);
 
-      if (result.valid) {
-        // Check if driver is using default PIN (1234)
-        const requiresPinChange = result.requiresPinChange;
-        onLogin(selectedDriver, requiresPinChange);
-      } else {
-        setError(result.message || 'Invalid PIN. Please try again.');
-        setPin('');
-      }
+      setDriverSession({
+        sessionToken: result.sessionToken,
+        driverId: result.driverId,
+        expiresAt: result.expiresAt,
+      });
+
+      // Clear the PIN immediately; never persist it anywhere.
+      setPin('');
+
+      onLogin(result.driver, result.requiresPinChange);
     } catch (err: any) {
-      console.error('Login failed:', err);
-
+      const code = String(err?.code || '');
+      const msg = String(err?.message || '');
       let errorMessage = 'Login failed. Please try again.';
 
-      if (err.message?.includes('permission-denied')) {
+      if (code.includes('permission-denied')) {
         errorMessage = 'Incorrect PIN. Please try again.';
-      } else if (err.message?.includes('resource-exhausted')) {
+      } else if (code.includes('resource-exhausted')) {
         errorMessage = 'Too many failed attempts. Please wait 10 minutes before trying again.';
-      } else if (err.message?.includes('not-found')) {
-        errorMessage = 'Driver PIN not set. Please contact your administrator.';
+      } else if (code.includes('failed-precondition')) {
+        errorMessage = msg || 'Login failed. Please try again.';
+      } else if (code.includes('not-found')) {
+        errorMessage = 'Driver not found. Please contact your administrator.';
       }
 
       setError(errorMessage);
@@ -268,9 +274,9 @@ const DriverPinLogin: React.FC<DriverPinLoginProps> = ({ onLogin, onAdminLogin }
 
           <div className="mt-6 p-3 bg-yellow-900/30 border border-yellow-600 rounded-lg">
             <p className="text-xs text-yellow-200 text-center">
-              <strong>First time logging in?</strong>
+              <strong>Enter your PIN</strong>
               <br />
-              Your default PIN is <strong>1234</strong>. You'll be prompted to change it.
+              If you do not know your PIN, contact your administrator.
             </p>
           </div>
         </div>

@@ -1,5 +1,7 @@
 import React, { useContext } from 'react';
 import { UserContext } from '../../contexts/UserContext';
+import { getDriverSession, clearDriverSession } from '../../store/session';
+import api from '../../services/firebaseApi';
 import { ShieldCheck, LogOut, ArrowLeft } from 'lucide-react';
 
 interface HeaderProps {
@@ -10,7 +12,17 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = ({ title, onBack }) => {
   const { currentUser, setCurrentUser } = useContext(UserContext);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Revoke the session server-side, then clear local driver state.
+    const session = getDriverSession();
+    if (session) {
+      try {
+        await api.driverLogout(session.driverId, session.sessionToken);
+      } catch {
+        // Ignore remote failure — we clear local state regardless.
+      }
+      clearDriverSession();
+    }
     setCurrentUser(null);
   };
 

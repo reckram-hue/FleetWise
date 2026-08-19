@@ -26,6 +26,7 @@ import {
   DefectReport,
   DefectStatus,
   DefectCategory,
+  DefectUrgency,
   Cost,
   LeaderboardEntry,
   VehicleStats,
@@ -188,6 +189,152 @@ const api = {
       endDate,
     });
     return convertTimestamps(data.user) as User;
+  },
+
+  // ==================== DRIVER SESSION (WP6A/WP6B) ====================
+
+  /**
+   * Establish a driver session. The driver enters their PIN exactly once here; the
+   * returned sessionToken is a bearer credential used by all later session-authenticated
+   * calls. Returns a SAFE driver profile (no pinHash/email/idNumber/contact).
+   */
+  driverLogin: async (driverId: string, pin: string, deviceId?: string): Promise<{
+    sessionToken: string;
+    driverId: string;
+    expiresAt: string;
+    requiresPinChange: boolean;
+    driver: User;
+  }> => {
+    const data = await callFunction<any>('driverLogin', { driverId, pin, deviceId });
+    return {
+      sessionToken: data.sessionToken,
+      driverId: data.driverId,
+      expiresAt: data.expiresAt,
+      requiresPinChange: data.requiresPinChange,
+      driver: data.driver as User,
+    };
+  },
+
+  /**
+   * Revoke the driver session server-side.
+   */
+  driverLogout: async (driverId: string, sessionToken: string): Promise<void> => {
+    await callFunction('driverLogout', { driverId, sessionToken });
+  },
+
+  /**
+   * Session-authenticated start shift (WP6B). No PIN re-entry.
+   */
+  startShiftWithSession: async (shiftData: {
+    driverId: string;
+    sessionToken: string;
+    vehicleId: string;
+    startOdometer?: number;
+    startChargePercent?: number;
+    deviceId?: string;
+  }): Promise<Shift> => {
+    const payload: any = {
+      driverId: shiftData.driverId,
+      sessionToken: shiftData.sessionToken,
+      vehicleId: shiftData.vehicleId,
+      startOdometer: shiftData.startOdometer,
+      deviceId: shiftData.deviceId,
+    };
+    if (typeof shiftData.startChargePercent === 'number') {
+      payload.startChargePercent = shiftData.startChargePercent;
+    }
+    const data = await callFunction<{ success: boolean; shiftId: string; message: string }>('startShift', payload);
+    return {
+      id: data.shiftId,
+      driverId: shiftData.driverId,
+      vehicleId: shiftData.vehicleId,
+      startTime: new Date(),
+      startOdometer: shiftData.startOdometer || 0,
+      startChargePercent: shiftData.startChargePercent,
+      status: ShiftStatus.Active,
+    } as Shift;
+  },
+
+  /**
+   * Session-authenticated defect reporting (WP6B). No PIN re-entry.
+   */
+  reportDefectWithSession: async (defectData: {
+    driverId: string;
+    sessionToken: string;
+    vehicleId: string;
+    category: DefectCategory;
+    description: string;
+    urgency: DefectUrgency;
+    location?: string;
+    notes?: string;
+    photos?: string[];
+    deviceId?: string;
+  }): Promise<DefectReport> => {
+    const data = await callFunction<{ success: boolean; defectId: string; message: string }>('reportDefectWithSession', {
+      driverId: defectData.driverId,
+      sessionToken: defectData.sessionToken,
+      vehicleId: defectData.vehicleId,
+      category: defectData.category,
+      description: defectData.description,
+      urgency: defectData.urgency,
+      location: defectData.location,
+      notes: defectData.notes,
+      photos: defectData.photos,
+      deviceId: defectData.deviceId,
+    });
+    return {
+      id: data.defectId,
+      driverId: defectData.driverId,
+      vehicleId: defectData.vehicleId,
+      category: defectData.category,
+      description: defectData.description,
+      urgency: defectData.urgency,
+      location: defectData.location,
+      notes: defectData.notes,
+      photos: defectData.photos,
+      reportedDateTime: new Date(),
+      status: DefectStatus.Open,
+      isVisibleToDriver: true,
+    } as DefectReport;
+  },
+
+  /**
+   * Session-authenticated end shift (WP6B). No PIN re-entry.
+   */
+  endShiftWithSession: async (shiftId: string, endData: {
+    driverId: string;
+    sessionToken: string;
+    endOdometer: number;
+    endChargePercent?: number;
+    notes?: string;
+    deviceId?: string;
+  }): Promise<Shift> => {
+    const payload: any = {
+      driverId: endData.driverId,
+      sessionToken: endData.sessionToken,
+      shiftId,
+      endOdometer: endData.endOdometer,
+      deviceId: endData.deviceId,
+    };
+    if (typeof endData.notes === 'string' && endData.notes.trim()) {
+      payload.notes = endData.notes.trim();
+    }
+    if (typeof endData.endChargePercent === 'number') {
+      payload.endChargePercent = endData.endChargePercent;
+    }
+    await callFunction<{ success: boolean; message: string }>('endShiftWithSession', payload);
+    return { id: shiftId, endOdometer: endData.endOdometer, endChargePercent: endData.endChargePercent, endTime: new Date(), status: ShiftStatus.Completed } as Shift;
+  },
+
+  /**
+   * Session-authenticated active-shift lookup (WP6B).
+   */
+  getActiveShiftWithSession: async (driverId: string, sessionToken: string): Promise<Shift | null> => {
+    const data = await callFunction<{ success: boolean; hasActiveShift: boolean; shift: any | null }>('getActiveShiftWithSession', { driverId, sessionToken });
+    if (data.hasActiveShift && data.shift) {
+      return convertTimestamps(data.shift) as Shift;
+    }
+    return null;
   },
 
   // ==================== VEHICLES ====================

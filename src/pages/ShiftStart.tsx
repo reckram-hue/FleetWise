@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useContext, useRef } from 'react';
 import { Vehicle, User, UserRole, EmploymentStatus, VehicleType } from '../types';
 import api from '../services/firebaseApi';
 import { shiftStore } from '../store/shift';
+import { getDriverSession } from '../store/session';
 import Card from '../components/shared/Card';
 import Header from '../components/shared/Header';
 import { UserContext } from '../contexts/UserContext';
@@ -28,7 +29,6 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
   const [newDefectDescription, setNewDefectDescription] = useState('');
   const [newDefectUrgency, setNewDefectUrgency] = useState<DefectUrgency>(DefectUrgency.Low);
   const [newDefectPhotos, setNewDefectPhotos] = useState<string[]>([]);
-  const [defectPin, setDefectPin] = useState('');
   const [submittingDefect, setSubmittingDefect] = useState(false);
 
   // State for wizard steps (1 = Vehicle, 2 = Confirm & Start)
@@ -45,7 +45,6 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
   // Optional fields
   const [startOdo, setStartOdo] = useState<string>('');
   const [startCharge, setStartCharge] = useState<string>('');
-  const [pin, setPin] = useState<string>('');
 
   // Data loading
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -209,28 +208,31 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
 
     setSubmittingDefect(true);
     try {
-      await api.addDefectReport({
+      const session = getDriverSession();
+      if (!session) {
+        throw new Error('Your session has expired. Please log in again.');
+      }
+      await api.reportDefectWithSession({
         vehicleId: selectedVehicle.id,
         driverId: currentUser.id,
+        sessionToken: session.sessionToken,
         category: newDefectCategory,
         description: newDefectDescription,
         urgency: newDefectUrgency,
         photos: newDefectPhotos,
         location: 'Reported at Shift Start',
-        pin: defectPin || undefined,
+        deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });
 
       // Reset form
       setNewDefectDescription('');
       setNewDefectPhotos([]);
-      setDefectPin('');
       setShowDefectModal(false);
 
       // Refresh defects
       const defects = await api.getVehicleDefects(selectedVehicle.id);
       setActiveDefects(defects);
     } catch (err) {
-      setDefectPin('');
       console.error("Failed to report defect:", err);
       alert("Failed to report defect. Please try again.");
     } finally {
@@ -268,25 +270,28 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
       setError("Please enter starting odometer");
       return;
     }
-    if (!/^\d{4}$/.test(pin)) {
-      setError("Please enter your 4-digit PIN");
-      return;
-    }
 
     setSubmitting(true);
     setError(null);
 
     try {
+      const session = getDriverSession();
+      if (!session) {
+        setError("Your session has expired. Please log in again.");
+        setSubmitting(false);
+        return;
+      }
       const startOdometer = parseFloat(startOdo);
       const startChargePercent = startCharge ? parseFloat(startCharge) : undefined;
 
-      // Start shift via secure Cloud Function (server-side PIN verification)
-      const result = await api.startShift({
+      // Start shift via the session-authenticated Cloud Function (no PIN re-entry).
+      const result = await api.startShiftWithSession({
         driverId: currentUser.id,
+        sessionToken: session.sessionToken,
         vehicleId: selectedVehicle.id,
-        pin,
         startOdometer,
-        startChargePercent
+        startChargePercent,
+        deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });
 
       shiftStore.setActiveShift({
@@ -319,7 +324,6 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
       setCurrentStep(1);
       setStartOdo('');
       setStartCharge('');
-      setPin('');
     } else {
       onBack();
     }
@@ -509,20 +513,6 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
                 </div>
               )}
 
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">
-                  Your PIN (to confirm) *
-                </label>
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  maxLength={4}
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                  placeholder="••••"
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg text-center tracking-widest"
-                />
-              </div>
             </div>
 
             {error && (
@@ -555,7 +545,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
             <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto">
               <div className="p-4 border-b flex justify-between items-center sticky top-0 bg-white">
                 <h3 className="text-lg font-bold">Report New Defect</h3>
-                <button onClick={() => { setShowDefectModal(false); setDefectPin(''); }} className="text-gray-500 hover:text-gray-700">
+                <button onClick={() => { setShowDefectModal(false); }} className="text-gray-500 hover:text-gray-700">
                   <X size={24} />
                 </button>
               </div>
@@ -626,23 +616,9 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">Your PIN *</label>
-                  <input
-                    type="password"
-                    inputMode="numeric"
-                    maxLength={4}
-                    value={defectPin}
-                    onChange={(e) => setDefectPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                    placeholder="••••"
-                    className="w-28 border p-2 rounded-lg text-center tracking-widest text-lg"
-                    required
-                  />
-                </div>
-
                 <button
                   type="submit"
-                  disabled={submittingDefect || defectPin.length !== 4}
+                  disabled={submittingDefect}
                   className="w-full py-3 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 disabled:opacity-50"
                 >
                   {submittingDefect ? 'Reporting...' : 'Submit Defect Report'}
