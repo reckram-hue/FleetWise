@@ -2529,11 +2529,31 @@ function inspectionDocId(assignmentId: string, boundaryType: 'PICKUP' | 'RETURN'
 const ROUTINE_INSPECTION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * The project's Firebase Storage bucket (matches VITE_FIREBASE_STORAGE_BUCKET).
- * Inspection photo binaries are written here via the Admin SDK only — the client never
- * chooses a path and Storage rules deny direct client access.
+ * Resolve the ACTUAL configured Firebase Storage bucket (never a guessed name).
+ * Prefers the Admin SDK app's configured storageBucket (from Firebase runtime config),
+ * then falls back to parsing process.env.FIREBASE_CONFIG. Never derives from projectId.
+ * Throws a clear internal error if no bucket is configured.
  */
-const INSPECTION_STORAGE_BUCKET = 'fleetwise-9ab3a.firebasestorage.app';
+function inspectionStorageBucket() {
+  let name: string | undefined = admin.app().options.storageBucket;
+  if (!name || name.trim() === '') {
+    try {
+      const fbConfig = process.env.FIREBASE_CONFIG;
+      if (fbConfig) {
+        const parsed = JSON.parse(fbConfig);
+        if (parsed && typeof parsed.storageBucket === 'string' && parsed.storageBucket.trim() !== '') {
+          name = parsed.storageBucket;
+        }
+      }
+    } catch {
+      name = undefined;
+    }
+  }
+  if (!name || name.trim() === '') {
+    throw new functions.https.HttpsError('internal', 'Storage bucket is not configured.');
+  }
+  return admin.storage().bucket(name);
+}
 
 /** Accepted inspection photo MIME types (rejected content is never stored). */
 const INSPECTION_PHOTO_MIME_TYPES: Record<string, string> = {
@@ -2685,7 +2705,7 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
     const roleSegment = photoRole.toLowerCase();
     const objectPath = `vehicle-inspections/${orgId}/${assignmentId}/${boundaryType}/${roleSegment}-${crypto.randomUUID()}.${ext}`;
 
-    const bucket = admin.storage().bucket(INSPECTION_STORAGE_BUCKET);
+    const bucket = inspectionStorageBucket();
 
     // Save bytes directly to the unique permanent path.
     await bucket.file(objectPath).save(buffer, { contentType: mimeType, resumable: false });
@@ -2788,7 +2808,7 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
     // WP7D2: real photo evidence is required. Verify the Storage objects actually exist at
     // the authoritative paths before allowing the inspection to become COMPLETED.
     // The client cannot satisfy this with booleans — only server-verified objects count.
-    const bucket = admin.storage().bucket(INSPECTION_STORAGE_BUCKET);
+    const bucket = inspectionStorageBucket();
     const extPath: string | undefined = inspectionData.exteriorPhotoPath;
     const intPath: string | undefined = inspectionData.interiorPhotoPath;
     if (!extPath || !intPath) {
