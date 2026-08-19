@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { UserRole } from './types';
+import { UserRole, Shift, Vehicle } from './types';
 import AdminDashboard from './components/admin/AdminDashboard';
 import AdminHealth from './components/admin/AdminHealth';
 import DriverDashboard from './components/driver/DriverDashboard';
@@ -11,6 +11,7 @@ import ActiveShift from './pages/ActiveShift';
 import { UserContext } from './contexts/UserContext';
 import { User } from './types';
 import { getDriverSession, clearDriverSession, isSessionLocallyExpired } from './store/session';
+import { shiftStore } from './store/shift';
 import api from './services/firebaseApi';
 import DriverPinLogin from './components/auth/DriverPinLogin';
 import AdminLogin from './components/auth/AdminLogin';
@@ -69,6 +70,36 @@ const RoleSelectionScreen = ({
   );
 };
 
+// Reconcile the local active-shift cache with a server-provided shift, then it can be
+// routed to the Active Shift screen. The server remains authoritative.
+async function reconcileActiveShiftCache(shift: Shift, driver: User): Promise<void> {
+  let vehicle: Vehicle | null = null;
+  try {
+    vehicle = await api.getVehicle(shift.vehicleId);
+  } catch {
+    vehicle = null;
+  }
+  const startDate = new Date(shift.startTime as any);
+  if (isNaN(startDate.getTime())) {
+    throw new Error('Active shift has an unreadable startTime from the server');
+  }
+  shiftStore.setActiveShift({
+    shiftId: shift.id,
+    driverId: driver.id,
+    driverName: `${driver.firstName} ${driver.surname}`,
+    vehicleId: shift.vehicleId,
+    vehicle: {
+      id: shift.vehicleId,
+      registration: vehicle?.registration || 'Unknown',
+      alias: vehicle?.alias,
+      vehicleType: vehicle?.vehicleType || 'ICE',
+    },
+    startAt: startDate.toISOString(),
+    startOdo: shift.startOdometer,
+    startChargePercent: shift.startChargePercent,
+  });
+}
+
 function App() {
   const [appState, setAppState] = useState<AppState>({ screen: 'choose-role' });
 
@@ -83,13 +114,20 @@ function App() {
         return;
       }
       try {
-        // Validate the session server-side (throws if expired/revoked/invalid).
-        await api.getActiveShiftWithSession(session.driverId, session.sessionToken);
+        // Validate the session server-side and retrieve any active shift.
+        const activeShift = await api.getActiveShiftWithSession(session.driverId, session.sessionToken);
         // Fetch the safe driver profile from the server (not from local storage).
         const drivers = await api.listDriversSafe();
         const profile = drivers.find((d: User) => d.id === session.driverId);
         if (cancelled) return;
         if (profile) {
+          if (activeShift) {
+            // Resume the existing shift — the server is authoritative.
+            await reconcileActiveShiftCache(activeShift, profile);
+            window.location.hash = '/driver/shift/active';
+          } else {
+            shiftStore.clearActiveShift();
+          }
           setAppState({ screen: 'app', user: profile });
         } else {
           clearDriverSession();
@@ -105,11 +143,30 @@ function App() {
     return () => { cancelled = true; };
   }, []);
 
-  const handleDriverLogin = (driver: User, requiresPinChange: boolean) => {
+  const handleDriverLogin = async (driver: User, requiresPinChange: boolean) => {
     if (requiresPinChange) {
       setAppState({ screen: 'change-pin', driver, isForced: true });
-    } else {
-      setAppState({ screen: 'app', user: driver });
+      return;
+    }
+
+    setAppState({ screen: 'app', user: driver });
+
+    // Resume an existing active shift (session expiry must not orphan a server-side shift).
+    try {
+      const session = getDriverSession();
+      if (session && !isSessionLocallyExpired(session)) {
+        const activeShift = await api.getActiveShiftWithSession(session.driverId, session.sessionToken);
+        if (activeShift) {
+          await reconcileActiveShiftCache(activeShift, driver);
+          window.location.hash = '/driver/shift/active';
+        } else {
+          shiftStore.clearActiveShift();
+        }
+      }
+    } catch {
+      // Network/server error: route to the Active Shift screen, which surfaces a retryable
+      // error rather than a "Start New Shift" prompt (avoids a false second-shift opportunity).
+      window.location.hash = '/driver/shift/active';
     }
   };
 
