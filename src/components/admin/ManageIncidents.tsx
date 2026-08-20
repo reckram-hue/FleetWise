@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit, AlertTriangle, DollarSign, Calendar, User, Car, X, TrendingUp } from 'lucide-react';
+import { Plus, Edit, AlertTriangle, DollarSign, Calendar, User, Car, X, TrendingUp, Gauge, CheckCircle2 } from 'lucide-react';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
 import api from '../../services/firebaseApi';
@@ -12,7 +12,8 @@ import {
     DamageType,
     IncidentSeverity,
     UserRole,
-    DriverIncidentSummary
+    DriverIncidentSummary,
+    OdometerDiscrepancy
 } from '../../types';
 
 interface ManageIncidentsProps {
@@ -21,9 +22,10 @@ interface ManageIncidentsProps {
 }
 
 const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButton }) => {
-    const [activeTab, setActiveTab] = useState<'fines' | 'damages' | 'analytics'>('fines');
+    const [activeTab, setActiveTab] = useState<'fines' | 'damages' | 'analytics' | 'odometer'>('fines');
     const [fines, setFines] = useState<DriverFine[]>([]);
     const [damages, setDamages] = useState<VehicleDamage[]>([]);
+    const [discrepancies, setDiscrepancies] = useState<OdometerDiscrepancy[]>([]);
     const [users, setUsers] = useState<UserType[]>([]);
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
     const [driverSummaries, setDriverSummaries] = useState<DriverIncidentSummary[]>([]);
@@ -37,18 +39,20 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
         const fetchData = async () => {
             setLoading(true);
             try {
-                const [finesData, damagesData, usersData, vehiclesData, summariesData] = await Promise.all([
+                const [finesData, damagesData, usersData, vehiclesData, summariesData, discrepanciesData] = await Promise.all([
                     api.getDriverFines(),
                     api.getVehicleDamages(),
                     api.getUsers(),
                     api.getVehicles(),
-                    api.getDriverIncidentSummary()
+                    api.getDriverIncidentSummary(),
+                    api.listOdometerDiscrepancies().catch(() => [] as OdometerDiscrepancy[])
                 ]);
                 setFines(finesData);
                 setDamages(damagesData);
                 setUsers(usersData);
                 setVehicles(vehiclesData);
                 setDriverSummaries(summariesData);
+                setDiscrepancies(discrepanciesData);
             } catch (error) {
                 console.error('Failed to fetch incident data:', error);
             } finally {
@@ -270,12 +274,13 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                             {[
                                 { key: 'fines', label: 'Driver Fines', icon: DollarSign },
                                 { key: 'damages', label: 'Vehicle Damages', icon: AlertTriangle },
-                                { key: 'analytics', label: 'Driver Analytics', icon: User }
-                            ].map(({ key, label, icon: Icon }) => (
+                                { key: 'analytics', label: 'Driver Analytics', icon: User },
+                                { key: 'odometer', label: 'Odometer Discrepancies', icon: Gauge, badge: discrepancies.filter(d => d.status === 'OPEN').length }
+                            ].map(({ key, label, icon: Icon, badge }) => (
                                 <button
                                     key={key}
                                     onClick={() => setActiveTab(key as any)}
-                                    className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                                    className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center ${
                                         activeTab === key
                                             ? 'border-blue-500 text-blue-600'
                                             : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -283,6 +288,11 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                                 >
                                     <Icon className="inline h-5 w-5 mr-2" />
                                     {label}
+                                    {badge != null && badge > 0 && (
+                                        <span className="ml-2 px-2 py-0.5 text-xs bg-amber-100 text-amber-800 rounded-full font-bold">
+                                            {badge}
+                                        </span>
+                                    )}
                                 </button>
                             ))}
                         </nav>
@@ -347,6 +357,100 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                                                 .map(summary => (
                                                 <DriverSummaryCard key={summary.driverId} summary={summary} />
                                             ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Odometer Discrepancies Tab */}
+                            {activeTab === 'odometer' && (
+                                <div>
+                                    <div className="flex justify-between items-center mb-4">
+                                        <div>
+                                            <h3 className="text-lg font-semibold text-gray-900">Unaccounted Mileage & Odometer Discrepancies</h3>
+                                            <p className="text-sm text-gray-500">Flags instances where a vehicle's pickup odometer was higher than its last recorded return odometer.</p>
+                                        </div>
+                                    </div>
+
+                                    {discrepancies.length === 0 ? (
+                                        <p className="text-gray-500 text-center py-8">No odometer discrepancies recorded. All vehicle transitions are consistent.</p>
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <table className="min-w-full divide-y divide-gray-200 border border-gray-200 rounded-lg">
+                                                <thead className="bg-gray-50">
+                                                    <tr>
+                                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date/Time</th>
+                                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vehicle</th>
+                                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Driver</th>
+                                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Expected</th>
+                                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actual Pickup</th>
+                                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Difference</th>
+                                                        <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                                        <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="bg-white divide-y divide-gray-200">
+                                                    {discrepancies.map(d => {
+                                                        const vehicle = vehicles.find(v => v.id === d.vehicleId);
+                                                        const driver = users.find(u => u.id === d.driverId);
+                                                        const dateStr = d.detectedAt ? (typeof d.detectedAt === 'string' ? new Date(d.detectedAt).toLocaleString() : (d.detectedAt.toDate ? d.detectedAt.toDate().toLocaleString() : new Date(d.detectedAt).toLocaleString())) : '—';
+                                                        return (
+                                                            <tr key={d.id} className="hover:bg-gray-50">
+                                                                <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{dateStr}</td>
+                                                                <td className="px-4 py-3 whitespace-nowrap text-sm font-semibold text-gray-900">
+                                                                    {vehicle?.registration || d.vehicleId}
+                                                                    {vehicle?.alias && <span className="text-gray-500 font-normal ml-1">({vehicle.alias})</span>}
+                                                                </td>
+                                                                <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-800">
+                                                                    {driver ? `${driver.firstName} ${driver.surname}` : d.driverId}
+                                                                </td>
+                                                                <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-600">
+                                                                    {(d.expectedOdometer || 0).toLocaleString()} km
+                                                                </td>
+                                                                <td className="px-4 py-3 whitespace-nowrap text-sm text-right font-medium text-gray-900">
+                                                                    {(d.actualPickupOdometer || 0).toLocaleString()} km
+                                                                </td>
+                                                                <td className="px-4 py-3 whitespace-nowrap text-sm text-right font-bold text-amber-600">
+                                                                    +{d.unaccountedKm.toLocaleString()} km
+                                                                </td>
+                                                                <td className="px-4 py-3 whitespace-nowrap text-sm text-center">
+                                                                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                                                                        d.status === 'RESOLVED' ? 'bg-green-100 text-green-800' :
+                                                                        d.status === 'INVESTIGATING' ? 'bg-blue-100 text-blue-800' :
+                                                                        'bg-amber-100 text-amber-800'
+                                                                    }`}>
+                                                                        {d.status}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-4 py-3 whitespace-nowrap text-sm text-center space-x-2">
+                                                                    {d.status !== 'RESOLVED' && (
+                                                                        <button
+                                                                            onClick={async () => {
+                                                                                await api.updateOdometerDiscrepancyStatus(d.id, 'RESOLVED');
+                                                                                setDiscrepancies(prev => prev.map(item => item.id === d.id ? { ...item, status: 'RESOLVED' } : item));
+                                                                            }}
+                                                                            className="text-xs bg-green-50 text-green-700 hover:bg-green-100 border border-green-300 font-semibold px-2 py-1 rounded"
+                                                                        >
+                                                                            Resolve
+                                                                        </button>
+                                                                    )}
+                                                                    {d.status === 'OPEN' && (
+                                                                        <button
+                                                                            onClick={async () => {
+                                                                                await api.updateOdometerDiscrepancyStatus(d.id, 'INVESTIGATING');
+                                                                                setDiscrepancies(prev => prev.map(item => item.id === d.id ? { ...item, status: 'INVESTIGATING' } : item));
+                                                                            }}
+                                                                            className="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-300 font-semibold px-2 py-1 rounded"
+                                                                        >
+                                                                            Investigate
+                                                                        </button>
+                                                                    )}
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
                                         </div>
                                     )}
                                 </div>

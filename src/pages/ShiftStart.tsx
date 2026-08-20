@@ -8,7 +8,7 @@ import { getDriverSession } from '../store/session';
 import Card from '../components/shared/Card';
 import Header from '../components/shared/Header';
 import { UserContext } from '../contexts/UserContext';
-import { Search, Car, ScanLine, ArrowRight, ArrowLeft, Loader, UserIcon, Info, Camera, X } from 'lucide-react';
+import { Search, Car, ScanLine, ArrowRight, ArrowLeft, Loader, UserIcon, Info, Camera, X, AlertCircle } from 'lucide-react';
 import { DefectReport, DefectCategory, DefectUrgency, DefectStatus } from '../types';
 
 interface ShiftStartProps {
@@ -242,6 +242,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
 
   const handleVehicleSelect = async (vehicle: Vehicle) => {
     setSelectedVehicle(vehicle);
+    setStartOdo(vehicle.currentOdometer != null ? String(vehicle.currentOdometer) : '');
     setCurrentStep(2);
     setError(null);
     setValidationMsg(null);
@@ -268,6 +269,16 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
     }
     if (!startOdo) {
       setError("Please enter starting odometer");
+      return;
+    }
+
+    const startOdometer = parseFloat(startOdo);
+    if (isNaN(startOdometer) || startOdometer < 0) {
+      setError("Please enter a valid starting odometer");
+      return;
+    }
+    if (selectedVehicle.currentOdometer != null && startOdometer < selectedVehicle.currentOdometer) {
+      setError(`Reading cannot be lower than the last recorded odometer (${selectedVehicle.currentOdometer.toLocaleString()} km).`);
       return;
     }
 
@@ -521,9 +532,16 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
 
             <div className="space-y-4 mb-6">
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">
-                  Current Odometer (km) *
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-semibold text-gray-700">
+                    Actual Odometer (km) *
+                  </label>
+                  {selectedVehicle.currentOdometer != null && (
+                    <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                      Last recorded: {selectedVehicle.currentOdometer.toLocaleString()} km
+                    </span>
+                  )}
+                </div>
                 <input
                   type="number"
                   value={startOdo}
@@ -531,6 +549,22 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
                   placeholder="e.g. 10500"
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg"
                 />
+                {selectedVehicle.currentOdometer != null && startOdo && !isNaN(parseFloat(startOdo)) && (
+                  <>
+                    {parseFloat(startOdo) < selectedVehicle.currentOdometer && (
+                      <p className="mt-1.5 text-xs text-red-600 font-medium flex items-center">
+                        <AlertCircle className="h-3.5 w-3.5 mr-1 flex-shrink-0" />
+                        Reading cannot be lower than the last recorded odometer ({selectedVehicle.currentOdometer.toLocaleString()} km).
+                      </p>
+                    )}
+                    {parseFloat(startOdo) > selectedVehicle.currentOdometer && (
+                      <p className="mt-1.5 text-xs text-amber-700 bg-amber-50 p-2 rounded border border-amber-200 flex items-start">
+                        <AlertCircle className="h-4 w-4 mr-1.5 text-amber-600 flex-shrink-0 mt-0.5" />
+                        <span>Vehicle is {(parseFloat(startOdo) - selectedVehicle.currentOdometer).toLocaleString()} km above the last recorded odometer. This will be flagged for admin review.</span>
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
 
               {selectedVehicle.vehicleType === 'EV' && (

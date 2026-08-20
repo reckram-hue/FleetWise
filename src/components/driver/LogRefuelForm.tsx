@@ -4,6 +4,7 @@ import Header from '../shared/Header';
 import api from '../../services/firebaseApi';
 import { Fuel, AlertTriangle, Car, Check } from 'lucide-react';
 import { Vehicle, VehicleType } from '../../types';
+import { getDriverSession } from '../../store/session';
 
 interface LogRefuelFormProps {
     onBack: () => void;
@@ -32,7 +33,9 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, activeVehicle }) 
         const fetchVehicle = async () => {
             if (activeVehicle?.id) {
                 try {
-                    const v = await api.getVehicle(activeVehicle.id);
+                    const session = getDriverSession();
+                    if (!session) return;
+                    const v = await api.getVehicleForSession(session.driverId, session.sessionToken, activeVehicle.id);
                     setFullVehicle(v);
                 } catch (error) {
                     console.error("Failed to fetch vehicle", error);

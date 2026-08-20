@@ -10,18 +10,23 @@ import {
     AlertTriangle,
     Camera,
     Upload,
-    X
+    X,
+    Car
 } from 'lucide-react';
-import { Vehicle, DefectReport, DefectCategory, DefectUrgency } from '../../types';
+import { DefectReport, DefectCategory, DefectUrgency } from '../../types';
+import type { VehiclePick } from './TakeVehicleForm';
 
 interface ReportDefectFormProps {
     onBack: () => void;
+    /**
+     * The driver's CURRENT active vehicle from the active VehicleAssignment.
+     * Authoritative and required — defect reporting is locked to this vehicle only.
+     */
+    currentVehicle: VehiclePick;
 }
 
-const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
+const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehicle }) => {
     const { currentUser } = useContext(UserContext);
-    const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-    const [activeVehicle, setActiveVehicle] = useState<Vehicle | null>(null);
     const [existingDefects, setExistingDefects] = useState<DefectReport[]>([]);
     const [similarDefects, setSimilarDefects] = useState<DefectReport[]>([]);
     const [loading, setLoading] = useState(false);
@@ -30,7 +35,6 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState({
-        vehicleId: '',
         category: DefectCategory.Other,
         urgency: DefectUrgency.Medium,
         description: '',
@@ -39,41 +43,32 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
     });
 
     useEffect(() => {
-        const fetchData = async () => {
-            if (!currentUser) return;
-
-            const session = getDriverSession();
-            const [vehicleData, activeShift] = await Promise.all([
-                api.getVehicles(),
-                session ? api.getActiveShiftWithSession(currentUser.id, session.sessionToken) : Promise.resolve(null)
-            ]);
-
-            const driverActiveVehicle = activeShift ? await api.getVehicle(activeShift.vehicleId) : null;
-
-            setVehicles(vehicleData);
-            setActiveVehicle(driverActiveVehicle);
-
-            // Auto-select the active vehicle if driver has one
-            if (driverActiveVehicle) {
-                setFormData(prev => ({ ...prev, vehicleId: driverActiveVehicle.id }));
-            }
-        };
-        fetchData();
-    }, [currentUser]);
-
-    useEffect(() => {
-        if (formData.vehicleId) {
+        if (currentVehicle?.id) {
             const fetchExistingDefects = async () => {
-                const defects = await api.getVehicleDefects(formData.vehicleId);
-                setExistingDefects(defects);
+                const session = getDriverSession();
+                if (!currentUser || !session) return;
+                try {
+                    const defects = await api.getVehicleDefectsForSession(currentUser.id, session.sessionToken, currentVehicle.id);
+                    setExistingDefects(defects);
+                } catch (err) {
+                    console.error('Failed to fetch existing vehicle defects:', err);
+                }
             };
             fetchExistingDefects();
         }
-    }, [formData.vehicleId]);
+    }, [currentUser, currentVehicle?.id]);
 
-    const checkForSimilar = async () => {
-        if (formData.vehicleId && formData.category && formData.description.length > 10) {
-            const similar = await api.checkSimilarDefects(formData.vehicleId, formData.category, formData.description);
+    const checkForSimilar = () => {
+        if (currentVehicle?.id && formData.category && formData.description.length > 10) {
+            const descLower = formData.description.toLowerCase();
+            const words = descLower.split(' ').filter(w => w.length > 3);
+            const similar = existingDefects.filter(defect => {
+                if (defect.category !== formData.category || defect.status === 'Resolved') {
+                    return false;
+                }
+                const defectDescLower = defect.description.toLowerCase();
+                return words.some(word => defectDescLower.includes(word));
+            });
             setSimilarDefects(similar);
             setShowSimilar(similar.length > 0);
         }
@@ -86,7 +81,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
             }
         }, 1000);
         return () => clearTimeout(timer);
-    }, [formData.description, formData.category, formData.vehicleId]);
+    }, [existingDefects, formData.description, formData.category, currentVehicle?.id]);
 
     const handlePhotoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = event.target.files;
@@ -119,7 +114,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!currentUser) return;
+        if (!currentUser || !currentVehicle) return;
 
         setLoading(true);
         try {
@@ -128,7 +123,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
                 throw new Error('Your session has expired. Please log in again.');
             }
             await api.reportDefectWithSession({
-                vehicleId: formData.vehicleId,
+                vehicleId: currentVehicle.id,
                 driverId: currentUser.id,
                 sessionToken: session.sessionToken,
                 category: formData.category,
@@ -159,7 +154,25 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
         }
     };
 
-    const selectedVehicle = vehicles.find(v => v.id === formData.vehicleId);
+    if (!currentVehicle) {
+        return (
+            <div className="min-h-screen bg-gray-100">
+                <Header title="Report a Vehicle Fault" />
+                <main className="max-w-4xl mx-auto p-6">
+                    <Card>
+                        <div className="text-center py-8">
+                            <AlertTriangle className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
+                            <h2 className="text-xl font-bold text-gray-800 mb-2">No Active Vehicle Assignment</h2>
+                            <p className="text-gray-600 mb-6">You must have an active vehicle assignment to report a vehicle fault.</p>
+                            <button onClick={onBack} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg transition duration-300">
+                                ← Back to Dashboard
+                            </button>
+                        </div>
+                    </Card>
+                </main>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-gray-100">
@@ -179,40 +192,23 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
                                     <p className="text-gray-600">Describe any vehicle faults or issues you've discovered during your shift.</p>
                                 </div>
 
-                                {/* Vehicle Selection */}
+                                {/* Vehicle (Read-Only / Locked to Active Vehicle) */}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        Vehicle *
-                                        {activeVehicle && (
-                                            <span className="ml-2 text-sm text-green-600 font-normal">
-                                                (Currently signed in)
-                                            </span>
-                                        )}
+                                        Vehicle
                                     </label>
-                                    <select
-                                        value={formData.vehicleId}
-                                        onChange={(e) => setFormData({ ...formData, vehicleId: e.target.value })}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                                        required
-                                    >
-                                        <option value="">Select vehicle...</option>
-                                        {vehicles.map(vehicle => (
-                                            <option key={vehicle.id} value={vehicle.id}>
-                                                {vehicle.registration} - {vehicle.make} {vehicle.model}
-                                                {activeVehicle?.id === vehicle.id ? ' (Active Shift)' : ''}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    {activeVehicle && (
-                                        <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-sm">
-                                            <div className="flex items-center text-green-700">
-                                                <CheckCircle className="h-4 w-4 mr-1" />
-                                                Auto-selected your current vehicle: <strong className="ml-1">
-                                                    {activeVehicle.registration}
-                                                </strong>
-                                            </div>
+                                    <div className="p-3 bg-gray-50 border border-gray-300 rounded-md text-gray-800 font-medium flex items-center justify-between">
+                                        <div className="flex items-center">
+                                            <Car className="h-5 w-5 text-gray-500 mr-2" />
+                                            <span>
+                                                {currentVehicle.registration} {currentVehicle.alias ? `(${currentVehicle.alias})` : ''}
+                                            </span>
                                         </div>
-                                    )}
+                                        <span className="text-xs bg-green-100 text-green-800 px-2.5 py-1 rounded-full font-semibold flex items-center">
+                                            <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                                            Active Vehicle
+                                        </span>
+                                    </div>
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -384,8 +380,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
                                 <div className="flex justify-end">
                                     <button
                                         type="submit"
-                                        disabled={loading || !formData.vehicleId || !formData.description}
-                                        className={`px-6 py-3 rounded-lg font-medium transition ${loading || !formData.vehicleId || !formData.description
+                                        disabled={loading || !currentVehicle?.id || !formData.description}
+                                        className={`px-6 py-3 rounded-lg font-medium transition ${loading || !currentVehicle?.id || !formData.description
                                             ? 'bg-gray-400 cursor-not-allowed text-white'
                                             : 'bg-red-600 hover:bg-red-700 text-white'
                                             }`}
@@ -399,7 +395,6 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack }) => {
 
                     {/* Sidebar */}
                     <div className="space-y-6">
-                        {/* Information / Guide would go here, currently empty/truncated in source view but valid structure */}
                     </div>
                 </div>
             </main>

@@ -4,6 +4,7 @@ import Card from '../shared/Card';
 import Header from '../shared/Header';
 import { Bolt, Check } from 'lucide-react';
 import { Vehicle, VehicleType } from '../../types';
+import { getDriverSession } from '../../store/session';
 
 interface LogChargeFormProps {
     onBack: () => void;
@@ -23,10 +24,11 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, activeVehicle }) 
     });
 
     useEffect(() => {
-        api.getVehicles().then(allVehicles => {
+        const session = getDriverSession();
+        if (!session) return;
+        api.listVehiclesForSession(session.driverId, session.sessionToken).then(allVehicles => {
             const evs = allVehicles.filter(v => v.vehicleType === VehicleType.EV);
             setVehicles(evs);
-            // Prioritize active vehicle if it's an EV, otherwise use first available
             if (activeVehicle && activeVehicle.vehicleType === VehicleType.EV) {
                 setSelectedVehicleId(activeVehicle.id);
             } else if (evs.length > 0) {
@@ -41,14 +43,15 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, activeVehicle }) 
         const fetchRecommendation = async () => {
             setLoading(true);
             setRecommendation('');
-            const stats = await api.getVehicleStats(selectedVehicleId);
             const vehicle = vehicles.find(v => v.id === selectedVehicleId);
-            if (stats.avgDailyDistanceKm > 0 && vehicle && vehicle.batteryCapacityKwh) {
-                const requiredKwh = stats.avgDailyDistanceKm * stats.avgEnergyConsumptionKwhPerKm;
+            const avgDailyDistanceKm = vehicle?.baselineFuelConsumption ? 150 : 0;
+            const avgEnergyConsumptionKwhPerKm = vehicle?.baselineEnergyConsumption || 0.2;
+            if (avgDailyDistanceKm > 0 && vehicle && vehicle.batteryCapacityKwh) {
+                const requiredKwh = avgDailyDistanceKm * avgEnergyConsumptionKwhPerKm;
                 // Add a 15% buffer
                 const recommendedChargePercent = Math.min(100, Math.ceil(((requiredKwh * 1.15) / vehicle.batteryCapacityKwh) * 100));
 
-                setRecommendation(`Based on this vehicle's typical daily use (~${Math.round(stats.avgDailyDistanceKm)} km), we recommend charging to at least ${recommendedChargePercent}% for a full shift.`);
+                setRecommendation(`Based on this vehicle's typical daily use (~${Math.round(avgDailyDistanceKm)} km), we recommend charging to at least ${recommendedChargePercent}% for a full shift.`);
             } else {
                 setRecommendation("No usage data available. Recommend charging to 100%.");
             }

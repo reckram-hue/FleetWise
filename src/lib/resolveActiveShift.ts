@@ -7,9 +7,9 @@ import { ActiveShiftState } from '../store/shift';
 import { User, Vehicle } from '../types';
 import api from '../services/firebaseApi';
 
-async function safeGetVehicle(vehicleId: string): Promise<Vehicle | null> {
+async function safeGetVehicle(driverId: string, sessionToken: string, vehicleId: string): Promise<Vehicle | null> {
   try {
-    return await api.getVehicle(vehicleId);
+    return await api.getVehicleForSession(driverId, sessionToken, vehicleId);
   } catch {
     return null;
   }
@@ -46,7 +46,7 @@ export async function resolveActiveShiftState(driver: User): Promise<ActiveShift
   const assignment = await api.getActiveVehicleAssignment(session.driverId, session.sessionToken, shift.id);
 
   if (assignment) {
-    const vehicle = await safeGetVehicle(assignment.vehicleId);
+    const vehicle = await safeGetVehicle(session.driverId, session.sessionToken, assignment.vehicleId);
     base.assignmentId = assignment.id;
     base.vehicleId = assignment.vehicleId;
     base.vehicle = {
@@ -60,7 +60,7 @@ export async function resolveActiveShiftState(driver: User): Promise<ActiveShift
   } else if (shift.vehicleId) {
     // Legacy shift: no assignment yet, but the shift still references its original vehicle.
     // Keep it as a "continue with" suggestion (no assignmentId).
-    const vehicle = await safeGetVehicle(shift.vehicleId);
+    const vehicle = await safeGetVehicle(session.driverId, session.sessionToken, shift.vehicleId);
     base.vehicleId = shift.vehicleId;
     base.vehicle = {
       id: shift.vehicleId,

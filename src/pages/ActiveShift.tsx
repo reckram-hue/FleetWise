@@ -16,7 +16,7 @@ import ReportDefectForm from '../components/driver/ReportDefectForm';
 import LogChargeForm from '../components/driver/LogChargeForm';
 import LogRefuelForm from '../components/driver/LogRefuelForm';
 import {
-  Clock, Car, User, Gauge, Battery, Loader, CheckCircle, AlertCircle,
+  Clock, Car, User, Gauge, Battery, Loader, AlertCircle,
   Bolt, Fuel, AlertTriangle, Flag,
 } from 'lucide-react';
 
@@ -30,14 +30,12 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
   const { activeShift, clearActiveShift, setActiveShift, setVehicleAssignment, clearVehicleAssignment } = useShiftStore();
 
   // Form state
-  const [endOdo, setEndOdo] = useState<string>('');
-  const [notes, setNotes] = useState<string>('');
+  const [notes] = useState<string>('');
 
   // UI state
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shiftDuration, setShiftDuration] = useState<string>('');
-  const [showEndForm, setShowEndForm] = useState(false);
   const [showLogCharge, setShowLogCharge] = useState(false);
   const [showLogRefuel, setShowLogRefuel] = useState(false);
   const [showReportFault, setShowReportFault] = useState(false);
@@ -214,7 +212,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
         await api.endShiftWithSession(activeShift.shiftId, {
           driverId: activeShift.driverId,
           sessionToken: session.sessionToken,
-          endOdometer: result.endOdometer ?? 0,
+          endOdometer: result.endOdometer,
           endChargePercent: result.endChargePercent,
           notes: notes.trim() || undefined,
           deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
@@ -252,12 +250,12 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
     setError(null);
   };
 
-  // ---- End the work shift (only reachable when no assignment is active) ----
+  // ---- End the work shift (when no vehicle assignment is active) ----
   const handleEndShift = async () => {
     if (!activeShift) { setError('No active shift found'); return; }
-    const endOdometer = parseFloat(endOdo);
-    if (!endOdo || isNaN(endOdometer) || endOdometer < 0) {
-      setError('Please enter a valid ending odometer reading');
+    // If called while an assignment is still active, route to return flow first
+    if (hasAssignment && currentVehicle) {
+      startReturn('SHIFT_END');
       return;
     }
     setSubmitting(true);
@@ -268,7 +266,6 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       await api.endShiftWithSession(activeShift.shiftId, {
         driverId: activeShift.driverId,
         sessionToken: session.sessionToken,
-        endOdometer,
         notes: notes.trim() || undefined,
         deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });
@@ -323,11 +320,12 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       <div className="min-h-screen bg-gray-100">
         <Header title="Active Shift" />
         <main className="max-w-4xl mx-auto p-6">
-          <Card className="text-center py-12">
-            <AlertCircle className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-            <h2 className="text-2xl font-bold text-gray-800 mb-2">No Active Shift</h2>
-            <p className="text-gray-600 mb-6">You don't have an active shift at the moment.</p>
-            <button onClick={onBack} className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-semibold">Go Back</button>
+          <Card className="text-center py-8">
+            <h3 className="text-xl font-bold text-gray-800 mb-2">No Active Shift Found</h3>
+            <p className="text-gray-600 mb-6">You don't have an active shift in the system right now.</p>
+            <button onClick={onBack} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-lg transition duration-300">
+              Return to Dashboard
+            </button>
           </Card>
         </main>
       </div>
@@ -343,16 +341,33 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
     <div className="min-h-screen bg-gray-100">
       <Header title="Active Shift" />
       <main className="max-w-4xl mx-auto p-6">
-        {/* Shift Summary Card */}
-        <Card className="mb-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold text-gray-800">Current Shift Details</h2>
-            <div className="flex items-center text-green-600">
-              <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse mr-2"></div>
-              <span className="font-semibold">Active</span>
-            </div>
+        <button onClick={onBack} className="mb-4 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+          ← Back to Dashboard
+        </button>
+
+        {lookupError && (
+          <div className="mb-4 p-4 bg-yellow-50 border-l-4 border-yellow-500 rounded text-sm text-yellow-800">
+            {lookupError}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        )}
+
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 border-l-4 border-red-500 rounded text-sm text-red-800 flex items-center justify-between">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="text-red-700 font-bold ml-2">×</button>
+          </div>
+        )}
+
+        {/* Shift details card */}
+        <Card className="mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-bold text-gray-800">Current Shift Details</h2>
+            <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-semibold flex items-center">
+              <span className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+              Active Shift
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex items-start space-x-3">
               <div className="bg-blue-100 p-2 rounded-lg"><User className="h-6 w-6 text-blue-600" /></div>
               <div><p className="text-sm text-gray-600">Driver</p><p className="font-semibold text-gray-900">{activeShift.driverName}</p></div>
@@ -385,28 +400,6 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
             onAssigned={handleAssigned}
             onBack={() => setTakingVehicle(false)}
           />
-        ) : showEndForm ? (
-          /* End Shift form (no assignment active) */
-          <Card>
-            <h3 className="text-xl font-bold text-gray-800 mb-4">End Shift</h3>
-            {error && <div className="mb-4 p-4 bg-red-50 border-l-4 border-red-500 rounded"><div className="flex items-center"><AlertCircle className="h-5 w-5 text-red-500 mr-2" /><p className="text-red-700 font-semibold">Error</p></div><p className="text-red-600 text-sm mt-1">{error}</p></div>}
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">End Odometer (km) <span className="text-red-500">*</span></label>
-                <input type="number" value={endOdo} onChange={e => setEndOdo(e.target.value)} placeholder="Enter ending odometer reading" className="w-full px-4 py-2 border border-gray-300 rounded-lg" required />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes (Optional)</label>
-                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={4} placeholder="Any notes about the shift..." className="w-full px-4 py-2 border border-gray-300 rounded-lg resize-none" />
-              </div>
-            </div>
-            <div className="mt-6 flex justify-between">
-              <button onClick={() => { setShowEndForm(false); setError(null); }} disabled={submitting} className="px-6 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 font-semibold disabled:opacity-50">Cancel</button>
-              <button onClick={handleEndShift} disabled={!endOdo || submitting} className="flex items-center px-8 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 font-semibold disabled:opacity-50 disabled:cursor-not-allowed">
-                {submitting ? (<><Loader className="animate-spin mr-2 h-5 w-5" />Ending Shift...</>) : (<><CheckCircle className="mr-2 h-5 w-5" />End Shift</>)}
-              </button>
-            </div>
-          </Card>
         ) : (
           <>
             {/* Vehicle status card */}
@@ -447,21 +440,25 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
 
             {/* Actions */}
             <div className="grid grid-cols-2 gap-4 mt-6">
-              <button onClick={() => setShowReportFault(true)} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all active:scale-95">
-                <div className="bg-red-50 p-3 rounded-full mb-2"><AlertTriangle className="h-6 w-6 text-red-600" /></div>
-                <span className="font-medium text-gray-800">Report Fault</span>
-              </button>
-              {hasAssignment && currentVehicle && (currentVehicle.vehicleType === 'EV' ? (
-                <button onClick={() => setShowLogCharge(true)} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all active:scale-95">
-                  <div className="bg-teal-50 p-3 rounded-full mb-2"><Bolt className="h-6 w-6 text-teal-600" /></div>
-                  <span className="font-medium text-gray-800">Log Charge</span>
-                </button>
-              ) : (
-                <button onClick={() => setShowLogRefuel(true)} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all active:scale-95">
-                  <div className="bg-orange-50 p-3 rounded-full mb-2"><Fuel className="h-6 w-6 text-orange-600" /></div>
-                  <span className="font-medium text-gray-800">Log Refuel</span>
-                </button>
-              ))}
+              {hasAssignment && currentVehicle && (
+                <>
+                  <button onClick={() => setShowReportFault(true)} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all active:scale-95">
+                    <div className="bg-red-50 p-3 rounded-full mb-2"><AlertTriangle className="h-6 w-6 text-red-600" /></div>
+                    <span className="font-medium text-gray-800">Report Fault</span>
+                  </button>
+                  {currentVehicle.vehicleType === 'EV' ? (
+                    <button onClick={() => setShowLogCharge(true)} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all active:scale-95">
+                      <div className="bg-teal-50 p-3 rounded-full mb-2"><Bolt className="h-6 w-6 text-teal-600" /></div>
+                      <span className="font-medium text-gray-800">Log Charge</span>
+                    </button>
+                  ) : (
+                    <button onClick={() => setShowLogRefuel(true)} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all active:scale-95">
+                      <div className="bg-orange-50 p-3 rounded-full mb-2"><Fuel className="h-6 w-6 text-orange-600" /></div>
+                      <span className="font-medium text-gray-800">Log Refuel</span>
+                    </button>
+                  )}
+                </>
+              )}
 
               {hasAssignment ? (
                 <>
@@ -480,9 +477,9 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
                     <div className="bg-green-50 p-3 rounded-full mb-2"><Car className="h-6 w-6 text-green-600" /></div>
                     <span className="font-semibold text-green-700">Take Vehicle</span>
                   </button>
-                  <button onClick={() => { setShowEndForm(true); setEndOdo(''); setNotes(''); setError(null); }} className="flex flex-col items-center justify-center p-4 bg-white border border-red-200 rounded-xl shadow-sm hover:shadow-md hover:bg-red-50 transition-all active:scale-95 col-span-2">
+                  <button onClick={handleEndShift} disabled={submitting} className="flex flex-col items-center justify-center p-4 bg-white border border-red-200 rounded-xl shadow-sm hover:shadow-md hover:bg-red-50 transition-all active:scale-95 col-span-2 disabled:opacity-50 disabled:cursor-not-allowed">
                     <div className="bg-red-100 p-3 rounded-full mb-2"><Flag className="h-6 w-6 text-red-600" /></div>
-                    <span className="font-bold text-red-700">End Shift</span>
+                    <span className="font-bold text-red-700">{submitting ? 'Ending Shift...' : 'End Shift'}</span>
                   </button>
                 </>
               )}
@@ -491,8 +488,8 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
         )}
 
         {/* Overlay modals */}
-        {showReportFault && (
-          <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><ReportDefectForm onBack={() => setShowReportFault(false)} /></div>
+        {showReportFault && hasAssignment && currentVehicle && (
+          <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><ReportDefectForm onBack={() => setShowReportFault(false)} currentVehicle={currentVehicle} /></div>
         )}
         {showLogCharge && currentVehicle && (
           <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><LogChargeForm onBack={() => setShowLogCharge(false)} activeVehicle={currentVehicle} /></div>

@@ -14,6 +14,7 @@ import {
   deleteDoc,
   query,
   where,
+  orderBy,
   serverTimestamp,
 } from 'firebase/firestore';
 import { db, callFunction } from '../lib/firebase';
@@ -37,6 +38,7 @@ import {
   LeaderboardEntry,
   VehicleStats,
   VehicleUsageStats,
+  DriverStatsSummary,
   MaintenanceRecord,
   ScheduledService,
   DriverFine,
@@ -47,7 +49,8 @@ import {
   AppSettings,
   FuelEconomyAlert,
   ServiceProvider,
-  LicenseRenewalReminder
+  LicenseRenewalReminder,
+  OdometerDiscrepancy
 } from '../types';
 
 // Collection names
@@ -310,7 +313,7 @@ const api = {
   endShiftWithSession: async (shiftId: string, endData: {
     driverId: string;
     sessionToken: string;
-    endOdometer: number;
+    endOdometer?: number;
     endChargePercent?: number;
     notes?: string;
     deviceId?: string;
@@ -319,9 +322,11 @@ const api = {
       driverId: endData.driverId,
       sessionToken: endData.sessionToken,
       shiftId,
-      endOdometer: endData.endOdometer,
       deviceId: endData.deviceId,
     };
+    if (typeof endData.endOdometer === 'number') {
+      payload.endOdometer = endData.endOdometer;
+    }
     if (typeof endData.notes === 'string' && endData.notes.trim()) {
       payload.notes = endData.notes.trim();
     }
@@ -341,6 +346,41 @@ const api = {
       return convertTimestamps(data.shift) as Shift;
     }
     return null;
+  },
+
+  /**
+   * Driver-facing "View My Stats" summary via secure callable (WP8H). Session-authenticated;
+   * scoped server-side to the authenticated driver only. Replaces the prior direct-Firestore
+   * getLeaderboard()/getDriverIncidentSummary() combination for the driver-facing UI, which
+   * relied on unauthenticated full-collection reads of driverFines/vehicleDamages.
+   */
+  getDriverStatsWithSession: async (driverId: string, sessionToken: string): Promise<DriverStatsSummary> => {
+    const data = await callFunction<{ success: boolean; stats: DriverStatsSummary }>('getDriverStatsWithSession', { driverId, sessionToken });
+    return data.stats;
+  },
+
+  /**
+   * Session-authenticated driver-safe vehicle list.
+   */
+  listVehiclesForSession: async (driverId: string, sessionToken: string): Promise<Vehicle[]> => {
+    const data = await callFunction<{ success: boolean; vehicles: any[] }>('listVehiclesForSession', { driverId, sessionToken });
+    return data.vehicles.map((vehicle) => convertTimestamps(vehicle) as Vehicle);
+  },
+
+  /**
+   * Session-authenticated driver-safe vehicle read.
+   */
+  getVehicleForSession: async (driverId: string, sessionToken: string, vehicleId: string): Promise<Vehicle | null> => {
+    const data = await callFunction<{ success: boolean; vehicle: any }>('getVehicleForSession', { driverId, sessionToken, vehicleId });
+    return data.vehicle ? (convertTimestamps(data.vehicle) as Vehicle) : null;
+  },
+
+  /**
+   * Session-authenticated driver-visible defect list for a vehicle.
+   */
+  getVehicleDefectsForSession: async (driverId: string, sessionToken: string, vehicleId: string): Promise<DefectReport[]> => {
+    const data = await callFunction<{ success: boolean; defects: any[] }>('getVehicleDefectsForSession', { driverId, sessionToken, vehicleId });
+    return data.defects.map((defect) => convertTimestamps(defect) as DefectReport);
   },
 
   /**
@@ -450,6 +490,36 @@ const api = {
   getAssignmentInspections: async (driverId: string, sessionToken: string, assignmentId: string): Promise<VehicleInspection[]> => {
     const data = await callFunction<{ success: boolean; inspections: any[] }>('getAssignmentInspections', { driverId, sessionToken, assignmentId });
     return data.inspections.map(i => convertTimestamps(i) as VehicleInspection);
+  },
+
+  /**
+   * List odometer discrepancies for admin review.
+   */
+  listOdometerDiscrepancies: async (): Promise<OdometerDiscrepancy[]> => {
+    try {
+      const data = await callFunction<{ success: boolean; discrepancies: any[] }>('listOdometerDiscrepancies');
+      return (data.discrepancies || []).map(d => convertTimestamps(d) as OdometerDiscrepancy);
+    } catch {
+      // Fallback for direct Firestore queries
+      const snapshot = await getDocs(query(collection(db, 'odometerDiscrepancies'), orderBy('detectedAt', 'desc')));
+      return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as OdometerDiscrepancy);
+    }
+  },
+
+  /**
+   * Update the status and resolution notes of an odometer discrepancy.
+   */
+  updateOdometerDiscrepancyStatus: async (discrepancyId: string, status: 'OPEN' | 'RESOLVED' | 'INVESTIGATING', notes?: string): Promise<void> => {
+    try {
+      await callFunction('updateOdometerDiscrepancyStatus', { discrepancyId, status, notes });
+    } catch {
+      const ref = doc(db, 'odometerDiscrepancies', discrepancyId);
+      await updateDoc(ref, {
+        status,
+        notes: notes ?? null,
+        updatedAt: serverTimestamp(),
+      });
+    }
   },
 
   // ==================== VEHICLES ====================
@@ -969,34 +1039,15 @@ const api = {
   },
 
   // ==================== STATISTICS & REPORTS ====================
-  getLeaderboard: async (): Promise<LeaderboardEntry[]> => {
-    // listDriversSafe is public (no auth required) and safe to call from driver context.
-    // getUsers() would require admin auth and break the driver-facing leaderboard route.
-    const [shiftsSnap, drivers] = await Promise.all([
-      getDocs(collection(db, COLLECTIONS.shifts)),
-      api.listDriversSafe(),
-    ]);
-
-    const driverStats = new Map<string, { trips: number; totalKm: number }>();
-
-    shiftsSnap.forEach(shiftDoc => {
-      const shift = shiftDoc.data() as Shift;
-      if (shift.status === ShiftStatus.Completed && shift.endOdometer && shift.startOdometer) {
-        const km = shift.endOdometer - shift.startOdometer;
-        const current = driverStats.get(shift.driverId) || { trips: 0, totalKm: 0 };
-        driverStats.set(shift.driverId, {
-          trips: current.trips + 1,
-          totalKm: current.totalKm + km
-        });
-      }
-    });
-
-    const leaderboard: LeaderboardEntry[] = drivers.map(user => {
-      const stats = driverStats.get(user.id) || { trips: 0, totalKm: 0 };
-      return { driver: user, totalKmDriven: stats.totalKm };
-    });
-
-    return leaderboard.sort((a, b) => b.totalKmDriven - a.totalKmDriven);
+  getLeaderboard: async (params?: { driverId?: string; sessionToken?: string }): Promise<LeaderboardEntry[]> => {
+    const payload = params?.driverId && params?.sessionToken
+      ? { driverId: params.driverId, sessionToken: params.sessionToken }
+      : {};
+    const data = await callFunction<{ success: boolean; leaderboard: any[] }>('getLeaderboard', payload);
+    return data.leaderboard.map((entry) => ({
+      ...entry,
+      driver: convertTimestamps(entry.driver) as User,
+    })) as LeaderboardEntry[];
   },
 
   getVehicleUsageStats: async (): Promise<VehicleUsageStats[]> => {

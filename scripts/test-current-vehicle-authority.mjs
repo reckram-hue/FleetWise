@@ -1,0 +1,347 @@
+// WP8B — Focused tests for current-vehicle authority after a mid-shift vehicle swap.
+// Runs against the DEPLOYED functions in fleetwise-9ab3a (us-central1).
+// Uses ONLY the clearly-marked Test Test driver + TEST EV/TEST ICE vehicles
+// (isTestData === true). Never touches a real driver. Never prints the PIN,
+// sessionToken, or pinHash — the sessionToken lives only in memory for this run.
+//
+// Scenarios 5 (client cannot report a defect for TEST EV while the active assignment is
+// TEST ICE) requires the WP8B backend fix to reportDefectWithSession (server-side vehicle
+// ownership check) to be DEPLOYED. If run before that deploy, scenario 5 will legitimately
+// FAIL — that failure demonstrates the pre-fix vulnerability, not a bug in this script.
+//
+// Run from the repo root:  node scripts/test-current-vehicle-authority.mjs
+
+import { readFileSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
+import { initializeApp } from 'firebase/app';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { getFirestore, collection, getDocs, doc, getDoc } from 'firebase/firestore';
+
+const RESULTS = [];
+function record(name, ok, detail = '') {
+  RESULTS.push({ name, ok, detail });
+  console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (detail ? ' — ' + detail : ''));
+}
+function die(msg) { console.error('STOP — ' + msg); process.exit(1); }
+
+function parseEnv(text) {
+  const out = {};
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const i = t.indexOf('=');
+    if (i <= 0) continue;
+    out[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+  }
+  return out;
+}
+
+const env = parseEnv(readFileSync(new URL('../.env', import.meta.url), 'utf8'));
+const required = ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_AUTH_DOMAIN', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'];
+for (const k of required) { if (!env[k]) die('Missing ' + k + ' in .env'); }
+
+const app = initializeApp({
+  apiKey: env.VITE_FIREBASE_API_KEY,
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: env.VITE_FIREBASE_APP_ID,
+});
+const functions = getFunctions(app);
+const db = getFirestore(app);
+const CLEANUP_ONLY = process.argv.includes('--cleanup-only');
+
+const WP8B = Object.freeze({
+  driverId: '3MBpEbymKURd7sKQURpk',
+  shiftId: 'BGf8IVzifr5Iy6GCp76h',
+  assignmentId: 'ORSOLbl7yd9NnQkuxtLR',
+  testEvId: 'CHFLNpC1lmVWMMkOdGRx',
+  testIceId: 'VZExr8elHqnoGaud6huU',
+  deviceId: 'wp8b-authority-test-harness',
+});
+
+async function call(name, data) {
+  const fn = httpsCallable(functions, name);
+  const r = await fn(data);
+  return r.data;
+}
+function norm(s) { return String(s ?? '').trim().toLowerCase(); }
+function num(v) { return typeof v === 'number' && Number.isFinite(v) ? v : null; }
+
+// A minimal 1x1 JPEG, used to satisfy the inspection photo requirement without needing a
+// real camera in this non-interactive harness.
+const MIN_JPEG_DATA_URL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==';
+
+async function locateTestRecords() {
+  const usersSnap = await getDocs(collection(db, 'users'));
+  const testDrivers = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .filter(u => u.isTestData === true && norm(u.firstName) === 'test' && norm(u.surname) === 'test');
+  if (testDrivers.length !== 1) die('Test Test driver could not be uniquely identified (found ' + testDrivers.length + ').');
+  const driver = testDrivers[0];
+
+  const vehiclesSnap = await getDocs(collection(db, 'vehicles'));
+  const vehicles = vehiclesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const match = (v, label) => v.isTestData === true && norm(v.registration).includes(norm(label));
+  const evs = vehicles.filter(v => match(v, 'TEST EV'));
+  const ices = vehicles.filter(v => match(v, 'TEST ICE'));
+  if (evs.length !== 1) die('TEST EV could not be uniquely identified (found ' + evs.length + ').');
+  if (ices.length !== 1) die('TEST ICE could not be uniquely identified (found ' + ices.length + ').');
+  return { driver, ev: evs[0], ice: ices[0] };
+}
+
+async function doInspection(auth, assignmentId, boundaryType, returnIntent) {
+  await call('createVehicleInspection', { ...auth, assignmentId, boundaryType, returnIntent });
+  await call('uploadInspectionPhoto', { ...auth, assignmentId, boundaryType, photoRole: 'EXTERIOR', imageDataUrl: MIN_JPEG_DATA_URL });
+  await call('uploadInspectionPhoto', { ...auth, assignmentId, boundaryType, photoRole: 'INTERIOR', imageDataUrl: MIN_JPEG_DATA_URL });
+  const inspections = await call('getAssignmentInspections', { ...auth, assignmentId });
+  const insp = inspections.inspections.find(i => i.boundaryType === boundaryType);
+  return await call('completeVehicleInspection', { ...auth, inspectionId: insp.id, hasDamage: false });
+}
+
+async function fetchWp8bState() {
+  const refs = {
+    driver: doc(db, 'users', WP8B.driverId),
+    shift: doc(db, 'shifts', WP8B.shiftId),
+    assignment: doc(db, 'vehicleAssignments', WP8B.assignmentId),
+    ev: doc(db, 'vehicles', WP8B.testEvId),
+    ice: doc(db, 'vehicles', WP8B.testIceId),
+  };
+  const out = {};
+  for (const [key, ref] of Object.entries(refs)) {
+    const snap = await getDoc(ref);
+    out[key] = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  }
+  return out;
+}
+
+function assertWp8bCleanupState(state) {
+  if (!state.driver || state.driver.id !== WP8B.driverId) die('Cleanup target driver is missing or mismatched.');
+  if (!state.shift || state.shift.id !== WP8B.shiftId) die('Cleanup target shift is missing or mismatched.');
+  if (!state.assignment || state.assignment.id !== WP8B.assignmentId) die('Cleanup target assignment is missing or mismatched.');
+  if (!state.ev || state.ev.id !== WP8B.testEvId) die('Cleanup target TEST EV is missing or mismatched.');
+  if (!state.ice || state.ice.id !== WP8B.testIceId) die('Cleanup target TEST ICE is missing or mismatched.');
+
+  if (state.driver.isTestData !== true) die('Cleanup target driver is not marked isTestData=true.');
+  if (state.ev.isTestData !== true) die('Cleanup target TEST EV is not marked isTestData=true.');
+  if (state.ice.isTestData !== true) die('Cleanup target TEST ICE is not marked isTestData=true.');
+
+  if (state.driver.role && state.driver.role !== 'driver') die('Cleanup target driver is not a driver.');
+  if (norm(state.driver.firstName) !== 'test' || norm(state.driver.surname) !== 'test') {
+    die('Cleanup target driver identity mismatch.');
+  }
+
+  if (state.shift.driverId !== WP8B.driverId) die('Shift does not belong to Test Test.');
+  if (state.assignment.driverId !== WP8B.driverId) die('Assignment does not belong to Test Test.');
+  if (state.assignment.shiftId !== WP8B.shiftId) die('Assignment does not belong to the known WP8B shift.');
+  if (state.assignment.vehicleId !== WP8B.testIceId) die('Assignment is not the known final TEST ICE assignment.');
+
+  if (state.driver.activeShiftId !== WP8B.shiftId) die('Test Test activeShiftId does not point to the known WP8B shift.');
+  if (state.shift.status !== 'Active') die('Known WP8B shift is not Active; refusing cleanup-only mode.');
+  if (state.shift.activeAssignmentId) die('Known WP8B shift still has an activeAssignmentId; cleanup-only mode expects assignment cleanup to be done already.');
+  if (state.assignment.status !== 'COMPLETED') die('Known WP8B assignment is not already COMPLETED; refusing cleanup-only mode.');
+}
+
+function computeSafeShiftEndOdometer(...candidates) {
+  const nums = candidates
+    .map(num)
+    .filter(v => v !== null);
+  if (!nums.length) die('Could not derive a safe shift-end odometer.');
+  return Math.max(...nums);
+}
+
+async function cleanupKnownWp8bShift(auth) {
+  const state = await fetchWp8bState();
+  assertWp8bCleanupState(state);
+
+  const safeEndOdometer = computeSafeShiftEndOdometer(
+    state.shift.startOdometer,
+    state.shift.endOdometer,
+    state.assignment.startOdometer,
+    state.assignment.endOdometer,
+    state.ev.currentOdometer,
+    state.ice.currentOdometer
+  );
+
+  await call('endShiftWithSession', {
+    ...auth,
+    shiftId: WP8B.shiftId,
+    endOdometer: safeEndOdometer,
+    deviceId: WP8B.deviceId,
+  });
+
+  return { state, safeEndOdometer };
+}
+
+async function main() {
+  console.log('Locating test records (Test Test, TEST EV, TEST ICE)…');
+  const { driver, ev, ice } = await locateTestRecords();
+  console.log('  Driver: ' + driver.id + '   TEST EV: ' + ev.id + '   TEST ICE: ' + ice.id);
+
+  if (driver.id !== WP8B.driverId || ev.id !== WP8B.testEvId || ice.id !== WP8B.testIceId) {
+    die('Resolved test records do not match the authorised WP8B test-only IDs.');
+  }
+
+  // Hard precondition: driver must have no active shift, and neither test vehicle may be
+  // currently pointed to a shift/assignment — otherwise this run would collide with existing
+  // test state instead of exercising a clean swap scenario.
+  const freshDriverDoc = await getDoc(doc(db, 'users', driver.id));
+  const existingActiveShiftId = freshDriverDoc.exists() ? freshDriverDoc.data().activeShiftId : null;
+
+  if (CLEANUP_ONLY) {
+    if (existingActiveShiftId !== WP8B.shiftId) {
+      die('Cleanup-only mode requires the known WP8B shift ' + WP8B.shiftId + ' to be the active Test Test shift.');
+    }
+  } else if (existingActiveShiftId) {
+    die('Test Test already has an active shift (' + freshDriverDoc.data().activeShiftId + '). Clean up before running.');
+  }
+  if (!CLEANUP_ONLY) {
+    if (ev.activeShiftId || ev.activeAssignmentId) die('TEST EV already has an active pointer. Clean up before running.');
+    if (ice.activeShiftId || ice.activeAssignmentId) die('TEST ICE already has an active pointer. Clean up before running.');
+    record('Preconditions clean', true, 'no active shift/assignment on Test Test, TEST EV, or TEST ICE');
+  }
+
+  const rl = createInterface({ input, output });
+  const pin = await rl.question('Enter the PIN for Test Test: ');
+  rl.close();
+  if (!/^\d{4}$/.test(pin)) die('PIN must be exactly 4 digits.');
+
+  const login = await call('driverLogin', { driverId: driver.id, pin, deviceId: WP8B.deviceId });
+  const auth = { driverId: login.driverId, sessionToken: login.sessionToken };
+  record('Driver login', true, 'session established');
+
+  if (CLEANUP_ONLY) {
+    const { safeEndOdometer } = await cleanupKnownWp8bShift(auth);
+    record('Cleanup-only shift end', true, 'shift ' + WP8B.shiftId + ' ended with endOdometer=' + safeEndOdometer);
+    console.log('');
+    console.log('CLEANUP-ONLY COMPLETE');
+    process.exit(0);
+  }
+
+  // ---- 1. Start Test Test shift with TEST EV ----
+  let shiftId, evAssignmentId;
+  try {
+    const startRes = await call('startShift', { ...auth, vehicleId: ev.id, startOdometer: Number(ev.currentOdometer ?? 0), deviceId: WP8B.deviceId, startChargePercent: 80 });
+    shiftId = startRes.shiftId;
+    const asgRes = await call('startVehicleAssignment', { ...auth, shiftId, vehicleId: ev.id, startOdometer: Number(ev.currentOdometer ?? 0), startChargePercent: 80, transitionReason: 'SHIFT_START' });
+    evAssignmentId = asgRes.assignmentId;
+    record('1. Start Test Test shift with TEST EV', true, 'shift ' + shiftId + ', assignment ' + evAssignmentId);
+  } catch (e) {
+    record('1. Start Test Test shift with TEST EV', false, e?.message || String(e));
+    die('Cannot continue without an active shift.');
+  }
+
+  // ---- 2. Complete TEST EV pickup ----
+  try {
+    await doInspection(auth, evAssignmentId, 'PICKUP');
+    record('2. Complete TEST EV pickup', true);
+  } catch (e) {
+    record('2. Complete TEST EV pickup', false, e?.message || String(e));
+  }
+
+  // ---- 3. Swap from TEST EV to TEST ICE ----
+  let iceAssignmentId;
+  try {
+    await call('createVehicleInspection', { ...auth, assignmentId: evAssignmentId, boundaryType: 'RETURN', returnIntent: 'VEHICLE_SWAP' });
+    await doInspection(auth, evAssignmentId, 'RETURN', 'VEHICLE_SWAP');
+    await call('endVehicleAssignment', { ...auth, assignmentId: evAssignmentId, endOdometer: Number(ev.currentOdometer ?? 0), endChargePercent: 70, transitionReason: 'VEHICLE_SWAP' });
+
+    const asgRes = await call('startVehicleAssignment', { ...auth, shiftId, vehicleId: ice.id, startOdometer: Number(ice.currentOdometer ?? 0), transitionReason: 'VEHICLE_SWAP' });
+    iceAssignmentId = asgRes.assignmentId;
+    await doInspection(auth, iceAssignmentId, 'PICKUP');
+
+    const active = await call('getActiveVehicleAssignment', { ...auth, shiftId });
+    const ok = active.hasActiveAssignment && active.assignment.vehicleId === ice.id;
+    record('3. Swap from TEST EV to TEST ICE', ok, 'active assignment vehicleId=' + active.assignment?.vehicleId);
+  } catch (e) {
+    record('3. Swap from TEST EV to TEST ICE', false, e?.message || String(e));
+  }
+
+  // ---- 6. Returned TEST EV becomes available again ----
+  try {
+    const evDoc = await getDoc(doc(db, 'vehicles', ev.id));
+    const evData = evDoc.data();
+    const available = !evData.activeShiftId && !evData.activeAssignmentId;
+    record('6. Returned TEST EV becomes available again', available, 'activeShiftId=' + (evData.activeShiftId || 'absent') + ' activeAssignmentId=' + (evData.activeAssignmentId || 'absent'));
+  } catch (e) {
+    record('6. Returned TEST EV becomes available again', false, e?.message || String(e));
+  }
+
+  // ---- 7. Active TEST ICE remains unavailable while assigned ----
+  try {
+    const iceDoc = await getDoc(doc(db, 'vehicles', ice.id));
+    const iceData = iceDoc.data();
+    const unavailable = !!iceData.activeShiftId; // ShiftStart.tsx filters on activeShiftId
+    record('7. Active TEST ICE remains unavailable while assigned', unavailable, 'activeShiftId=' + (iceData.activeShiftId || 'absent') + ' activeAssignmentId=' + (iceData.activeAssignmentId || 'absent'));
+  } catch (e) {
+    record('7. Active TEST ICE remains unavailable while assigned', false, e?.message || String(e));
+  }
+
+  // ---- 4. Report Fault derives TEST ICE as current vehicle (server-resolved) ----
+  // ReportDefectForm itself is a React component and cannot be driven headlessly here;
+  // this exercises the exact same authority path server-side: submitting vehicleId=TEST ICE
+  // (the true current vehicle) while the active assignment is TEST ICE must succeed.
+  try {
+    const res = await call('reportDefectWithSession', {
+      ...auth, vehicleId: ice.id, category: 'Other', urgency: 'Low',
+      description: 'WP8B test: defect against current vehicle (should succeed).',
+    });
+    record('4. Defect against current vehicle (TEST ICE) succeeds', !!res.success, res.defectId);
+  } catch (e) {
+    record('4. Defect against current vehicle (TEST ICE) succeeds', false, e?.message || String(e));
+  }
+
+  // ---- 5. Client cannot report a defect for TEST EV while active assignment is TEST ICE ----
+  // Requires the WP8B backend fix to be deployed. Pre-deploy, this call SUCCEEDS (the bug)
+  // and this assertion will legitimately FAIL — that is the expected, honest pre-deploy result.
+  try {
+    await call('reportDefectWithSession', {
+      ...auth, vehicleId: ev.id, category: 'Other', urgency: 'Low',
+      description: 'WP8B test: defect against a non-current vehicle (should be REJECTED).',
+    });
+    record('5. Defect against non-current vehicle (TEST EV) rejected', false, 'call SUCCEEDED — backend fix not yet deployed, or a real regression');
+  } catch (e) {
+    const code = String(e?.code || e?.details?.code || '');
+    record('5. Defect against non-current vehicle (TEST EV) rejected', code.includes('failed-precondition'), code || e?.message);
+  }
+
+  // ---- Cleanup: end the TEST ICE assignment + shift so the environment is left clean ----
+  try {
+    await call('createVehicleInspection', { ...auth, assignmentId: iceAssignmentId, boundaryType: 'RETURN', returnIntent: 'SHIFT_END' });
+    await doInspection(auth, iceAssignmentId, 'RETURN', 'SHIFT_END');
+    await call('endVehicleAssignment', { ...auth, assignmentId: iceAssignmentId, endOdometer: Number(ice.currentOdometer ?? 0), transitionReason: 'SHIFT_END' });
+
+    // ---- 8. After assignment end, TEST ICE becomes available ----
+    const iceDoc = await getDoc(doc(db, 'vehicles', ice.id));
+    const iceData = iceDoc.data();
+    const available = !iceData.activeShiftId && !iceData.activeAssignmentId;
+    record('8. After assignment end, TEST ICE becomes available', available, 'activeShiftId=' + (iceData.activeShiftId || 'absent'));
+
+    const safeShiftEndOdometer = computeSafeShiftEndOdometer(
+      ev.currentOdometer,
+      ice.currentOdometer,
+      Number(ev.currentOdometer ?? 0),
+      Number(ice.currentOdometer ?? 0),
+      Number(iceData?.currentOdometer ?? 0),
+      Number(shiftId ? (await getDoc(doc(db, 'shifts', shiftId))).data()?.startOdometer ?? 0 : 0)
+    );
+    await call('endShiftWithSession', { ...auth, shiftId, endOdometer: safeShiftEndOdometer, deviceId: WP8B.deviceId });
+    console.log('Cleanup: shift ' + shiftId + ' ended, environment left clean for future runs.');
+  } catch (e) {
+    console.error('CLEANUP FAILED — manual cleanup of shift ' + shiftId + ' / assignment ' + iceAssignmentId + ' may be required: ' + (e?.message || e));
+  }
+
+  console.log('');
+  console.log('NOTE — Scenarios 9, 10, 11 (TakeVehicleForm authority, DriverDashboard');
+  console.log('authority, EV/ICE contextual button regression) are static/code-review');
+  console.log('checks, not runtime tests — see the WP8B report for the exact grep');
+  console.log('evidence. This repo has no automated UI test runner (no jest/vitest/RTL).');
+
+  console.log('');
+  const failed = RESULTS.filter(r => !r.ok);
+  console.log(failed.length === 0 ? 'ALL EXECUTED CHECKS PASSED' : (failed.length + ' CHECK(S) FAILED'));
+  process.exit(failed.length === 0 ? 0 : 1);
+}
+
+main().catch(e => { console.error('FAILURE — ' + (e?.message || e)); process.exit(1); });

@@ -191,6 +191,16 @@ export interface Vehicle {
     licenseDiscNumber?: string; // Licence disc number (renewal disc)
     // Seed / test data marker — never set on real vehicle records
     isTestData?: boolean;
+
+    // Server-maintained current-vehicle pointers (WP7B). Transactionally kept in sync by
+    // startShiftWithSession / startVehicleAssignment / endVehicleAssignment — never written
+    // by the client. activeAssignmentId is set only while an ACTIVE VehicleAssignment exists
+    // for this vehicle; activeShiftId is the broader "this vehicle currently belongs to a
+    // shift" pointer the backend uses to gate NEW shift starts (startShiftWithSession).
+    // Absent means available (subject to `status`). Do not derive current-vehicle-in-use
+    // from any Shift document's frozen vehicleId field — use these instead.
+    activeAssignmentId?: string;
+    activeShiftId?: string;
 }
 
 export enum ShiftStatus {
@@ -389,6 +399,24 @@ export interface VehicleUsageStats {
     recentUsageTrend: 'increasing' | 'stable' | 'decreasing'; // Usage pattern trend
 }
 
+// Driver-facing "View My Stats" summary (WP8H). Returned by the session-authenticated
+// getDriverStatsWithSession callable — server-scoped to the authenticated driver only.
+// Deliberately narrower than LeaderboardEntry/DriverIncidentSummary (used by admin
+// screens): no nested user object, no ICE/EV/efficiency breakdown fields that the
+// live Driver Dashboard never actually populated.
+export interface DriverStatsSummary {
+    totalKmDriven: number;
+    totalFines: number;
+    totalFineAmount: number;
+    unpaidFines: number;
+    unpaidAmount: number;
+    totalDamages: number;
+    totalDamagesCost: number;
+    lastIncidentDate: string | null;
+    riskScore: number; // 0-100, higher = more risky
+    needsTraining: boolean;
+}
+
 export interface RefuelRecord {
     id: string;
     vehicleId: string;
@@ -559,4 +587,27 @@ export interface AppSettings {
     enableLicenseReminders: boolean; // Master switch for license reminders
     createdBy: string;
     lastModified: Date;
+}
+
+export type DiscrepancyStatus = 'OPEN' | 'RESOLVED' | 'INVESTIGATING';
+export type DiscrepancyType = 'UNACCOUNTED_MILEAGE';
+
+export interface OdometerDiscrepancy {
+    id: string;
+    orgId?: string;
+    vehicleId: string;
+    vehicleRegistration?: string;
+    driverId: string;
+    driverName?: string;
+    shiftId: string;
+    assignmentId?: string;
+    expectedOdometer: number;
+    actualPickupOdometer: number;
+    unaccountedKm: number;
+    detectedAt: Date | string | any;
+    status: DiscrepancyStatus;
+    type: DiscrepancyType;
+    createdAt?: Date | string | any;
+    updatedAt?: Date | string | any;
+    notes?: string;
 }

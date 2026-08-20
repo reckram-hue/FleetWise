@@ -1,10 +1,141 @@
 rules_version = '2';
+// PROPOSED FleetWise Firestore rules — least privilege, default deny.
+// NOT deployed. This is a design/local-validation artifact for WP5B/WP5C.
+// Cloud Functions (Admin SDK) bypass these rules, so the secure bridge keeps working.
+//
+// WP5C STATUS: All user/defect operations are now behind secure callable functions.
+// The browser no longer needs direct reads/writes to the users collection.
+// Defect creation by drivers goes through the reportDefect callable (PIN-verified).
+// Admin CRUD goes through createDriver/updateDriver/deleteDriver/updateEmploymentStatus callables.
+// Admin creation goes through createAdminUser callable (Admin Auth server-side).
+// Safe user listing for driver-selection uses listDriversSafe callable.
+// Admin user listing uses listUsersAdmin callable.
+// Admin profile uses getAdminProfile callable.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // DEV ONLY: allow everything for now (mock UI has no auth)
+    // Admin = active Firebase Auth admin whose users/{uid} doc has role == 'admin'
+    // and employmentStatus == 'Active'.
+    // get() here is a rules-internal read and is NOT blocked by the users match below.
+    // Repeated identical get() paths are cached within a single rule evaluation, so this
+    // costs one document read, not two.
+    //
+    // Employment status is required, not just role, so deactivating or archiving an admin
+    // immediately revokes their direct database access. This mirrors requireAdmin() in
+    // functions/src/index.ts exactly — the two must not be allowed to drift.
+    //
+    // .get(field, default) is used rather than bare field access so a users document that
+    // predates the employmentStatus field evaluates to a deterministic false (denied)
+    // instead of raising an evaluation error. Both outcomes deny; this one is debuggable.
+    // NOTE: at least one production admin document currently lacks employmentStatus and
+    // will be denied by this rule until that field is set — see the WP8I report.
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('employmentStatus', '') == 'Active';
+    }
+
+    // ---- users ----
+    // DENY all direct client access. Firestore rules cannot redact fields, and the
+    // documents contain pinHash. All user operations go through Cloud Functions:
+    //   - listDriversSafe (public, safe fields only)
+    //   - getAdminProfile (auth required)
+    //   - listUsersAdmin (admin only)
+    //   - createDriver, updateDriver, deleteDriver, updateEmploymentStatus (admin only)
+    //   - createAdminUser (admin only)
+    match /users/{userId} {
+      allow read, write: if false;
+    }
+
+    // ---- vehicles ----
+    // Direct driver/public reads are denied. Driver flows use the session-authenticated
+    // listVehiclesForSession/getVehicleForSession callable bridge, which returns only a
+    // safe projection. Admin browser reads/writes remain direct via Firebase Auth.
+    match /vehicles/{vehicleId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---- shifts ----
+    // Shift lifecycle and driver-facing reads are server-mediated via callables.
+    // Direct browser access remains admin-only for admin dashboards/reports.
+    match /shifts/{shiftId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // ---- defects ----
+    // Driver defect creation and visibility are server-mediated via session callables.
+    // Admin can still manage defects directly from the browser with Firebase Auth.
+    match /defects/{defectId} {
+      allow read: if isAdmin();
+      allow create: if false;
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- admin-only operational collections ----
+    match /costs/{id} { allow read, write: if isAdmin(); }
+    match /maintenanceRecords/{id} { allow read, write: if isAdmin(); }
+    match /scheduledServices/{id} { allow read, write: if isAdmin(); }
+    match /driverFines/{id} { allow read, write: if isAdmin(); }
+    match /vehicleDamages/{id} { allow read, write: if isAdmin(); }
+    match /serviceProviders/{id} { allow read, write: if isAdmin(); }
+    match /settings/{id} { allow read, write: if isAdmin(); }
+    match /fuelEconomyAlerts/{id} { allow read, write: if isAdmin(); }
+
+    // ---- fw_health ----
+    match /fw_health/{id} { allow read, write: if isAdmin(); }
+
+    // ---- driver-logged fuel/charge ----
+    // Admin read for reporting. Writes are denied to ALL clients because no live write
+    // path exists: LogRefuelForm/LogChargeForm end in an alert() without persisting, and
+    // firebaseApi's addRefuelRecord/addChargeRecord have zero call sites in any admin or
+    // driver screen. Rules reflect the architecture that actually exists, not a
+    // hypothetical future one. When persistence is implemented it must go through a
+    // session-authenticated callable — drivers have no Firebase Auth identity, so a direct
+    // client write could never be attributed to a driver safely.
+    match /refuelRecords/{id} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+    match /chargeRecords/{id} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // ---- server-only ----
+    match /rateLimits/{id} { allow read, write: if false; }
+
+    // ---- driverSessions ----
+    // Bearer-credential session store (WP6A). All reads and writes go through Cloud Functions
+    // via the Admin SDK. The document ID is the SHA-256 hash of the session token.
+    // Client access is unconditionally denied — the hash must never be readable by browsers.
+    match /driverSessions/{sessionId} { allow read, write: if false; }
+
+    // ---- vehicleAssignments ----
+    // Server-only (WP7B). Created/read/ended exclusively through session-authenticated
+    // Cloud Functions via the Admin SDK. Direct client access is denied.
+    match /vehicleAssignments/{assignmentId} { allow read, write: if false; }
+
+    // ---- vehicleInspections ----
+    // Server-only (WP7D1). PICKUP/RETURN inspection metadata is created/completed/read
+    // exclusively through session-authenticated Cloud Functions via the Admin SDK.
+    // Direct client access is denied.
+    match /vehicleInspections/{inspectionId} { allow read, write: if false; }
+
+    // ---- odometerDiscrepancies ----
+    // Server-created discrepancy records (unaccounted mileage between assignments).
+    // Admin can read, update status, and delete. Direct client create is denied.
+    match /odometerDiscrepancies/{id} {
+      allow read: if isAdmin();
+      allow create: if false;
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- default deny ----
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

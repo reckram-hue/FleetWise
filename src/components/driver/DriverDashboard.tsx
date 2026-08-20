@@ -4,9 +4,11 @@ import { PlusCircle, AlertTriangle, BarChart2, CheckCircle, XCircle, Bolt, Route
 import Header from '../shared/Header';
 import Card from '../shared/Card';
 import { UserContext } from '../../contexts/UserContext';
-import { Shift, ShiftStatus, Vehicle, VehicleType, VehicleStatus, User, LeaderboardEntry, DriverIncidentSummary, DefectReport, DefectCategory, DefectUrgency } from '../../types';
+import { Shift, ShiftStatus, Vehicle, VehicleType, VehicleStatus, User, LeaderboardEntry, DriverIncidentSummary, DriverStatsSummary, DefectReport, DefectCategory, DefectUrgency } from '../../types';
 import api from '../../services/firebaseApi';
 import { useShiftStore } from '../../store/shift';
+import { getDriverSession } from '../../store/session';
+import { resolveActiveShiftState } from '../../lib/resolveActiveShift';
 import ReportDefectForm from './ReportDefectForm';
 import LogChargeForm from './LogChargeForm';
 import LogRefuelForm from './LogRefuelForm';
@@ -67,38 +69,45 @@ class ErrorBoundary extends Component<
 const DriverDashboard: React.FC = () => {
     const { currentUser } = useContext(UserContext);
     const navigate = useNavigate();
-    const { activeShift: localActiveShift } = useShiftStore();
-    const [activeShift, setActiveShift] = useState<Shift | null>(null);
-    const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+    const { activeShift: localActiveShift, setActiveShift: setLocalActiveShift, clearActiveShift: clearLocalActiveShift } = useShiftStore();
     const [showReportDefect, setShowReportDefect] = useState(false);
     const [showMyStats, setShowMyStats] = useState(false);
     const [showLogCharge, setShowLogCharge] = useState(false);
     const [showLogRefuel, setShowLogRefuel] = useState(false);
 
+    // Reconcile the local shift store with the authoritative server state (WP8H).
+    // Replaces the prior api.getDriverShifts(currentUser.id) call, which was an
+    // unauthenticated full-collection scan of ALL drivers' shifts (security debt, and
+    // blocked outright by the proposed Firestore rules). resolveActiveShiftState() is the
+    // same session-authoritative resolver ActiveShift.tsx and App.tsx already use — it
+    // also correctly resolves the CURRENT vehicle from the active VehicleAssignment
+    // rather than the legacy, swap-stale shift.vehicleId field.
     useEffect(() => {
-        const fetchData = async () => {
-            if (currentUser) {
-                // Check for active shift in local storage first
-                if (localActiveShift) {
-                    // We have an active shift in local storage, verify it's still valid
-                    const shifts = await api.getDriverShifts(currentUser.id);
-                    const currentActiveShift = shifts.find(s => s.status === ShiftStatus.Active) || null;
-                    setActiveShift(currentActiveShift);
+        let cancelled = false;
+        const reconcile = async () => {
+            if (!currentUser) return;
+            try {
+                const activeState = await resolveActiveShiftState(currentUser);
+                if (cancelled) return;
+                if (activeState) {
+                    setLocalActiveShift(activeState);
                 } else {
-                    // No local shift, check database
-                    const shifts = await api.getDriverShifts(currentUser.id);
-                    const currentActiveShift = shifts.find(s => s.status === ShiftStatus.Active) || null;
-                    setActiveShift(currentActiveShift);
+                    clearLocalActiveShift();
                 }
-
-                const vehicleData = await api.getVehicles();
-                setVehicles(vehicleData);
+            } catch (err) {
+                // Fail closed: leave whatever local state already exists rather than
+                // guessing a "no shift" state on a transient lookup failure.
+                console.error('Failed to reconcile active shift on dashboard:', err);
             }
         };
-        fetchData();
-    }, [currentUser, localActiveShift]);
+        reconcile();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentUser]);
 
-    const activeVehicle = vehicles.find(v => v.id === activeShift?.vehicleId);
+    // Current vehicle comes from the active VehicleAssignment (via the shift store),
+    // never from the legacy shift.vehicleId field, which does not update on a swap.
+    const activeVehicle = localActiveShift?.vehicle;
     // Vehicle-dependent actions (Log Refuel/Charge, Report a Fault) are only valid when the
     // driver has an active Shift AND an active VehicleAssignment (WP7C1). The store's
     // assignmentId is the authoritative client-side signal (reconciled from the server).
@@ -124,7 +133,7 @@ const DriverDashboard: React.FC = () => {
         );
     }
 
-    if (showReportDefect) return <ReportDefectForm onBack={() => setShowReportDefect(false)} />;
+    if (showReportDefect && hasActiveAssignment && activeVehicle) return <ReportDefectForm onBack={() => setShowReportDefect(false)} currentVehicle={activeVehicle} />;
     if (showMyStats) return <MyStats onBack={() => setShowMyStats(false)} currentUser={currentUser} />;
     if (showLogCharge) return <LogChargeForm onBack={() => setShowLogCharge(false)} activeVehicle={activeVehicle} />;
     if (showLogRefuel) return <LogRefuelForm onBack={() => setShowLogRefuel(false)} activeVehicle={activeVehicle} />;
@@ -137,17 +146,17 @@ const DriverDashboard: React.FC = () => {
                 <main className="max-w-4xl mx-auto p-6">
                     <Card className="mb-6">
                         <h2 className="text-2xl font-bold text-gray-800 mb-2">Shift Status</h2>
-                        {activeShift ? (
+                        {localActiveShift ? (
                             <div className="flex items-center bg-green-100 text-green-800 p-4 rounded-lg">
                                 <CheckCircle className="h-6 w-6 mr-3" />
                                 <div>
                                     <div>
                                         <h3 className="text-lg font-semibold text-gray-800">Current Shift</h3>
-                                        <p className="text-sm text-gray-500">Started at: {activeShift.startTime ? new Date(activeShift.startTime).toLocaleTimeString() : ''}</p>
+                                        <p className="text-sm text-gray-500">Started at: {localActiveShift.startAt ? new Date(localActiveShift.startAt).toLocaleTimeString() : ''}</p>
                                     </div>                {activeVehicle?.vehicleType === VehicleType.EV ? (
-                                        <p>Start SoC: {activeShift.startChargePercent}%</p>
+                                        <p>Start SoC: {hasActiveAssignment ? localActiveShift.assignmentStartChargePercent : localActiveShift.startChargePercent}%</p>
                                     ) : (
-                                        <p>Odometer: {activeShift.startOdometer} km</p>
+                                        <p>Odometer: {hasActiveAssignment ? localActiveShift.assignmentStartOdo : localActiveShift.startOdo} km</p>
                                     )}
                                 </div>
                             </div>
@@ -165,15 +174,15 @@ const DriverDashboard: React.FC = () => {
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
                         <MainButton
                             icon={<PlusCircle size={48} />}
-                            text={activeShift ? "Active Shift" : "Start New Shift"}
+                            text={localActiveShift ? "Active Shift" : "Start New Shift"}
                             onClick={() => {
-                                if (activeShift || localActiveShift) {
+                                if (localActiveShift) {
                                     navigate('/driver/shift/active');
                                 } else {
                                     navigate('/driver/shift/start');
                                 }
                             }}
-                            color={activeShift ? "bg-red-500 hover:bg-red-600" : "bg-blue-500 hover:bg-blue-600"}
+                            color={localActiveShift ? "bg-red-500 hover:bg-red-600" : "bg-blue-500 hover:bg-blue-600"}
                         />
                         {hasActiveAssignment && (activeVehicle?.vehicleType === VehicleType.EV ? (
                             <MainButton
@@ -190,7 +199,7 @@ const DriverDashboard: React.FC = () => {
                                 color="bg-orange-500 hover:bg-orange-600"
                             />
                         ))}
-                        {hasActiveAssignment && (
+                        {hasActiveAssignment && activeVehicle && (
                             <MainButton
                                 icon={<AlertTriangle size={48} />}
                                 text="Report a Fault"
@@ -1038,26 +1047,30 @@ const EndShiftFlow = ({ onBack, onShiftEnded, activeShift, activeVehicle, curren
 
 
 const MyStats = ({ onBack, currentUser }: { onBack: () => void; currentUser: User | null }) => {
-    const [stats, setStats] = useState<LeaderboardEntry | null>(null);
-    const [incidentData, setIncidentData] = useState<DriverIncidentSummary | null>(null);
+    const [stats, setStats] = useState<DriverStatsSummary | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    // WP8H: session-authenticated callable, scoped server-side to this driver only.
+    // Replaces the prior api.getLeaderboard() + api.getDriverIncidentSummary() combination,
+    // which read the full `shifts` collection and relied on api.getUsers() (an admin-only,
+    // Firebase-Auth-gated callable a driver session can never satisfy) plus unauthenticated
+    // full-collection reads of driverFines/vehicleDamages — both blocked by the proposed
+    // Firestore rules (isAdmin()-only) and already broken today for the same auth reason.
+    // Note: the prior ICE/EV breakdown and efficiency-score fields are omitted below because
+    // the previous getLeaderboard() implementation never actually populated them — those
+    // sections were unreachable dead UI in production, not a behavior this preserves.
     useEffect(() => {
         if (!currentUser) return;
 
         const fetchData = async () => {
             try {
-                const [leaderboardData, incidentSummary] = await Promise.all([
-                    api.getLeaderboard(),
-                    api.getDriverIncidentSummary(currentUser.id)
-                ]);
-
-                const myStats = leaderboardData.find(e => e.driver.id === currentUser.id) || null;
-                const myIncidents = incidentSummary.length > 0 ? incidentSummary[0] : null;
-
-                setStats(myStats);
-                setIncidentData(myIncidents);
+                const session = getDriverSession();
+                if (!session) {
+                    throw new Error('Your session has expired. Please log in again.');
+                }
+                const result = await api.getDriverStatsWithSession(currentUser.id, session.sessionToken);
+                setStats(result);
             } catch (err) {
                 setError("Could not load your stats. Please try again later.");
             } finally {
@@ -1080,9 +1093,6 @@ const MyStats = ({ onBack, currentUser }: { onBack: () => void; currentUser: Use
             </div>
         </div>
     );
-
-    const hasICEData = stats && (stats.totalICEKmDriven || 0) > 0;
-    const hasEVData = stats && (stats.totalEVKmDriven || 0) > 0;
 
     return (
         <div className="min-h-screen bg-gray-100">
@@ -1107,133 +1117,8 @@ const MyStats = ({ onBack, currentUser }: { onBack: () => void; currentUser: Use
                                         value={`${stats.totalKmDriven.toLocaleString()} km`}
                                         subtitle="Across all vehicles"
                                     />
-                                    <StatDisplay
-                                        icon={<Car className="h-8 w-8 text-purple-500" />}
-                                        title="Vehicle Types Driven"
-                                        value={`${hasICEData && hasEVData ? 'ICE & EV' : hasICEData ? 'ICE Only' : hasEVData ? 'EV Only' : 'None'}`}
-                                        subtitle={hasICEData && hasEVData ? 'Multi-fleet experience' : ''}
-                                    />
-                                    {stats.overallEfficiencyScore && (
-                                        <StatDisplay
-                                            icon={stats.overallEfficiencyScore >= 100 ?
-                                                <Trophy className="h-8 w-8 text-yellow-500" /> :
-                                                <Target className="h-8 w-8 text-gray-500" />}
-                                            title="Overall Efficiency Score"
-                                            value={`${stats.overallEfficiencyScore}/100`}
-                                            subtitle={stats.overallEfficiencyScore >= 110 ? 'Excellent performance' :
-                                                stats.overallEfficiencyScore >= 100 ? 'Above baseline' :
-                                                    stats.overallEfficiencyScore >= 90 ? 'Near baseline' : 'Below baseline'}
-                                        />
-                                    )}
                                 </div>
                             </div>
-
-                            {/* ICE Vehicle Stats */}
-                            {hasICEData && (
-                                <div>
-                                    <h3 className="text-xl font-semibold text-gray-800 mb-3">ICE Vehicle Performance</h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                        <StatDisplay
-                                            icon={<Fuel className="h-8 w-8 text-orange-500" />}
-                                            title="ICE Distance Driven"
-                                            value={`${(stats.totalICEKmDriven || 0).toLocaleString()} km`}
-                                            subtitle="Petrol/diesel vehicles"
-                                        />
-                                        <StatDisplay
-                                            icon={<Fuel className="h-8 w-8 text-green-500" />}
-                                            title="Fuel Economy"
-                                            value={stats.averageKmL ? `${stats.averageKmL.toFixed(2)} km/L` : 'N/A'}
-                                            subtitle="Aggregated across ICE vehicles"
-                                        />
-                                        <StatDisplay
-                                            icon={<Fuel className="h-8 w-8 text-blue-500" />}
-                                            title="Total Fuel Consumed"
-                                            value={stats.totalFuelConsumed ? `${stats.totalFuelConsumed.toFixed(1)} L` : 'N/A'}
-                                            subtitle="Including mid-shift refuels"
-                                        />
-                                        <StatDisplay
-                                            icon={stats.iceEfficiencyScore && stats.iceEfficiencyScore >= 100 ?
-                                                <Trophy className="h-8 w-8 text-yellow-500" /> :
-                                                <Target className="h-8 w-8 text-gray-500" />}
-                                            title="ICE Efficiency Score"
-                                            value={stats.iceEfficiencyScore ? `${stats.iceEfficiencyScore}/100` : 'N/A'}
-                                            subtitle={stats.iceEfficiencyScore ?
-                                                (stats.iceEfficiencyScore >= 110 ? 'Excellent vs baseline' :
-                                                    stats.iceEfficiencyScore >= 100 ? 'Good vs baseline' :
-                                                        stats.iceEfficiencyScore >= 90 ? 'Fair vs baseline' : 'Below baseline') :
-                                                'Compared to vehicle baselines'}
-                                        />
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* EV Stats */}
-                            {hasEVData && (
-                                <div>
-                                    <h3 className="text-xl font-semibold text-gray-800 mb-3">Electric Vehicle Performance</h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                        <StatDisplay
-                                            icon={<Bolt className="h-8 w-8 text-blue-500" />}
-                                            title="EV Distance Driven"
-                                            value={`${(stats.totalEVKmDriven || 0).toLocaleString()} km`}
-                                            subtitle="Electric vehicles"
-                                        />
-                                        <StatDisplay
-                                            icon={<Bolt className="h-8 w-8 text-yellow-500" />}
-                                            title="Energy Efficiency"
-                                            value={stats.averageKmPerKwh ? `${stats.averageKmPerKwh.toFixed(2)} km/kWh` : 'N/A'}
-                                            subtitle="Aggregated across EVs"
-                                        />
-                                        <StatDisplay
-                                            icon={<Bolt className="h-8 w-8 text-purple-500" />}
-                                            title="Total Energy Consumed"
-                                            value={stats.totalEnergyConsumed ? `${stats.totalEnergyConsumed.toFixed(1)} kWh` : 'N/A'}
-                                            subtitle="Including mid-shift charges"
-                                        />
-                                        <StatDisplay
-                                            icon={stats.evEfficiencyScore && stats.evEfficiencyScore >= 100 ?
-                                                <Trophy className="h-8 w-8 text-green-500" /> :
-                                                <Target className="h-8 w-8 text-gray-500" />}
-                                            title="EV Efficiency Score"
-                                            value={stats.evEfficiencyScore ? `${stats.evEfficiencyScore}/100` : 'N/A'}
-                                            subtitle={stats.evEfficiencyScore ?
-                                                (stats.evEfficiencyScore >= 110 ? 'Excellent vs baseline' :
-                                                    stats.evEfficiencyScore >= 100 ? 'Good vs baseline' :
-                                                        stats.evEfficiencyScore >= 90 ? 'Fair vs baseline' : 'Below baseline') :
-                                                'Compared to vehicle baselines'}
-                                        />
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Efficiency Comparison */}
-                            {hasICEData && hasEVData && (
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                                    <div className="flex items-center justify-between mb-2">
-                                        <h4 className="text-lg font-semibold text-blue-800">Multi-Fleet Performance</h4>
-                                        {stats.overallEfficiencyScore && (
-                                            <div className="flex items-center bg-white rounded-lg px-3 py-1 border border-blue-200">
-                                                {stats.overallEfficiencyScore >= 100 ?
-                                                    <Trophy className="h-5 w-5 text-yellow-500 mr-2" /> :
-                                                    <Target className="h-5 w-5 text-blue-600 mr-2" />}
-                                                <span className="font-bold text-blue-800">
-                                                    Overall Score: {stats.overallEfficiencyScore}/100
-                                                </span>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <p className="text-sm text-blue-700">
-                                        You've driven both ICE and electric vehicles, demonstrating versatility across different powertrains.
-                                        Your fuel economy of {stats.averageKmL?.toFixed(2) || 'N/A'} km/L and energy efficiency of {stats.averageKmPerKwh?.toFixed(2) || 'N/A'} km/kWh
-                                        {stats.overallEfficiencyScore ? (
-                                            stats.overallEfficiencyScore >= 110 ? ' show excellent performance across all vehicle types.' :
-                                                stats.overallEfficiencyScore >= 100 ? ' show good performance compared to vehicle baselines.' :
-                                                    stats.overallEfficiencyScore >= 90 ? ' show fair performance with room for improvement.' :
-                                                        ' indicate areas for improvement in fuel efficiency.'
-                                        ) : ' show your ability to optimize performance across vehicle types.'}
-                                    </p>
-                                </div>
-                            )}
 
                             {/* Safety & Compliance Record */}
                             <div>
@@ -1242,65 +1127,63 @@ const MyStats = ({ onBack, currentUser }: { onBack: () => void; currentUser: Use
                                     <StatDisplay
                                         icon={<DollarSign className="h-8 w-8 text-red-500" />}
                                         title="Traffic Fines"
-                                        value={incidentData ? `${incidentData.totalFines}` : '0'}
-                                        subtitle={incidentData?.totalFineAmount ? `Total: R${incidentData.totalFineAmount.toLocaleString()}` : 'No fines recorded'}
+                                        value={`${stats.totalFines}`}
+                                        subtitle={stats.totalFineAmount ? `Total: R${stats.totalFineAmount.toLocaleString()}` : 'No fines recorded'}
                                     />
                                     <StatDisplay
                                         icon={<Shield className="h-8 w-8 text-orange-500" />}
                                         title="Vehicle Damage Incidents"
-                                        value={incidentData ? `${incidentData.totalDamages}` : '0'}
-                                        subtitle={incidentData?.totalDamagesCost ? `Total cost: R${incidentData.totalDamagesCost.toLocaleString()}` : 'No damage recorded'}
+                                        value={`${stats.totalDamages}`}
+                                        subtitle={stats.totalDamagesCost ? `Total cost: R${stats.totalDamagesCost.toLocaleString()}` : 'No damage recorded'}
                                     />
                                 </div>
 
                                 {/* Safety Status */}
-                                {incidentData && (
-                                    <div className="mt-4">
-                                        {incidentData.riskScore === 0 ? (
-                                            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                                                <div className="flex items-center">
-                                                    <CheckCircle className="h-5 w-5 text-green-400 mr-2" />
-                                                    <h4 className="text-lg font-semibold text-green-800">Excellent Safety Record</h4>
-                                                </div>
-                                                <p className="text-sm text-green-700 mt-1">
-                                                    No traffic fines or vehicle damage incidents recorded. Keep up the safe driving!
-                                                </p>
+                                <div className="mt-4">
+                                    {stats.riskScore === 0 ? (
+                                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                                            <div className="flex items-center">
+                                                <CheckCircle className="h-5 w-5 text-green-400 mr-2" />
+                                                <h4 className="text-lg font-semibold text-green-800">Excellent Safety Record</h4>
                                             </div>
-                                        ) : incidentData.riskScore < 30 ? (
-                                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                                                <div className="flex items-center">
-                                                    <AlertTriangle className="h-5 w-5 text-yellow-400 mr-2" />
-                                                    <h4 className="text-lg font-semibold text-yellow-800">Low Risk Profile</h4>
-                                                </div>
-                                                <p className="text-sm text-yellow-700 mt-1">
-                                                    Risk Score: {incidentData.riskScore}/100. Minor incidents recorded but overall good safety record.
-                                                    {incidentData.unpaidFines > 0 && ` You have ${incidentData.unpaidFines} unpaid fine(s) totaling R${incidentData.unpaidAmount.toLocaleString()}.`}
-                                                </p>
+                                            <p className="text-sm text-green-700 mt-1">
+                                                No traffic fines or vehicle damage incidents recorded. Keep up the safe driving!
+                                            </p>
+                                        </div>
+                                    ) : stats.riskScore < 30 ? (
+                                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                                            <div className="flex items-center">
+                                                <AlertTriangle className="h-5 w-5 text-yellow-400 mr-2" />
+                                                <h4 className="text-lg font-semibold text-yellow-800">Low Risk Profile</h4>
                                             </div>
-                                        ) : (
-                                            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                                                <div className="flex items-center">
-                                                    <XCircle className="h-5 w-5 text-red-400 mr-2" />
-                                                    <h4 className="text-lg font-semibold text-red-800">
-                                                        {incidentData.needsTraining ? 'Training Required' : 'High Risk Profile'}
-                                                    </h4>
-                                                </div>
-                                                <p className="text-sm text-red-700 mt-1">
-                                                    Risk Score: {incidentData.riskScore}/100. Multiple incidents recorded require attention.
-                                                    {incidentData.unpaidFines > 0 && ` You have ${incidentData.unpaidFines} unpaid fine(s) totaling R${incidentData.unpaidAmount.toLocaleString()}.`}
-                                                    {incidentData.needsTraining && ' Please contact management regarding mandatory safety training.'}
-                                                </p>
+                                            <p className="text-sm text-yellow-700 mt-1">
+                                                Risk Score: {stats.riskScore}/100. Minor incidents recorded but overall good safety record.
+                                                {stats.unpaidFines > 0 && ` You have ${stats.unpaidFines} unpaid fine(s) totaling R${stats.unpaidAmount.toLocaleString()}.`}
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                                            <div className="flex items-center">
+                                                <XCircle className="h-5 w-5 text-red-400 mr-2" />
+                                                <h4 className="text-lg font-semibold text-red-800">
+                                                    {stats.needsTraining ? 'Training Required' : 'High Risk Profile'}
+                                                </h4>
                                             </div>
-                                        )}
+                                            <p className="text-sm text-red-700 mt-1">
+                                                Risk Score: {stats.riskScore}/100. Multiple incidents recorded require attention.
+                                                {stats.unpaidFines > 0 && ` You have ${stats.unpaidFines} unpaid fine(s) totaling R${stats.unpaidAmount.toLocaleString()}.`}
+                                                {stats.needsTraining && ' Please contact management regarding mandatory safety training.'}
+                                            </p>
+                                        </div>
+                                    )}
 
-                                        {/* Recent Incident */}
-                                        {incidentData.lastIncidentDate && (
-                                            <div className="mt-3 text-sm text-gray-600">
-                                                Last incident: {new Date(incidentData.lastIncidentDate).toLocaleDateString()}
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
+                                    {/* Recent Incident */}
+                                    {stats.lastIncidentDate && (
+                                        <div className="mt-3 text-sm text-gray-600">
+                                            Last incident: {new Date(stats.lastIncidentDate).toLocaleDateString()}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     ) : (

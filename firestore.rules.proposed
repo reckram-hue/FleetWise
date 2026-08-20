@@ -14,12 +14,26 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Admin = Firebase Auth user whose users/{uid} doc has role == 'admin'.
+    // Admin = active Firebase Auth admin whose users/{uid} doc has role == 'admin'
+    // and employmentStatus == 'Active'.
     // get() here is a rules-internal read and is NOT blocked by the users match below.
+    // Repeated identical get() paths are cached within a single rule evaluation, so this
+    // costs one document read, not two.
+    //
+    // Employment status is required, not just role, so deactivating or archiving an admin
+    // immediately revokes their direct database access. This mirrors requireAdmin() in
+    // functions/src/index.ts exactly — the two must not be allowed to drift.
+    //
+    // .get(field, default) is used rather than bare field access so a users document that
+    // predates the employmentStatus field evaluates to a deterministic false (denied)
+    // instead of raising an evaluation error. Both outcomes deny; this one is debuggable.
+    // NOTE: at least one production admin document currently lacks employmentStatus and
+    // will be denied by this rule until that field is set — see the WP8I report.
     function isAdmin() {
       return request.auth != null
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('employmentStatus', '') == 'Active';
     }
 
     // ---- users ----
@@ -35,25 +49,27 @@ service cloud.firestore {
     }
 
     // ---- vehicles ----
-    // Fleet data (no PII): readable by anyone; writes are admin-only.
+    // Direct driver/public reads are denied. Driver flows use the session-authenticated
+    // listVehiclesForSession/getVehicleForSession callable bridge, which returns only a
+    // safe projection. Admin browser reads/writes remain direct via Firebase Auth.
     match /vehicles/{vehicleId} {
-      allow read: if true;
+      allow read: if isAdmin();
       allow create, update, delete: if isAdmin();
     }
 
     // ---- shifts ----
-    // Historical/stat visibility is public; start/end are owned by Cloud Functions.
+    // Shift lifecycle and driver-facing reads are server-mediated via callables.
+    // Direct browser access remains admin-only for admin dashboards/reports.
     match /shifts/{shiftId} {
-      allow read: if true;
+      allow read: if isAdmin();
       allow create, update, delete: if false;
     }
 
     // ---- defects ----
-    // Public read for driver defect visibility.
-    // Direct create is BLOCKED — driver defect creation goes through reportDefect callable (PIN-verified).
-    // Admin can update/delete defects directly (status changes, assignments, resolution).
+    // Driver defect creation and visibility are server-mediated via session callables.
+    // Admin can still manage defects directly from the browser with Firebase Auth.
     match /defects/{defectId} {
-      allow read: if true;
+      allow read: if isAdmin();
       allow create: if false;
       allow update, delete: if isAdmin();
     }
@@ -72,15 +88,19 @@ service cloud.firestore {
     match /fw_health/{id} { allow read, write: if isAdmin(); }
 
     // ---- driver-logged fuel/charge ----
-    // Readable for stats; writes are BLOCKED (no driver auth identity) and must move
-    // behind Cloud Functions before live lockdown. (Forms are currently unwired.)
-    // NOT implemented in WP5C — deferred to dedicated energy/fuel work package.
+    // Admin read for reporting. Writes are denied to ALL clients because no live write
+    // path exists: LogRefuelForm/LogChargeForm end in an alert() without persisting, and
+    // firebaseApi's addRefuelRecord/addChargeRecord have zero call sites in any admin or
+    // driver screen. Rules reflect the architecture that actually exists, not a
+    // hypothetical future one. When persistence is implemented it must go through a
+    // session-authenticated callable — drivers have no Firebase Auth identity, so a direct
+    // client write could never be attributed to a driver safely.
     match /refuelRecords/{id} {
-      allow read: if true;
+      allow read: if isAdmin();
       allow create, update, delete: if false;
     }
     match /chargeRecords/{id} {
-      allow read: if true;
+      allow read: if isAdmin();
       allow create, update, delete: if false;
     }
 
@@ -103,6 +123,15 @@ service cloud.firestore {
     // exclusively through session-authenticated Cloud Functions via the Admin SDK.
     // Direct client access is denied.
     match /vehicleInspections/{inspectionId} { allow read, write: if false; }
+
+    // ---- odometerDiscrepancies ----
+    // Server-created discrepancy records (unaccounted mileage between assignments).
+    // Admin can read, update status, and delete. Direct client create is denied.
+    match /odometerDiscrepancies/{id} {
+      allow read: if isAdmin();
+      allow create: if false;
+      allow update, delete: if isAdmin();
+    }
 
     // ---- default deny ----
     match /{document=**} {

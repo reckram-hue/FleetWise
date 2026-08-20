@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { Trophy, Fuel, Route, Bolt } from 'lucide-react';
 import Card from './Card';
 import Header from './Header';
 import { LeaderboardEntry } from '../../types';
 import api from '../../services/firebaseApi';
+import { UserContext } from '../../contexts/UserContext';
+import { getDriverSession, isSessionLocallyExpired } from '../../store/session';
 
 interface LeaderboardProps {
     onBack?: () => void;
@@ -11,18 +13,25 @@ interface LeaderboardProps {
 }
 
 const Leaderboard: React.FC<LeaderboardProps> = ({ onBack, hideBackButton }) => {
+  const { currentUser } = useContext(UserContext);
   const [leaderboardData, setLeaderboardData] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      const data = await api.getLeaderboard();
-      setLeaderboardData(data);
-      setLoading(false);
+      try {
+        const session = getDriverSession();
+        const data = currentUser?.role === 'driver' && session && !isSessionLocallyExpired(session)
+          ? await api.getLeaderboard({ driverId: session.driverId, sessionToken: session.sessionToken })
+          : await api.getLeaderboard();
+        setLeaderboardData(data);
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
-  }, []);
+  }, [currentUser]);
   
   const rankColor = (rank: number) => {
       if (rank === 0) return "text-yellow-400";

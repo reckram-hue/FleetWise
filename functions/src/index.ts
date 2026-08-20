@@ -179,7 +179,7 @@ const EndShiftWithSessionSchema = z.object({
   driverId: z.string().min(1, 'Driver ID is required'),
   sessionToken: z.string().min(1, 'Session token is required'),
   shiftId: z.string().min(1, 'Shift ID is required'),
-  endOdometer: z.number().min(0, 'End odometer must be positive'),
+  endOdometer: z.number().min(0, 'End odometer must be positive').optional(),
   endChargePercent: optionalChargePercent,
   notes: optionalNotes,
   deviceId: optionalString,
@@ -285,6 +285,12 @@ const GetAssignmentInspectionsSchema = z.object({
   driverId: z.string().min(1, 'Driver ID is required'),
   sessionToken: z.string().min(1, 'Session token is required'),
   assignmentId: z.string().min(1, 'Assignment ID is required'),
+});
+
+const UpdateOdometerDiscrepancySchema = z.object({
+  discrepancyId: z.string().min(1, 'Discrepancy ID is required'),
+  status: z.enum(['OPEN', 'RESOLVED', 'INVESTIGATING']),
+  notes: optionalNotes,
 });
 
 // =============================================================================
@@ -429,6 +435,35 @@ export const startShiftWithPin = functions.https.onCall(async (data, context) =>
         );
       }
 
+      // Odometer continuity & discrepancy check
+      const latestStoredOdometer = txVehicleDoc.data()?.currentOdometer;
+      if (typeof startOdometer === 'number' && typeof latestStoredOdometer === 'number') {
+        if (startOdometer < latestStoredOdometer) {
+          throw new functions.https.HttpsError(
+            'invalid-argument',
+            `Start odometer (${startOdometer} km) cannot be lower than the vehicle's last recorded odometer (${latestStoredOdometer} km)`
+          );
+        }
+        if (startOdometer > latestStoredOdometer) {
+          const unaccountedKm = startOdometer - latestStoredOdometer;
+          const discrepancyRef = db.collection('odometerDiscrepancies').doc();
+          transaction.set(discrepancyRef, {
+            orgId: DEFAULT_ORG_ID,
+            vehicleId,
+            driverId,
+            shiftId,
+            expectedOdometer: latestStoredOdometer,
+            actualPickupOdometer: startOdometer,
+            unaccountedKm,
+            detectedAt: admin.firestore.FieldValue.serverTimestamp(),
+            status: 'OPEN',
+            type: 'UNACCOUNTED_MILEAGE',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
       // Create shift document (legacy-compatible field names; charge % is EV-only)
       const shiftData: any = {
         driverId,
@@ -453,11 +488,15 @@ export const startShiftWithPin = functions.https.onCall(async (data, context) =>
         lastShiftStart: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // Update vehicle's activeShiftId
-      transaction.update(vehicleDoc.ref, {
+      // Update vehicle's activeShiftId and currentOdometer
+      const vehicleUpdate: any = {
         activeShiftId: shiftId,
         lastShiftStart: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      };
+      if (typeof startOdometer === 'number') {
+        vehicleUpdate.currentOdometer = startOdometer;
+      }
+      transaction.update(vehicleDoc.ref, vehicleUpdate);
     });
 
     return {
@@ -1903,6 +1942,35 @@ export const startShift = functions.https.onCall(async (data, context) => {
         throw new functions.https.HttpsError('failed-precondition', 'Vehicle is already in use');
       }
 
+      // Odometer continuity & discrepancy check
+      const latestStoredOdometer = txVehicleDoc.data()?.currentOdometer;
+      if (typeof startOdometer === 'number' && typeof latestStoredOdometer === 'number') {
+        if (startOdometer < latestStoredOdometer) {
+          throw new functions.https.HttpsError(
+            'invalid-argument',
+            `Start odometer (${startOdometer} km) cannot be lower than the vehicle's last recorded odometer (${latestStoredOdometer} km)`
+          );
+        }
+        if (startOdometer > latestStoredOdometer) {
+          const unaccountedKm = startOdometer - latestStoredOdometer;
+          const discrepancyRef = db.collection('odometerDiscrepancies').doc();
+          transaction.set(discrepancyRef, {
+            orgId: DEFAULT_ORG_ID,
+            vehicleId,
+            driverId,
+            shiftId,
+            expectedOdometer: latestStoredOdometer,
+            actualPickupOdometer: startOdometer,
+            unaccountedKm,
+            detectedAt: admin.firestore.FieldValue.serverTimestamp(),
+            status: 'OPEN',
+            type: 'UNACCOUNTED_MILEAGE',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
       // Legacy-compatible shift document schema; startChargePercent is EV-only.
       const shiftData: any = {
         driverId,
@@ -1925,10 +1993,15 @@ export const startShift = functions.https.onCall(async (data, context) => {
         activeShiftId: shiftId,
         lastShiftStart: admin.firestore.FieldValue.serverTimestamp(),
       });
-      transaction.update(vehicleDoc.ref, {
+
+      const vehicleUpdate: any = {
         activeShiftId: shiftId,
         lastShiftStart: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      };
+      if (typeof startOdometer === 'number') {
+        vehicleUpdate.currentOdometer = startOdometer;
+      }
+      transaction.update(vehicleDoc.ref, vehicleUpdate);
     });
 
     return { success: true, shiftId, message: 'Shift started successfully' };
@@ -2053,7 +2126,7 @@ export const endShiftWithSession = functions.https.onCall(async (data, context) 
       );
     }
 
-    if (shiftData.startOdometer && endOdometer < shiftData.startOdometer) {
+    if (endOdometer !== undefined && shiftData.startOdometer && endOdometer < shiftData.startOdometer) {
       throw new functions.https.HttpsError(
         'invalid-argument',
         `End odometer (${endOdometer}) must be greater than or equal to start odometer (${shiftData.startOdometer})`
@@ -2064,7 +2137,6 @@ export const endShiftWithSession = functions.https.onCall(async (data, context) 
 
     await db.runTransaction(async (transaction) => {
       const driverRef = db.collection('users').doc(driverId);
-      const vehicleRef = db.collection('vehicles').doc(vehicleId);
 
       // Re-check the active-assignment pointer inside the transaction (race protection).
       const txShift = await transaction.get(shiftRef);
@@ -2079,11 +2151,13 @@ export const endShiftWithSession = functions.https.onCall(async (data, context) 
       const shiftUpdate: any = {
         endTime: admin.firestore.FieldValue.serverTimestamp(),
         status: 'Completed',
-        endOdometer,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
+      if (typeof endOdometer === 'number') {
+        shiftUpdate.endOdometer = endOdometer;
+      }
       if (typeof notes === 'string' && notes.trim()) {
-        shiftUpdate.notes = notes;
+        shiftUpdate.notes = notes.trim();
       }
       if (typeof endChargePercent === 'number') {
         shiftUpdate.endChargePercent = endChargePercent;
@@ -2092,7 +2166,10 @@ export const endShiftWithSession = functions.https.onCall(async (data, context) 
 
       // Clear additive pointer fields (no-op on legacy docs that never had them).
       transaction.update(driverRef, { activeShiftId: admin.firestore.FieldValue.delete() });
-      transaction.update(vehicleRef, { activeShiftId: admin.firestore.FieldValue.delete() });
+      if (vehicleId) {
+        const vehicleRef = db.collection('vehicles').doc(vehicleId);
+        transaction.update(vehicleRef, { activeShiftId: admin.firestore.FieldValue.delete() });
+      }
     });
 
     return { success: true, message: 'Shift ended successfully' };
@@ -2261,6 +2338,36 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
         }
       }
 
+      // Odometer continuity & discrepancy check
+      const latestStoredOdometer = txVehicleDoc.data()?.currentOdometer;
+      if (typeof startOdometer === 'number' && typeof latestStoredOdometer === 'number') {
+        if (startOdometer < latestStoredOdometer) {
+          throw new functions.https.HttpsError(
+            'invalid-argument',
+            `Start odometer (${startOdometer} km) cannot be lower than the vehicle's last recorded odometer (${latestStoredOdometer} km)`
+          );
+        }
+        if (startOdometer > latestStoredOdometer) {
+          const unaccountedKm = startOdometer - latestStoredOdometer;
+          const discrepancyRef = db.collection('odometerDiscrepancies').doc();
+          transaction.set(discrepancyRef, {
+            orgId: DEFAULT_ORG_ID,
+            vehicleId,
+            driverId,
+            shiftId,
+            assignmentId,
+            expectedOdometer: latestStoredOdometer,
+            actualPickupOdometer: startOdometer,
+            unaccountedKm,
+            detectedAt: admin.firestore.FieldValue.serverTimestamp(),
+            status: 'OPEN',
+            type: 'UNACCOUNTED_MILEAGE',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
       const assignmentData: any = {
         orgId: DEFAULT_ORG_ID,
         driverId,
@@ -2283,11 +2390,16 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
         activeAssignmentId: assignmentId,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-      transaction.update(vehicleDoc.ref, {
+
+      const vehicleUpdate: any = {
         activeAssignmentId: assignmentId,
         activeShiftId: shiftId,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      };
+      if (typeof startOdometer === 'number') {
+        vehicleUpdate.currentOdometer = startOdometer;
+      }
+      transaction.update(vehicleDoc.ref, vehicleUpdate);
     });
 
     return { success: true, assignmentId, message: 'Vehicle assignment started' };
@@ -2391,6 +2503,15 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
         throw new functions.https.HttpsError('failed-precondition', 'This assignment was already cancelled.');
       }
 
+      // Ensure return odometer does not regress canonical vehicle odometer
+      const currentVehicleOdo = txVehicleDoc.data()?.currentOdometer;
+      if (typeof endOdometer === 'number' && typeof currentVehicleOdo === 'number' && endOdometer < currentVehicleOdo) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          `End odometer (${endOdometer} km) cannot be lower than the vehicle's current recorded odometer (${currentVehicleOdo} km)`
+        );
+      }
+
       const assignmentUpdate: any = {
         status: 'COMPLETED',
         endedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2405,13 +2526,21 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       if (txShiftDoc.data()?.activeAssignmentId === assignmentId) {
         transaction.update(shiftDoc.ref, { activeAssignmentId: admin.firestore.FieldValue.delete() });
       }
-      // Clear vehicle pointers only if they still belong to this assignment/shift.
+
+      // Update vehicle: update currentOdometer and clear assignment/shift pointers
+      const vehicleUpdate: any = {
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (typeof endOdometer === 'number') {
+        vehicleUpdate.currentOdometer = endOdometer;
+      }
       if (txVehicleDoc.data()?.activeAssignmentId === assignmentId) {
-        transaction.update(vehicleDoc.ref, { activeAssignmentId: admin.firestore.FieldValue.delete() });
+        vehicleUpdate.activeAssignmentId = admin.firestore.FieldValue.delete();
       }
       if (txVehicleDoc.data()?.activeShiftId === shiftId) {
-        transaction.update(vehicleDoc.ref, { activeShiftId: admin.firestore.FieldValue.delete() });
+        vehicleUpdate.activeShiftId = admin.firestore.FieldValue.delete();
       }
+      transaction.update(vehicleDoc.ref, vehicleUpdate);
     });
 
     return { success: true, message: 'Vehicle assignment ended' };
@@ -2895,5 +3024,64 @@ export const getAssignmentInspections = functions.https.onCall(async (data, cont
     }
     console.error('Error in getAssignmentInspections:', error);
     throw new functions.https.HttpsError('internal', 'Failed to get assignment inspections: ' + error.message);
+  }
+});
+
+// =============================================================================
+// ODOMETER DISCREPANCIES (WP-ODO)
+// =============================================================================
+
+/**
+ * Admin-authenticated list of odometer discrepancies.
+ */
+export const listOdometerDiscrepancies = functions.https.onCall(async (data, context) => {
+  try {
+    await requireAdmin(context);
+    const snap = await db.collection('odometerDiscrepancies').orderBy('detectedAt', 'desc').limit(200).get();
+    const discrepancies = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return { success: true, discrepancies };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error('Error in listOdometerDiscrepancies:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to list odometer discrepancies: ' + error.message);
+  }
+});
+
+/**
+ * Admin-authenticated update of discrepancy status/notes.
+ */
+export const updateOdometerDiscrepancyStatus = functions.https.onCall(async (data, context) => {
+  try {
+    const { uid: adminUid } = await requireAdmin(context);
+    const validated = UpdateOdometerDiscrepancySchema.parse(data);
+    const { discrepancyId, status, notes } = validated;
+
+    const ref = db.collection('odometerDiscrepancies').doc(discrepancyId);
+    const doc = await ref.get();
+    if (!doc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Discrepancy record not found');
+    }
+
+    const update: any = {
+      status,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      resolvedBy: adminUid,
+    };
+    if (status === 'RESOLVED') {
+      update.resolvedAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+    if (typeof notes === 'string' && notes.trim()) {
+      update.notes = notes.trim();
+    }
+
+    await ref.update(update);
+    return { success: true, message: 'Discrepancy updated successfully' };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in updateOdometerDiscrepancyStatus:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to update discrepancy: ' + error.message);
   }
 });
