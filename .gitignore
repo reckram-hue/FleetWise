@@ -39,3 +39,8 @@ functions/.env
 firebase-adminsdk*.json
 *.pem
 *.key
+
+# Local audit/debug artifacts
+firebase-deploy-debug.txt
+firestore-inventory-output.json
+qwen-wp7b-audit.txt
