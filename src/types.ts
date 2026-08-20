@@ -476,6 +476,20 @@ export interface ChargingLocation {
     updatedBy: string;
 }
 
+/**
+ * Driver-safe charging-location projection returned only by the
+ * session-authenticated location picker callable.
+ */
+export interface ChargingLocationForDriver {
+    id: string;
+    name: string;
+    type: ChargingLocationType;
+    description?: string;
+    provider?: string;
+    chargerType?: string;
+    costOwner: ChargingLocationCostOwner;
+}
+
 export enum FineType {
     Speeding = 'Speeding',
     IllegalParking = 'Illegal Parking',

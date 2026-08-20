@@ -1164,6 +1164,40 @@ function stripToVehicleSafe(vehicleData: FirebaseFirestore.DocumentData, id: str
   };
 }
 
+/**
+ * Return only the operational fields a driver needs to choose a charging location.
+ * Tariffs and audit metadata remain admin-only.
+ */
+function stripToChargingLocationForDriver(
+  locationData: FirebaseFirestore.DocumentData,
+  id: string
+): Record<string, any> | null {
+  const name = typeof locationData.name === 'string' ? locationData.name.trim() : '';
+  const type = locationData.type;
+  const costOwner = locationData.costOwner;
+  if (!name
+    || (type !== 'OFFICE' && type !== 'PUBLIC_THIRD_PARTY')
+    || (costOwner !== 'COMPANY' && costOwner !== 'DRIVER')) {
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    type,
+    ...(typeof locationData.description === 'string' && locationData.description.trim()
+      ? { description: locationData.description.trim() }
+      : {}),
+    ...(typeof locationData.provider === 'string' && locationData.provider.trim()
+      ? { provider: locationData.provider.trim() }
+      : {}),
+    ...(typeof locationData.chargerType === 'string' && locationData.chargerType.trim()
+      ? { chargerType: locationData.chargerType.trim() }
+      : {}),
+    costOwner,
+  };
+}
+
 async function getActiveAssignmentForDriverAction(driverId: string, assignmentId: string) {
   const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
   const assignmentDoc = await assignmentRef.get();
@@ -3398,6 +3432,40 @@ export const getVehicleDefectsForSession = functions.https.onCall(async (data, c
     }
     console.error('Error in getVehicleDefectsForSession:', error);
     throw new functions.https.HttpsError('internal', 'Failed to get vehicle defects: ' + error.message);
+  }
+});
+
+/**
+ * Session-authenticated active charging-location list for drivers.
+ * Direct client access remains denied by Firestore rules.
+ */
+export const listChargingLocationsForSession = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = RequireSessionSchema.parse(data);
+    const session = await requireDriverSession(validated);
+
+    const snapshot = await db.collection('chargingLocations')
+      .where('active', '==', true)
+      .get();
+
+    const chargingLocations = snapshot.docs
+      // Locations without orgId are legacy/global records for the current single-tenant deployment.
+      .filter((doc) => !doc.data().orgId || doc.data().orgId === session.orgId)
+      .map((doc) => stripToChargingLocationForDriver(doc.data(), doc.id))
+      .filter((location): location is Record<string, any> => location !== null)
+      .sort((a, b) => {
+        const nameOrder = a.name.localeCompare(b.name, 'en', { sensitivity: 'base' });
+        return nameOrder || a.id.localeCompare(b.id, 'en', { sensitivity: 'base' });
+      });
+
+    return { success: true, chargingLocations };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in listChargingLocationsForSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to list charging locations');
   }
 });
 

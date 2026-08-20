@@ -47,6 +47,7 @@ import {
   RefuelRecord,
   ChargeRecord,
   ChargingLocation,
+  ChargingLocationForDriver,
   AppSettings,
   FuelEconomyAlert,
   ServiceProvider,
@@ -233,6 +234,21 @@ const api = {
       ...locationData,
     });
     return convertTimestamps(data.chargingLocation) as ChargingLocation;
+  },
+
+  /**
+   * List active charging locations using the driver's FleetWise session.
+   * The backend intentionally returns a restricted driver-safe projection.
+   */
+  listChargingLocationsForSession: async (
+    driverId: string,
+    sessionToken: string
+  ): Promise<ChargingLocationForDriver[]> => {
+    const data = await callFunction<{ success: boolean; chargingLocations: ChargingLocationForDriver[] }>(
+      'listChargingLocationsForSession',
+      { driverId, sessionToken }
+    );
+    return data.chargingLocations;
   },
 
   // ==================== DRIVER SESSION (WP6A/WP6B) ====================
