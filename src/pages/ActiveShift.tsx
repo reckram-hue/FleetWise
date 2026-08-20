@@ -495,7 +495,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
           <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><LogChargeForm onBack={() => setShowLogCharge(false)} activeVehicle={currentVehicle} /></div>
         )}
         {showLogRefuel && currentVehicle && (
-          <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><LogRefuelForm onBack={() => setShowLogRefuel(false)} activeVehicle={currentVehicle} /></div>
+          <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><LogRefuelForm onBack={() => setShowLogRefuel(false)} assignmentId={activeShift.assignmentId || ''} activeVehicle={currentVehicle} /></div>
         )}
       </main>
     </div>

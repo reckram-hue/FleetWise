@@ -422,6 +422,7 @@ export interface RefuelRecord {
     vehicleId: string;
     driverId: string;
     shiftId?: string;
+    assignmentId?: string;
     date: Date;
     odometer: number;
     litresFilled: number;

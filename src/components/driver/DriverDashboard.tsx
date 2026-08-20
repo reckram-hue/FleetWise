@@ -136,7 +136,7 @@ const DriverDashboard: React.FC = () => {
     if (showReportDefect && hasActiveAssignment && activeVehicle) return <ReportDefectForm onBack={() => setShowReportDefect(false)} currentVehicle={activeVehicle} />;
     if (showMyStats) return <MyStats onBack={() => setShowMyStats(false)} currentUser={currentUser} />;
     if (showLogCharge) return <LogChargeForm onBack={() => setShowLogCharge(false)} activeVehicle={activeVehicle} />;
-    if (showLogRefuel) return <LogRefuelForm onBack={() => setShowLogRefuel(false)} activeVehicle={activeVehicle} />;
+    if (showLogRefuel && hasActiveAssignment && activeVehicle) return <LogRefuelForm onBack={() => setShowLogRefuel(false)} assignmentId={localActiveShift!.assignmentId!} activeVehicle={activeVehicle} />;
 
 
     return (

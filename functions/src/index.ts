@@ -305,6 +305,20 @@ const GetVehicleDefectsForSessionSchema = z.object({
   vehicleId: z.string().min(1, 'Vehicle ID is required'),
 });
 
+const LogRefuelWithSessionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  assignmentId: z.string().min(1, 'Assignment ID is required'),
+  odometer: z.number().min(0, 'Odometer must be positive'),
+  litresFilled: z.number().positive('Litres filled must be greater than zero'),
+  fuelCost: z.number().min(0, 'Fuel cost must be zero or greater'),
+  oilCost: z.preprocess(
+    (v) => (v === null || v === undefined ? undefined : v),
+    z.number().min(0, 'Oil cost must be zero or greater').optional()
+  ),
+  notes: optionalNotes,
+});
+
 // =============================================================================
 // CLOUD FUNCTIONS
 // =============================================================================
@@ -1142,6 +1156,29 @@ function stripToVehicleSafe(vehicleData: FirebaseFirestore.DocumentData, id: str
     activeAssignmentId: vehicleData.activeAssignmentId || null,
     isTestData: vehicleData.isTestData === true,
   };
+}
+
+async function getActiveAssignmentForDriverAction(driverId: string, assignmentId: string) {
+  const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
+  const assignmentDoc = await assignmentRef.get();
+  if (!assignmentDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
+  }
+  const assignmentData = assignmentDoc.data()!;
+  if (assignmentData.driverId !== driverId) {
+    throw new functions.https.HttpsError('permission-denied', 'Assignment does not belong to this driver.');
+  }
+  if (assignmentData.status !== 'ACTIVE') {
+    throw new functions.https.HttpsError('failed-precondition', 'The assignment is no longer active.');
+  }
+
+  const vehicleRef = db.collection('vehicles').doc(assignmentData.vehicleId);
+  const vehicleDoc = await vehicleRef.get();
+  if (!vehicleDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Vehicle not found');
+  }
+
+  return { assignmentRef, assignmentDoc, assignmentData, vehicleRef, vehicleDoc, vehicleData: vehicleDoc.data()! };
 }
 
 // =============================================================================
@@ -3214,5 +3251,64 @@ export const getVehicleDefectsForSession = functions.https.onCall(async (data, c
     }
     console.error('Error in getVehicleDefectsForSession:', error);
     throw new functions.https.HttpsError('internal', 'Failed to get vehicle defects: ' + error.message);
+  }
+});
+
+/**
+ * Session-authenticated refuel logging for the driver's ACTIVE ICE assignment.
+ */
+export const logRefuelWithSession = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = LogRefuelWithSessionSchema.parse(data);
+    const {
+      driverId: reqDriverId,
+      sessionToken,
+      assignmentId,
+      odometer,
+      litresFilled,
+      fuelCost,
+      oilCost,
+      notes,
+    } = validated;
+    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { assignmentData, vehicleData } = await getActiveAssignmentForDriverAction(driverId, assignmentId);
+
+    if (vehicleData.vehicleType !== 'ICE') {
+      throw new functions.https.HttpsError('failed-precondition', 'Refuel logging is only allowed for ICE vehicles.');
+    }
+    const currentVehicleOdo = vehicleData.currentOdometer;
+    if (typeof currentVehicleOdo === 'number' && odometer < currentVehicleOdo) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        `Odometer (${odometer}) cannot be lower than the vehicle's last recorded odometer (${currentVehicleOdo}).`
+      );
+    }
+
+    const recordRef = db.collection('refuelRecords').doc();
+    const recordData: Record<string, any> = {
+      vehicleId: assignmentData.vehicleId,
+      driverId,
+      shiftId: assignmentData.shiftId,
+      assignmentId,
+      date: admin.firestore.FieldValue.serverTimestamp(),
+      odometer,
+      litresFilled,
+      fuelCost,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (typeof oilCost === 'number' && oilCost > 0) recordData.oilCost = oilCost;
+    if (typeof notes === 'string' && notes.trim()) recordData.notes = notes.trim();
+
+    await recordRef.set(recordData);
+    const saved = await recordRef.get();
+    return { success: true, record: { id: saved.id, ...saved.data() } };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in logRefuelWithSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to log refuel record: ' + error.message);
   }
 });

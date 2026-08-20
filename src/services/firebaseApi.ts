@@ -924,6 +924,20 @@ const api = {
     return { id: docRef.id, ...recordData } as RefuelRecord;
   },
 
+  logRefuelWithSession: async (recordData: {
+    driverId: string;
+    sessionToken: string;
+    assignmentId: string;
+    odometer: number;
+    litresFilled: number;
+    fuelCost: number;
+    oilCost?: number;
+    notes?: string;
+  }): Promise<RefuelRecord> => {
+    const data = await callFunction<{ success: boolean; record: any }>('logRefuelWithSession', recordData);
+    return convertTimestamps(data.record) as RefuelRecord;
+  },
+
   getChargeRecords: async (vehicleId?: string): Promise<ChargeRecord[]> => {
     let q;
     if (vehicleId) {

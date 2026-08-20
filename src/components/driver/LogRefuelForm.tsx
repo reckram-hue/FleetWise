@@ -8,10 +8,11 @@ import { getDriverSession } from '../../store/session';
 
 interface LogRefuelFormProps {
     onBack: () => void;
+    assignmentId: string;
     activeVehicle?: { id: string; registration: string; alias?: string; vehicleType: any };
 }
 
-const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, activeVehicle }) => {
+const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, activeVehicle }) => {
     const [fullVehicle, setFullVehicle] = useState<Vehicle | null>(null);
     const [showChecklist, setShowChecklist] = useState(false);
     const [checklistItems, setChecklistItems] = useState<{ [key: string]: boolean }>({
@@ -28,6 +29,7 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, activeVehicle }) 
         oilCost: '',
         notes: ''
     });
+    const [submitting, setSubmitting] = useState(false);
 
     useEffect(() => {
         const fetchVehicle = async () => {
@@ -71,11 +73,32 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, activeVehicle }) 
 
     const handleCompleteChecklist = () => {
         const allItemsChecked = Object.values(checklistItems).every(item => item);
-        if (allItemsChecked) {
+        if (!allItemsChecked) return;
+        const session = getDriverSession();
+        if (!session) {
+            alert('Your session has expired. Please log in again.');
+            return;
+        }
+        setSubmitting(true);
+        api.logRefuelWithSession({
+            driverId: session.driverId,
+            sessionToken: session.sessionToken,
+            assignmentId,
+            odometer: parseFloat(refuelData.odometer),
+            litresFilled: parseFloat(refuelData.litres),
+            fuelCost: parseFloat(refuelData.fuelCost),
+            oilCost: refuelData.oilRequired ? parseFloat(refuelData.oilCost || '0') : undefined,
+            notes: refuelData.notes.trim() || undefined,
+        }).then(() => {
             const totalCost = parseFloat(refuelData.fuelCost) + (refuelData.oilRequired ? parseFloat(refuelData.oilCost || '0') : 0);
             alert(`Refueling completed successfully!\n\nSummary:\n- Vehicle: ${fullVehicle?.registration}\n- Odometer: ${parseInt(refuelData.odometer).toLocaleString()} km\n- Fuel: ${refuelData.litres}L @ R${parseFloat(refuelData.fuelCost).toFixed(2)}\n- Oil: ${refuelData.oilRequired ? `Yes - R${parseFloat(refuelData.oilCost || '0').toFixed(2)}` : 'No'}\n- Total Cost: R${totalCost.toFixed(2)}`);
             onBack();
-        }
+        }).catch((error) => {
+            console.error("Failed to log refuel record", error);
+            alert('Failed to save refuel record. Please try again.');
+        }).finally(() => {
+            setSubmitting(false);
+        });
     };
 
     const calculateTotalCost = () => {
@@ -169,14 +192,14 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, activeVehicle }) 
                             <button
                                 type="button"
                                 onClick={handleCompleteChecklist}
-                                disabled={!allItemsChecked}
-                                className={`w-full font-bold py-3 px-4 rounded-lg transition ${!allItemsChecked
+                                disabled={!allItemsChecked || submitting}
+                                className={`w-full font-bold py-3 px-4 rounded-lg transition ${(!allItemsChecked || submitting)
                                     ? 'bg-gray-400 cursor-not-allowed text-white'
                                     : 'bg-orange-500 hover:bg-orange-600 text-white'
                                     }`}
                             >
                                 <Check className="inline h-5 w-5 mr-2" />
-                                Complete Refueling
+                                {submitting ? 'Saving...' : 'Complete Refueling'}
                             </button>
                         </div>
                     </Card>
