@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { UserRole } from './types';
 import AdminDashboard from './components/admin/AdminDashboard';
@@ -73,6 +73,7 @@ const RoleSelectionScreen = ({
 
 function App() {
   const [appState, setAppState] = useState<AppState>({ screen: 'choose-role' });
+  const [hydratingDriverSession, setHydratingDriverSession] = useState(true);
 
   // Restore a driver session on app start (survives page refresh). The server remains
   // authoritative; we never restore a profile from a locally cached full profile.
@@ -82,6 +83,8 @@ function App() {
       const session = getDriverSession();
       if (!session || isSessionLocallyExpired(session)) {
         clearDriverSession();
+        shiftStore.clearActiveShift();
+        if (!cancelled) setHydratingDriverSession(false);
         return;
       }
       try {
@@ -91,6 +94,8 @@ function App() {
         if (cancelled) return;
         if (!profile) {
           clearDriverSession();
+          shiftStore.clearActiveShift();
+          if (!cancelled) setHydratingDriverSession(false);
           return;
         }
         try {
@@ -103,17 +108,29 @@ function App() {
           } else {
             shiftStore.clearActiveShift();
           }
-        } catch {
+        } catch (e: any) {
+          const code = String(e?.code || '');
+          if (code.includes('unauthenticated') || code.includes('permission-denied')) {
+            clearDriverSession();
+            shiftStore.clearActiveShift();
+            if (!cancelled) setHydratingDriverSession(false);
+            return;
+          }
           // Fail closed: an inconsistent/inaccessible server state must not present a
           // "start new shift" path. Route to Active Shift, which surfaces a retryable error.
           if (!cancelled) window.location.hash = '/driver/shift/active';
         }
-        if (!cancelled) setAppState({ screen: 'app', user: profile });
+        if (!cancelled) {
+          setAppState({ screen: 'app', user: profile });
+          setHydratingDriverSession(false);
+        }
       } catch (e: any) {
         const code = String(e?.code || '');
         if (code.includes('unauthenticated') || code.includes('permission-denied')) {
           clearDriverSession();
         }
+        shiftStore.clearActiveShift();
+        if (!cancelled) setHydratingDriverSession(false);
       }
     };
     restore();
@@ -165,6 +182,18 @@ function App() {
   };
 
   const renderContent = () => {
+    if (hydratingDriverSession) {
+      return (
+        <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white p-6">
+          <div className="text-center">
+            <ShieldCheck className="w-20 h-20 text-blue-500 mx-auto mb-4 animate-pulse" />
+            <h2 className="text-2xl font-semibold mb-2">Restoring Driver Session...</h2>
+            <p className="text-gray-400">Please wait while FleetWise checks your session.</p>
+          </div>
+        </div>
+      );
+    }
+
     // Role selection screen
     if (appState.screen === 'choose-role') {
       return (

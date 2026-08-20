@@ -3192,12 +3192,20 @@ export const getVehicleDefectsForSession = functions.https.onCall(async (data, c
 
     await requireDriverSession(validated);
 
+    // Match the legacy driver-visible pickup behavior: return all driver-visible defects for
+    // the selected vehicle, regardless of legacy/new status labels, and sort newest-first.
     const snap = await db.collection('defects')
       .where('vehicleId', '==', vehicleId)
-      .where('status', 'in', ['Reported', 'Scheduled', 'In Progress'])
       .get();
 
-    const defects = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const defects = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter((defect: any) => defect.isVisibleToDriver)
+      .sort((a: any, b: any) => {
+        const aTime = a?.reportedDateTime?.toDate ? a.reportedDateTime.toDate().getTime() : 0;
+        const bTime = b?.reportedDateTime?.toDate ? b.reportedDateTime.toDate().getTime() : 0;
+        return bTime - aTime;
+      });
     return { success: true, defects };
   } catch (error: any) {
     if (error instanceof functions.https.HttpsError) throw error;
