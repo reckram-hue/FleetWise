@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import React, { useContext, useState } from 'react';
 import { UserContext } from '../../contexts/UserContext';
 import { getDriverSession, clearDriverSession, isSessionLocallyExpired } from '../../store/session';
 import { shiftStore } from '../../store/shift';
@@ -12,8 +12,10 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ title, onBack }) => {
   const { currentUser, setCurrentUser } = useContext(UserContext);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const handleLogout = async () => {
+    if (loggingOut) return;
     const session = getDriverSession();
 
     if (session && !isSessionLocallyExpired(session)) {
@@ -31,16 +33,21 @@ const Header: React.FC<HeaderProps> = ({ title, onBack }) => {
         return;
       }
 
-      // No active shift — safe to revoke the session server-side.
-      try {
-        await api.driverLogout(session.driverId, session.sessionToken);
-      } catch {
-        // Ignore remote failure — still clear local state below.
-      }
+      // No active shift — immediately clear local state so no mounted component can issue
+      // another session-authenticated lookup while logout revocation is in flight.
+      setLoggingOut(true);
       clearDriverSession();
       shiftStore.clearActiveShift();
+      setCurrentUser(null);
+
+      // Best-effort server revocation using the captured bearer token.
+      void api.driverLogout(session.driverId, session.sessionToken).catch(() => {
+        // Ignore remote failure — the user is already logged out locally.
+      });
+      return;
     } else if (session) {
       // Locally expired/invalid session — clear local state without server verification.
+      setLoggingOut(true);
       clearDriverSession();
       shiftStore.clearActiveShift();
     }
@@ -70,6 +77,7 @@ const Header: React.FC<HeaderProps> = ({ title, onBack }) => {
             <span className="text-gray-300 mr-4">Welcome, {currentUser?.firstName} {currentUser?.surname}</span>
             <button
               onClick={handleLogout}
+              disabled={loggingOut}
               className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-white"
               title="Logout"
             >
