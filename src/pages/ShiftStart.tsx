@@ -61,29 +61,30 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
     const loadData = async () => {
       setLoading(true);
       try {
-        const [vehiclesData, activeShifts] = await Promise.all([
-          api.getVehicles(),
-          api.getActiveShifts ? api.getActiveShifts() : Promise.resolve([])
-        ]);
+        const session = getDriverSession();
+        if (!currentUser || !session) {
+          setError('Your session has expired. Please log in again.');
+          setLoading(false);
+          return;
+        }
 
-        // Get IDs of vehicles currently on shift
-        const vehiclesInUse = activeShifts.map((s: any) => s.vehicleId);
+        const vehiclesData = await api.listVehiclesForSession(currentUser.id, session.sessionToken);
 
-        // Filter only active vehicles not in use
+        // Filter only active vehicles not currently in use
         const availableVehicles = vehiclesData.filter(
-          (v) => v.status === 'Active' && !vehiclesInUse.includes(v.id)
+          (v) => v.status === 'Active' && !v.activeAssignmentId && !v.activeShiftId
         );
         setVehicles(availableVehicles);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load data:', err);
-        setError('Failed to load vehicles. Please try again.');
+        setError(err.message || 'Failed to load vehicles. Please try again.');
       } finally {
         setLoading(false);
       }
     };
 
     loadData();
-  }, []);
+  }, [currentUser]);
 
   // Filtered vehicles based on search
   const filteredVehicles = useMemo(() => {
@@ -230,7 +231,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
       setShowDefectModal(false);
 
       // Refresh defects
-      const defects = await api.getVehicleDefects(selectedVehicle.id);
+      const defects = await api.getVehicleDefectsForSession(currentUser.id, session.sessionToken, selectedVehicle.id);
       setActiveDefects(defects);
     } catch (err) {
       console.error("Failed to report defect:", err);
@@ -250,7 +251,11 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
     // Fetch active defects
     setLoadingDefects(true);
     try {
-      const defects = await api.getVehicleDefects(vehicle.id);
+      const session = getDriverSession();
+      if (!currentUser || !session) {
+        throw new Error('Your session has expired. Please log in again.');
+      }
+      const defects = await api.getVehicleDefectsForSession(currentUser.id, session.sessionToken, vehicle.id);
       setActiveDefects(defects);
     } catch (err) {
       console.error("Failed to load defects", err);

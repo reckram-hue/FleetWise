@@ -293,6 +293,18 @@ const UpdateOdometerDiscrepancySchema = z.object({
   notes: optionalNotes,
 });
 
+const GetVehicleForSessionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  vehicleId: z.string().min(1, 'Vehicle ID is required'),
+});
+
+const GetVehicleDefectsForSessionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  vehicleId: z.string().min(1, 'Vehicle ID is required'),
+});
+
 // =============================================================================
 // CLOUD FUNCTIONS
 // =============================================================================
@@ -1106,6 +1118,29 @@ function stripToDriverSafe(userData: FirebaseFirestore.DocumentData, id: string)
     department: userData.department || '',
     employmentStatus: userData.employmentStatus || 'Active',
     role: userData.role || 'driver',
+  };
+}
+
+/**
+ * Strip sensitive financial/internal fields from a vehicle document for driver presentation.
+ */
+function stripToVehicleSafe(vehicleData: FirebaseFirestore.DocumentData, id: string): Record<string, any> {
+  return {
+    id,
+    registration: vehicleData.registration || '',
+    alias: vehicleData.alias || '',
+    make: vehicleData.make || '',
+    model: vehicleData.model || '',
+    year: vehicleData.year || null,
+    colour: vehicleData.colour || '',
+    vehicleType: vehicleData.vehicleType || 'ICE',
+    status: vehicleData.status || 'Active',
+    fuelType: vehicleData.fuelType || null,
+    batteryCapacityKwh: vehicleData.batteryCapacityKwh || null,
+    currentOdometer: typeof vehicleData.currentOdometer === 'number' ? vehicleData.currentOdometer : null,
+    activeShiftId: vehicleData.activeShiftId || null,
+    activeAssignmentId: vehicleData.activeAssignmentId || null,
+    isTestData: vehicleData.isTestData === true,
   };
 }
 
@@ -3083,5 +3118,93 @@ export const updateOdometerDiscrepancyStatus = functions.https.onCall(async (dat
     }
     console.error('Error in updateOdometerDiscrepancyStatus:', error);
     throw new functions.https.HttpsError('internal', 'Failed to update discrepancy: ' + error.message);
+  }
+});
+
+// =============================================================================
+// DRIVER VEHICLE & DEFECT SESSION CALLABLES
+// =============================================================================
+
+/**
+ * Session-authenticated safe vehicle listing for drivers.
+ */
+export const listVehiclesForSession = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = RequireSessionSchema.parse(data);
+    const session = await requireDriverSession(validated);
+
+    const driverDoc = await db.collection('users').doc(session.driverId).get();
+    const driverData = driverDoc.data();
+
+    const snapshot = await db.collection('vehicles').get();
+    let vehicles = snapshot.docs
+      .map(doc => stripToVehicleSafe(doc.data(), doc.id))
+      .filter(v => v.status === 'Active');
+
+    if (driverData?.allowedVehicles && Array.isArray(driverData.allowedVehicles) && driverData.allowedVehicles.length > 0) {
+      vehicles = vehicles.filter(v => driverData.allowedVehicles.includes(v.id));
+    }
+
+    return { success: true, vehicles };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in listVehiclesForSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to list vehicles: ' + error.message);
+  }
+});
+
+/**
+ * Session-authenticated safe vehicle read for drivers.
+ */
+export const getVehicleForSession = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = GetVehicleForSessionSchema.parse(data);
+    const { vehicleId } = validated;
+
+    await requireDriverSession(validated);
+
+    const doc = await db.collection('vehicles').doc(vehicleId).get();
+    if (!doc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle not found');
+    }
+
+    return { success: true, vehicle: stripToVehicleSafe(doc.data()!, doc.id) };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in getVehicleForSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to get vehicle: ' + error.message);
+  }
+});
+
+/**
+ * Session-authenticated active defects read for a vehicle.
+ */
+export const getVehicleDefectsForSession = functions.https.onCall(async (data, context) => {
+  try {
+    const validated = GetVehicleDefectsForSessionSchema.parse(data);
+    const { vehicleId } = validated;
+
+    await requireDriverSession(validated);
+
+    const snap = await db.collection('defects')
+      .where('vehicleId', '==', vehicleId)
+      .where('status', 'in', ['Reported', 'Scheduled', 'In Progress'])
+      .get();
+
+    const defects = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return { success: true, defects };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in getVehicleDefectsForSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to get vehicle defects: ' + error.message);
   }
 });
