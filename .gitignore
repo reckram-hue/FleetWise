@@ -44,3 +44,4 @@ firebase-adminsdk*.json
 firebase-deploy-debug.txt
 firestore-inventory-output.json
 qwen-wp7b-audit.txt
+.vercel/
