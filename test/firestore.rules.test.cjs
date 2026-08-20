@@ -1,6 +1,6 @@
-// Firestore rules unit-test harness for firestore.rules.proposed.
+// Firestore rules unit-test harness for canonical firestore.rules.
 // Run with the Firestore emulator, for example:
-//   firebase emulators:exec --only firestore "node test/firestore.rules.test.js"
+//   firebase emulators:exec --only firestore "node --test test/firestore.rules.test.cjs"
 
 const { readFileSync } = require('fs');
 const { describe, test, before, after, beforeEach } = require('node:test');
@@ -10,9 +10,9 @@ const {
   assertSucceeds,
 } = require('@firebase/rules-unit-testing');
 
-const rules = readFileSync('firestore.rules.proposed', 'utf8');
+const rules = readFileSync('firestore.rules', 'utf8');
 
-describe('FleetWise proposed Firestore rules', () => {
+describe('FleetWise canonical Firestore rules', () => {
   let testEnv;
 
   before(async () => {
@@ -75,6 +75,13 @@ describe('FleetWise proposed Firestore rules', () => {
       await db.collection('chargeRecords').doc('charge-1').set({
         vehicleId: 'vehicle-1',
         kwhAdded: 20,
+      });
+      await db.collection('chargingLocations').doc('charging-location-1').set({
+        name: 'HQ Basement Chargers',
+        type: 'OFFICE',
+        active: true,
+        tariffMethod: 'FREE',
+        costOwner: 'COMPANY',
       });
       await db.collection('driverSessions').doc('session-1').set({
         isRevoked: false,
@@ -297,5 +304,21 @@ describe('FleetWise proposed Firestore rules', () => {
     await assertFails(nonAdmin().collection('odometerDiscrepancies').doc('disc-1').get());
     await assertFails(nonAdmin().collection('odometerDiscrepancies').doc('disc-1').update({ status: 'RESOLVED' }));
     await assertFails(unauth().collection('odometerDiscrepancies').doc('disc-1').get());
+  });
+
+  test('AC: unauthenticated chargingLocations read/write -> DENY', async () => {
+    await assertFails(unauth().collection('chargingLocations').doc('charging-location-1').get());
+    await assertFails(unauth().collection('chargingLocations').doc('charging-location-2').set({ name: 'Hack' }));
+  });
+
+  test('AD: non-admin direct chargingLocations read/write -> DENY', async () => {
+    await assertFails(nonAdmin().collection('chargingLocations').doc('charging-location-1').get());
+    await assertFails(nonAdmin().collection('chargingLocations').doc('charging-location-1').update({ active: false }));
+  });
+
+  test('AE: active admin direct chargingLocations access remains denied (callable-only)', async () => {
+    await assertFails(activeAdmin().collection('chargingLocations').doc('charging-location-1').get());
+    await assertFails(activeAdmin().collection('chargingLocations').doc('charging-location-1').update({ active: false }));
+    await assertFails(activeAdmin().collection('chargingLocations').doc('charging-location-2').set({ name: 'HQ' }));
   });
 });

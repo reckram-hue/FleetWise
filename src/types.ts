@@ -445,6 +445,37 @@ export interface ChargeRecord {
     notes?: string;
 }
 
+export type ChargingLocationType =
+    | 'OFFICE'
+    | 'PUBLIC_THIRD_PARTY';
+
+export type ChargingLocationTariffMethod =
+    | 'FREE'
+    | 'PER_KWH'
+    | 'PER_SESSION';
+
+export type ChargingLocationCostOwner =
+    | 'COMPANY'
+    | 'DRIVER';
+
+export interface ChargingLocation {
+    id: string;
+    orgId?: string;
+    name: string;
+    type: ChargingLocationType;
+    description?: string;
+    active: boolean;
+    provider?: string;
+    chargerType?: string;
+    tariffMethod: ChargingLocationTariffMethod;
+    tariffRate?: number;
+    costOwner: ChargingLocationCostOwner;
+    createdAt?: Date | string | any;
+    createdBy: string;
+    updatedAt?: Date | string | any;
+    updatedBy: string;
+}
+
 export enum FineType {
     Speeding = 'Speeding',
     IllegalParking = 'Illegal Parking',

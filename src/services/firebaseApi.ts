@@ -46,6 +46,7 @@ import {
   DriverIncidentSummary,
   RefuelRecord,
   ChargeRecord,
+  ChargingLocation,
   AppSettings,
   FuelEconomyAlert,
   ServiceProvider,
@@ -69,6 +70,8 @@ const COLLECTIONS = {
   serviceProviders: 'serviceProviders',
   settings: 'settings',
   fuelEconomyAlerts: 'fuelEconomyAlerts'
+  ,
+  chargingLocations: 'chargingLocations'
 };
 
 // Helper to convert Firestore timestamps to Date objects
@@ -198,6 +201,38 @@ const api = {
       endDate,
     });
     return convertTimestamps(data.user) as User;
+  },
+
+  /**
+   * List charging locations through the secure admin callable.
+   */
+  listChargingLocationsAdmin: async (): Promise<ChargingLocation[]> => {
+    const data = await callFunction<{ success: boolean; chargingLocations: any[] }>('listChargingLocationsAdmin', {});
+    return data.chargingLocations.map((location) => convertTimestamps(location) as ChargingLocation);
+  },
+
+  /**
+   * Create a charging location through the secure admin callable.
+   */
+  createChargingLocation: async (
+    locationData: Omit<ChargingLocation, 'id' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'>
+  ): Promise<ChargingLocation> => {
+    const data = await callFunction<{ success: boolean; chargingLocation: any; message: string }>('createChargingLocation', locationData);
+    return convertTimestamps(data.chargingLocation) as ChargingLocation;
+  },
+
+  /**
+   * Update a charging location through the secure admin callable.
+   */
+  updateChargingLocation: async (
+    locationId: string,
+    locationData: Partial<Omit<ChargingLocation, 'id' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'>>
+  ): Promise<ChargingLocation> => {
+    const data = await callFunction<{ success: boolean; chargingLocation: any; message: string }>('updateChargingLocation', {
+      id: locationId,
+      ...locationData,
+    });
+    return convertTimestamps(data.chargingLocation) as ChargingLocation;
   },
 
   // ==================== DRIVER SESSION (WP6A/WP6B) ====================

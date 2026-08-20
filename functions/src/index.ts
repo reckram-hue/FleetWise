@@ -1110,6 +1110,12 @@ async function requireAdmin(context: functions.https.CallableContext): Promise<{
   return { uid, data: userData };
 }
 
+function assertActiveAdmin(userData: FirebaseFirestore.DocumentData): void {
+  if (userData.employmentStatus !== 'Active') {
+    throw new functions.https.HttpsError('permission-denied', 'Active admin privileges required');
+  }
+}
+
 /**
  * Strip pinHash and other server-only fields from a user document.
  * Returns a safe copy for client transmission.
@@ -1355,6 +1361,37 @@ const ArchiveDriverSchema = z.object({
   retentionReason: z.string().optional(),
   legalHold: z.boolean().optional().default(false),
   legalHoldReason: z.string().optional(),
+});
+
+const ChargingLocationTypeSchema = z.enum(['OFFICE', 'PUBLIC_THIRD_PARTY']);
+const ChargingLocationTariffMethodSchema = z.enum(['FREE', 'PER_KWH', 'PER_SESSION']);
+const ChargingLocationCostOwnerSchema = z.enum(['COMPANY', 'DRIVER']);
+
+const CreateChargingLocationSchema = z.object({
+  orgId: optionalString,
+  name: z.string().trim().min(1, 'Name is required'),
+  type: ChargingLocationTypeSchema,
+  description: optionalString,
+  active: z.boolean().optional().default(true),
+  provider: optionalString,
+  chargerType: optionalString,
+  tariffMethod: ChargingLocationTariffMethodSchema,
+  tariffRate: z.number().finite().min(0, 'Tariff rate must be non-negative').optional(),
+  costOwner: ChargingLocationCostOwnerSchema,
+});
+
+const UpdateChargingLocationSchema = z.object({
+  id: z.string().min(1, 'Charging location ID is required'),
+  orgId: optionalString,
+  name: z.string().trim().min(1, 'Name is required').optional(),
+  type: ChargingLocationTypeSchema.optional(),
+  description: optionalString,
+  active: z.boolean().optional(),
+  provider: optionalString,
+  chargerType: optionalString,
+  tariffMethod: ChargingLocationTariffMethodSchema.optional(),
+  tariffRate: z.number().finite().min(0, 'Tariff rate must be non-negative').optional(),
+  costOwner: ChargingLocationCostOwnerSchema.optional(),
 });
 
 const ReportDefectSchema = z.object({
@@ -1783,6 +1820,116 @@ export const createAdminUser = functions.https.onCall(async (data, context) => {
 
     console.error('Error in createAdminUser:', error);
     throw new functions.https.HttpsError('internal', 'Failed to create admin user: ' + error.message);
+  }
+});
+
+// =============================================================================
+// CHARGING LOCATION ADMIN CRUD
+// =============================================================================
+
+export const createChargingLocation = functions.https.onCall(async (data, context) => {
+  try {
+    const { uid: adminUid, data: adminData } = await requireAdmin(context);
+    assertActiveAdmin(adminData);
+    const validated = CreateChargingLocationSchema.parse(data);
+
+    const chargingLocation: Record<string, any> = {
+      ...validated,
+      name: validated.name.trim(),
+      active: validated.active ?? true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdBy: adminUid,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedBy: adminUid,
+    };
+
+    if (!chargingLocation.orgId && typeof adminData.orgId === 'string' && adminData.orgId.trim()) {
+      chargingLocation.orgId = adminData.orgId.trim();
+    }
+
+    const docRef = await db.collection('chargingLocations').add(chargingLocation);
+    const createdDoc = await docRef.get();
+
+    return {
+      success: true,
+      chargingLocation: { id: createdDoc.id, ...createdDoc.data() },
+      message: 'Charging location created successfully',
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in createChargingLocation:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to create charging location: ' + error.message);
+  }
+});
+
+export const updateChargingLocation = functions.https.onCall(async (data, context) => {
+  try {
+    const { uid: adminUid, data: adminData } = await requireAdmin(context);
+    assertActiveAdmin(adminData);
+    const validated = UpdateChargingLocationSchema.parse(data);
+    const { id, ...updateFields } = validated;
+
+    const locationRef = db.collection('chargingLocations').doc(id);
+    const locationDoc = await locationRef.get();
+    if (!locationDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Charging location not found');
+    }
+
+    const cleanedUpdate: Record<string, any> = {};
+    for (const [key, value] of Object.entries(updateFields)) {
+      if (value !== undefined) {
+        cleanedUpdate[key] = key === 'name' && typeof value === 'string' ? value.trim() : value;
+      }
+    }
+
+    delete cleanedUpdate.createdAt;
+    delete cleanedUpdate.createdBy;
+    delete cleanedUpdate.updatedAt;
+    delete cleanedUpdate.updatedBy;
+
+    cleanedUpdate.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    cleanedUpdate.updatedBy = adminUid;
+
+    await locationRef.update(cleanedUpdate);
+
+    const updatedDoc = await locationRef.get();
+    return {
+      success: true,
+      chargingLocation: { id: updatedDoc.id, ...updatedDoc.data() },
+      message: 'Charging location updated successfully',
+    };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+      );
+    }
+    console.error('Error in updateChargingLocation:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to update charging location: ' + error.message);
+  }
+});
+
+export const listChargingLocationsAdmin = functions.https.onCall(async (_data, context) => {
+  try {
+    const { data: adminData } = await requireAdmin(context);
+    assertActiveAdmin(adminData);
+
+    const snapshot = await db.collection('chargingLocations').orderBy('name', 'asc').get();
+    const chargingLocations = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+
+    return { success: true, chargingLocations };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error('Error in listChargingLocationsAdmin:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to list charging locations');
   }
 });
 

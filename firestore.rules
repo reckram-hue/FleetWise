@@ -104,6 +104,14 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // ---- chargingLocations ----
+    // Admin CRUD is currently callable-mediated only. No direct browser access is required
+    // yet, so clients are denied by default until a deliberately reviewed admin screen
+    // needs direct access.
+    match /chargingLocations/{id} {
+      allow read, write: if false;
+    }
+
     // ---- server-only ----
     match /rateLimits/{id} { allow read, write: if false; }
 
