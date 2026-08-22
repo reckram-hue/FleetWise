@@ -12,6 +12,8 @@
 // Run from the repo root:  node scripts/test-current-vehicle-authority.mjs
 
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { initializeApp } from 'firebase/app';
@@ -52,6 +54,7 @@ const app = initializeApp({
 const functions = getFunctions(app);
 const db = getFirestore(app);
 const CLEANUP_ONLY = process.argv.includes('--cleanup-only');
+const EMULATOR_MODE = process.argv.includes('--emulator');
 
 const WP8B = Object.freeze({
   driverId: '3MBpEbymKURd7sKQURpk',
@@ -69,6 +72,166 @@ async function call(name, data) {
 }
 function norm(s) { return String(s ?? '').trim().toLowerCase(); }
 function num(v) { return typeof v === 'number' && Number.isFinite(v) ? v : null; }
+
+async function expectInvalidArgument(name, operation) {
+  try {
+    await operation();
+    record(name, false, 'call unexpectedly succeeded');
+    return false;
+  } catch (e) {
+    const code = String(e?.code || e?.details?.code || '');
+    const rejected = code.includes('invalid-argument');
+    record(name, rejected, code || e?.message || String(e));
+    return rejected;
+  }
+}
+
+/**
+ * WP C regression mode deliberately uses an isolated Firestore emulator. It does not prompt
+ * for a PIN or call production: the test session is a locally seeded opaque session.
+ */
+async function runWpCEmulatorRegression() {
+  if (!process.env.FIRESTORE_EMULATOR_HOST) {
+    throw new Error('--emulator requires FIRESTORE_EMULATOR_HOST. Run it via firebase emulators:exec.');
+  }
+
+  const functionsRequire = createRequire(new URL('../functions/package.json', import.meta.url));
+  const callables = functionsRequire('./lib/index.js');
+  const admin = functionsRequire('firebase-admin');
+  const adminDb = admin.firestore();
+  const fixtureShiftId = 'wpc-regression-shift';
+  const fixtureSessionToken = 'wpc-regression-session-token';
+  const fixtureSessionId = createHash('sha256').update(fixtureSessionToken).digest('hex');
+  const createdAssignmentIds = new Set();
+  const auth = { driverId: WP8B.driverId, sessionToken: fixtureSessionToken };
+
+  const callLocal = async (name, data) => {
+    const callable = callables[name];
+    if (!callable?.run) throw new Error(`Local callable ${name} is unavailable.`);
+    return callable.run(data, {});
+  };
+
+  const expectLocalInvalidArgument = async (name, operation) => {
+    try {
+      await operation();
+      record(name, false, 'call unexpectedly succeeded');
+      return false;
+    } catch (error) {
+      const code = String(error?.code || '');
+      const rejected = code.includes('invalid-argument');
+      record(name, rejected, code || error?.message || String(error));
+      return rejected;
+    }
+  };
+
+  const addCompletedInspections = async (assignmentId, vehicleId) => {
+    const base = { driverId: WP8B.driverId, shiftId: fixtureShiftId, vehicleId, status: 'COMPLETED' };
+    const batch = adminDb.batch();
+    batch.set(adminDb.collection('vehicleInspections').doc(`${assignmentId}_PICKUP`), { ...base, boundaryType: 'PICKUP' });
+    batch.set(adminDb.collection('vehicleInspections').doc(`${assignmentId}_RETURN`), { ...base, boundaryType: 'RETURN' });
+    await batch.commit();
+  };
+
+  const cleanupFixtures = async () => {
+    const refs = [
+      adminDb.collection('users').doc(WP8B.driverId),
+      adminDb.collection('driverSessions').doc(fixtureSessionId),
+      adminDb.collection('shifts').doc(fixtureShiftId),
+      adminDb.collection('vehicles').doc(WP8B.testEvId),
+      adminDb.collection('vehicles').doc(WP8B.testIceId),
+      ...[...createdAssignmentIds].flatMap((assignmentId) => [
+        adminDb.collection('vehicleAssignments').doc(assignmentId),
+        adminDb.collection('vehicleInspections').doc(`${assignmentId}_PICKUP`),
+        adminDb.collection('vehicleInspections').doc(`${assignmentId}_RETURN`),
+      ]),
+    ];
+    await Promise.all(refs.map((ref) => ref.delete()));
+    const remaining = await Promise.all(refs.map((ref) => ref.get()));
+    record('WP C emulator fixtures cleaned up', remaining.every((snapshot) => !snapshot.exists));
+  };
+
+  const future = admin.firestore.Timestamp.fromMillis(Date.now() + 60 * 60 * 1000);
+  const now = admin.firestore.Timestamp.now();
+  const seed = adminDb.batch();
+  seed.set(adminDb.collection('users').doc(WP8B.driverId), {
+    firstName: 'Test', surname: 'Test', role: 'driver', employmentStatus: 'Active', isTestData: true, orgId: 'default',
+  });
+  seed.set(adminDb.collection('driverSessions').doc(fixtureSessionId), {
+    driverId: WP8B.driverId, orgId: 'default', deviceId: 'wpc-emulator-test', isRevoked: false,
+    createdAt: now, lastSeenAt: now, expiresAt: future,
+  });
+  seed.set(adminDb.collection('shifts').doc(fixtureShiftId), {
+    driverId: WP8B.driverId, status: 'Active', startOdometer: 1000,
+  });
+  seed.set(adminDb.collection('vehicles').doc(WP8B.testEvId), {
+    registration: 'TEST EV', vehicleType: 'EV', status: 'Active', currentOdometer: 1000, isTestData: true,
+  });
+  seed.set(adminDb.collection('vehicles').doc(WP8B.testIceId), {
+    registration: 'TEST ICE', vehicleType: 'ICE', status: 'Active', currentOdometer: 2000, isTestData: true,
+  });
+  await seed.commit();
+
+  try {
+    await expectLocalInvalidArgument('WP C lower EV pickup odometer rejected', () => callLocal('startVehicleAssignment', {
+      ...auth, shiftId: fixtureShiftId, vehicleId: WP8B.testEvId, startOdometer: 999,
+      startChargePercent: 80, startPredictedRangeKm: 300, transitionReason: 'SHIFT_START',
+    }));
+    const failedPickupAssignments = await adminDb.collection('vehicleAssignments').where('shiftId', '==', fixtureShiftId).get();
+    record('WP C lower-odometer pickup created no assignment', failedPickupAssignments.empty);
+
+    await expectLocalInvalidArgument('WP C EV pickup without predicted range rejected', () => callLocal('startVehicleAssignment', {
+      ...auth, shiftId: fixtureShiftId, vehicleId: WP8B.testEvId, startOdometer: 1000,
+      startChargePercent: 80, transitionReason: 'SHIFT_START',
+    }));
+    const evStart = await callLocal('startVehicleAssignment', {
+      ...auth, shiftId: fixtureShiftId, vehicleId: WP8B.testEvId, startOdometer: 1000,
+      startChargePercent: 80, startPredictedRangeKm: 300, transitionReason: 'SHIFT_START',
+    });
+    createdAssignmentIds.add(evStart.assignmentId);
+    record('WP C EV pickup predicted range persisted',
+      (await adminDb.collection('vehicleAssignments').doc(evStart.assignmentId).get()).data()?.startPredictedRangeKm === 300);
+
+    await addCompletedInspections(evStart.assignmentId, WP8B.testEvId);
+    await expectLocalInvalidArgument('WP C EV return without predicted range rejected', () => callLocal('endVehicleAssignment', {
+      ...auth, assignmentId: evStart.assignmentId, endOdometer: 1010, endChargePercent: 70, transitionReason: 'VEHICLE_SWAP',
+    }));
+    await callLocal('endVehicleAssignment', {
+      ...auth, assignmentId: evStart.assignmentId, endOdometer: 1010, endChargePercent: 70,
+      endPredictedRangeKm: 250, transitionReason: 'VEHICLE_SWAP',
+    });
+    record('WP C EV return predicted range persisted',
+      (await adminDb.collection('vehicleAssignments').doc(evStart.assignmentId).get()).data()?.endPredictedRangeKm === 250);
+    const chargingEvents = await adminDb.collection('chargingEvents').get();
+    record('WP C EV flow created no chargingEvents documents', chargingEvents.empty, `count=${chargingEvents.size}`);
+
+    const iceStart = await callLocal('startVehicleAssignment', {
+      ...auth, shiftId: fixtureShiftId, vehicleId: WP8B.testIceId, startOdometer: 2000, transitionReason: 'VEHICLE_SWAP',
+    });
+    createdAssignmentIds.add(iceStart.assignmentId);
+    record('WP C ICE pickup remains range-free',
+      (await adminDb.collection('vehicleAssignments').doc(iceStart.assignmentId).get()).data()?.startPredictedRangeKm == null);
+    await addCompletedInspections(iceStart.assignmentId, WP8B.testIceId);
+    await callLocal('endVehicleAssignment', {
+      ...auth, assignmentId: iceStart.assignmentId, endOdometer: 2010, transitionReason: 'SHIFT_END',
+    });
+    record('WP C ICE return remains range-free',
+      (await adminDb.collection('vehicleAssignments').doc(iceStart.assignmentId).get()).data()?.endPredictedRangeKm == null);
+
+    const [shift, ev, ice] = await Promise.all([
+      adminDb.collection('shifts').doc(fixtureShiftId).get(),
+      adminDb.collection('vehicles').doc(WP8B.testEvId).get(),
+      adminDb.collection('vehicles').doc(WP8B.testIceId).get(),
+    ]);
+    record('WP C assignment pointers cleared after returns',
+      !shift.data()?.activeAssignmentId && !ev.data()?.activeAssignmentId && !ev.data()?.activeShiftId
+      && !ice.data()?.activeAssignmentId && !ice.data()?.activeShiftId);
+  } finally {
+    await cleanupFixtures();
+  }
+
+  const failed = RESULTS.filter((result) => !result.ok);
+  if (failed.length) throw new Error(`${failed.length} emulator assertion(s) failed.`);
+}
 
 // A minimal 1x1 JPEG, used to satisfy the inspection photo requirement without needing a
 // real camera in this non-interactive harness.
@@ -175,6 +338,11 @@ async function cleanupKnownWp8bShift(auth) {
 }
 
 async function main() {
+  if (EMULATOR_MODE) {
+    await runWpCEmulatorRegression();
+    return;
+  }
+
   console.log('Locating test records (Test Test, TEST EV, TEST ICE)…');
   const { driver, ev, ice } = await locateTestRecords();
   console.log('  Driver: ' + driver.id + '   TEST EV: ' + ev.id + '   TEST ICE: ' + ice.id);
@@ -224,9 +392,17 @@ async function main() {
   try {
     const startRes = await call('startShift', { ...auth, vehicleId: ev.id, startOdometer: Number(ev.currentOdometer ?? 0), deviceId: WP8B.deviceId, startChargePercent: 80 });
     shiftId = startRes.shiftId;
-    const asgRes = await call('startVehicleAssignment', { ...auth, shiftId, vehicleId: ev.id, startOdometer: Number(ev.currentOdometer ?? 0), startChargePercent: 80, transitionReason: 'SHIFT_START' });
+    await expectInvalidArgument('1a. EV pickup without predicted range rejected', () => call('startVehicleAssignment', {
+      ...auth, shiftId, vehicleId: ev.id, startOdometer: Number(ev.currentOdometer ?? 0), startChargePercent: 80, transitionReason: 'SHIFT_START',
+    }));
+    const asgRes = await call('startVehicleAssignment', {
+      ...auth, shiftId, vehicleId: ev.id, startOdometer: Number(ev.currentOdometer ?? 0), startChargePercent: 80,
+      startPredictedRangeKm: 300, transitionReason: 'SHIFT_START',
+    });
     evAssignmentId = asgRes.assignmentId;
     record('1. Start Test Test shift with TEST EV', true, 'shift ' + shiftId + ', assignment ' + evAssignmentId);
+    const assignment = (await getDoc(doc(db, 'vehicleAssignments', evAssignmentId))).data();
+    record('1b. EV pickup predicted range persisted', assignment?.startPredictedRangeKm === 300);
   } catch (e) {
     record('1. Start Test Test shift with TEST EV', false, e?.message || String(e));
     die('Cannot continue without an active shift.');
@@ -245,10 +421,20 @@ async function main() {
   try {
     await call('createVehicleInspection', { ...auth, assignmentId: evAssignmentId, boundaryType: 'RETURN', returnIntent: 'VEHICLE_SWAP' });
     await doInspection(auth, evAssignmentId, 'RETURN', 'VEHICLE_SWAP');
-    await call('endVehicleAssignment', { ...auth, assignmentId: evAssignmentId, endOdometer: Number(ev.currentOdometer ?? 0), endChargePercent: 70, transitionReason: 'VEHICLE_SWAP' });
+    await expectInvalidArgument('3a. EV return without predicted range rejected', () => call('endVehicleAssignment', {
+      ...auth, assignmentId: evAssignmentId, endOdometer: Number(ev.currentOdometer ?? 0), endChargePercent: 70, transitionReason: 'VEHICLE_SWAP',
+    }));
+    await call('endVehicleAssignment', {
+      ...auth, assignmentId: evAssignmentId, endOdometer: Number(ev.currentOdometer ?? 0), endChargePercent: 70,
+      endPredictedRangeKm: 250, transitionReason: 'VEHICLE_SWAP',
+    });
+    const endedEvAssignment = (await getDoc(doc(db, 'vehicleAssignments', evAssignmentId))).data();
+    record('3b. EV return predicted range persisted', endedEvAssignment?.endPredictedRangeKm === 250);
 
     const asgRes = await call('startVehicleAssignment', { ...auth, shiftId, vehicleId: ice.id, startOdometer: Number(ice.currentOdometer ?? 0), transitionReason: 'VEHICLE_SWAP' });
     iceAssignmentId = asgRes.assignmentId;
+    const iceAssignment = (await getDoc(doc(db, 'vehicleAssignments', iceAssignmentId))).data();
+    record('3c. ICE pickup remains range-free', iceAssignment?.startPredictedRangeKm == null && iceAssignment?.endPredictedRangeKm == null);
     await doInspection(auth, iceAssignmentId, 'PICKUP');
 
     const active = await call('getActiveVehicleAssignment', { ...auth, shiftId });
@@ -311,6 +497,8 @@ async function main() {
     await call('createVehicleInspection', { ...auth, assignmentId: iceAssignmentId, boundaryType: 'RETURN', returnIntent: 'SHIFT_END' });
     await doInspection(auth, iceAssignmentId, 'RETURN', 'SHIFT_END');
     await call('endVehicleAssignment', { ...auth, assignmentId: iceAssignmentId, endOdometer: Number(ice.currentOdometer ?? 0), transitionReason: 'SHIFT_END' });
+    const endedIceAssignment = (await getDoc(doc(db, 'vehicleAssignments', iceAssignmentId))).data();
+    record('8a. ICE return remains range-free', endedIceAssignment?.startPredictedRangeKm == null && endedIceAssignment?.endPredictedRangeKm == null);
 
     // ---- 8. After assignment end, TEST ICE becomes available ----
     const iceDoc = await getDoc(doc(db, 'vehicles', ice.id));

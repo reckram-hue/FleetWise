@@ -89,6 +89,15 @@ const optionalChargePercent = z.preprocess(
   z.number().min(0).max(100).optional()
 );
 
+// A driver-entered EV range estimate, capped to reject implausible entry mistakes.
+const MAX_PREDICTED_RANGE_KM = 2000;
+const optionalPredictedRangeKm = z.preprocess(
+  (v) => (v === null || v === undefined ? undefined : v),
+  z.number().finite().min(0, 'Predicted range must be non-negative')
+    .max(MAX_PREDICTED_RANGE_KM, `Predicted range cannot exceed ${MAX_PREDICTED_RANGE_KM} km`)
+    .optional()
+);
+
 // Optional string helper: normalize null/undefined/blank to undefined so optional
 // string fields can be omitted across the callable serialization boundary.
 const optionalString = z.preprocess(
@@ -220,6 +229,7 @@ const StartVehicleAssignmentSchema = z.object({
     z.number().min(0, 'Start odometer must be positive').optional()
   ),
   startChargePercent: optionalChargePercent,
+  startPredictedRangeKm: optionalPredictedRangeKm,
   transitionReason: z.enum(['SHIFT_START', 'VEHICLE_SWAP']).optional(),
   deviceId: optionalString,
 });
@@ -233,6 +243,7 @@ const EndVehicleAssignmentSchema = z.object({
     z.number().min(0, 'End odometer must be positive').optional()
   ),
   endChargePercent: optionalChargePercent,
+  endPredictedRangeKm: optionalPredictedRangeKm,
   // CANCELLED is intentionally NOT accepted here: ordinary driver sessions must not be
   // able to bypass RETURN-inspection enforcement via a cancellation reason (WP7D2).
   // Cancellation belongs to a future admin/recovery callable.
@@ -1162,6 +1173,23 @@ function stripToVehicleSafe(vehicleData: FirebaseFirestore.DocumentData, id: str
     activeAssignmentId: vehicleData.activeAssignmentId || null,
     isTestData: vehicleData.isTestData === true,
   };
+}
+
+function assertPredictedRangeMatchesVehicle(
+  vehicleType: unknown,
+  predictedRangeKm: number | undefined,
+  fieldName: 'startPredictedRangeKm' | 'endPredictedRangeKm'
+): void {
+  if (vehicleType === 'EV') {
+    if (predictedRangeKm === undefined) {
+      throw new functions.https.HttpsError('invalid-argument', `${fieldName} is required for EV vehicles.`);
+    }
+    return;
+  }
+
+  if (predictedRangeKm !== undefined) {
+    throw new functions.https.HttpsError('invalid-argument', `${fieldName} is only valid for EV vehicles.`);
+  }
 }
 
 /**
@@ -2511,6 +2539,7 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
       vehicleId,
       startOdometer,
       startChargePercent,
+      startPredictedRangeKm,
       transitionReason = 'SHIFT_START',
     } = validated;
 
@@ -2540,6 +2569,7 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
         'Vehicle is ' + vehicleData.status + ' and cannot be used.'
       );
     }
+    assertPredictedRangeMatchesVehicle(vehicleData.vehicleType, startPredictedRangeKm, 'startPredictedRangeKm');
 
     // Allowed-vehicles check — same restriction as startShift/startShiftWithPin.
     // allowedVehicles absent → no restriction. Present → driver may only use listed vehicles.
@@ -2578,6 +2608,11 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
       if (txVehicleDoc.data()?.activeAssignmentId) {
         throw new functions.https.HttpsError('failed-precondition', 'This vehicle already has an active assignment.');
       }
+      assertPredictedRangeMatchesVehicle(
+        txVehicleDoc.data()?.vehicleType,
+        startPredictedRangeKm,
+        'startPredictedRangeKm'
+      );
       // E/F. Vehicle activeShiftId must be absent OR equal to this same shift (legacy bridge).
       const vehicleActiveShiftId = txVehicleDoc.data()?.activeShiftId;
       if (vehicleActiveShiftId && vehicleActiveShiftId !== shiftId) {
@@ -2633,6 +2668,8 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
         endOdometer: null,
         startChargePercent: startChargePercent ?? null,
         endChargePercent: null,
+        startPredictedRangeKm: startPredictedRangeKm ?? null,
+        endPredictedRangeKm: null,
         transitionReason,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2679,6 +2716,7 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       assignmentId,
       endOdometer,
       endChargePercent,
+      endPredictedRangeKm,
       transitionReason,
     } = validated;
 
@@ -2708,6 +2746,11 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       throw new functions.https.HttpsError('permission-denied', 'Shift does not belong to this driver.');
     }
     if (!vehicleDoc.exists) throw new functions.https.HttpsError('not-found', 'Vehicle not found');
+    assertPredictedRangeMatchesVehicle(
+      vehicleDoc.data()!.vehicleType,
+      endPredictedRangeKm,
+      'endPredictedRangeKm'
+    );
 
     // WP7D2A: BOTH the PICKUP and RETURN inspections must be COMPLETED before the assignment
     // may be closed. CANCELLED has been removed from the driver-session schema, so ordinary
@@ -2755,6 +2798,11 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       if (txAssignment.status === 'CANCELLED') {
         throw new functions.https.HttpsError('failed-precondition', 'This assignment was already cancelled.');
       }
+      assertPredictedRangeMatchesVehicle(
+        txVehicleDoc.data()?.vehicleType,
+        endPredictedRangeKm,
+        'endPredictedRangeKm'
+      );
 
       // Ensure return odometer does not regress canonical vehicle odometer
       const currentVehicleOdo = txVehicleDoc.data()?.currentOdometer;
@@ -2773,6 +2821,7 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       };
       if (endOdometer !== undefined) assignmentUpdate.endOdometer = endOdometer;
       if (endChargePercent !== undefined) assignmentUpdate.endChargePercent = endChargePercent;
+      if (endPredictedRangeKm !== undefined) assignmentUpdate.endPredictedRangeKm = endPredictedRangeKm;
       transaction.update(assignmentRef, assignmentUpdate);
 
       // Clear shift pointer only if it still points to this assignment.

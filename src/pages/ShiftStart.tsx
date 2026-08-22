@@ -45,6 +45,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
   // Optional fields
   const [startOdo, setStartOdo] = useState<string>('');
   const [startCharge, setStartCharge] = useState<string>('');
+  const [startPredictedRange, setStartPredictedRange] = useState<string>('');
 
   // Data loading
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -268,8 +269,8 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
     if (!selectedVehicle || !currentUser) return;
 
     // Validation
-    if (selectedVehicle.vehicleType === VehicleType.EV && (!startOdo || !startCharge)) {
-      setError("Please enter both Odometer and Charge %");
+    if (selectedVehicle.vehicleType === VehicleType.EV && (!startOdo || !startCharge || !startPredictedRange)) {
+      setError("Please enter Odometer, Charge %, and predicted range");
       return;
     }
     if (!startOdo) {
@@ -285,6 +286,16 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
     if (selectedVehicle.currentOdometer != null && startOdometer < selectedVehicle.currentOdometer) {
       setError(`Reading cannot be lower than the last recorded odometer (${selectedVehicle.currentOdometer.toLocaleString()} km).`);
       return;
+    }
+
+    let startPredictedRangeKm: number | undefined;
+    if (selectedVehicle.vehicleType === VehicleType.EV) {
+      const range = Number(startPredictedRange);
+      if (!Number.isFinite(range) || range < 0 || range > 2000) {
+        setError('Please enter a valid predicted range between 0 and 2000 km.');
+        return;
+      }
+      startPredictedRangeKm = range;
     }
 
     setSubmitting(true);
@@ -328,6 +339,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
           vehicleId: selectedVehicle.id,
           startOdometer,
           startChargePercent,
+          startPredictedRangeKm,
           transitionReason: 'SHIFT_START',
           deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
         });
@@ -376,6 +388,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
       setCurrentStep(1);
       setStartOdo('');
       setStartCharge('');
+      setStartPredictedRange('');
     } else {
       onBack();
     }
@@ -583,6 +596,23 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
                     value={startCharge}
                     onChange={(e) => setStartCharge(e.target.value)}
                     placeholder="e.g. 85"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg"
+                  />
+                </div>
+              )}
+              {selectedVehicle.vehicleType === 'EV' && (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    Predicted Range (km) *
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="2000"
+                    step="1"
+                    value={startPredictedRange}
+                    onChange={(e) => setStartPredictedRange(e.target.value)}
+                    placeholder="e.g. 320"
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg"
                   />
                 </div>

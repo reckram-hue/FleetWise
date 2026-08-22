@@ -191,6 +191,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
         assignmentId: activeShift.assignmentId,
         endOdometer: result.endOdometer,
         endChargePercent: result.endChargePercent,
+        endPredictedRangeKm: result.endPredictedRangeKm,
         transitionReason: reason,
         deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });

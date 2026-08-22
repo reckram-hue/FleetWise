@@ -39,6 +39,7 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
   const [search, setSearch] = useState('');
   const [startOdo, setStartOdo] = useState(suggestedStartOdo != null ? String(suggestedStartOdo) : (suggestedVehicle?.currentOdometer != null ? String(suggestedVehicle.currentOdometer) : ''));
   const [startCharge, setStartCharge] = useState(suggestedStartChargePercent != null ? String(suggestedStartChargePercent) : '');
+  const [startPredictedRange, setStartPredictedRange] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const loadAvailable = async () => {
@@ -73,10 +74,17 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
       return;
     }
     let charge: number | undefined;
+    let predictedRange: number | undefined;
     if (isEV) {
       const c = parseFloat(startCharge);
       if (!startCharge || isNaN(c) || c < 0 || c > 100) { setError('Please enter a valid charge % (0-100).'); return; }
       charge = c;
+      const range = Number(startPredictedRange);
+      if (!startPredictedRange || !Number.isFinite(range) || range < 0 || range > 2000) {
+        setError('Please enter a valid predicted range between 0 and 2000 km.');
+        return;
+      }
+      predictedRange = range;
     }
 
     setSubmitting(true);
@@ -91,6 +99,7 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
         vehicleId: selectedVehicle.id,
         startOdometer: odometer,
         startChargePercent: charge,
+        startPredictedRangeKm: predictedRange,
         transitionReason: 'VEHICLE_SWAP',
         deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });
@@ -164,14 +173,20 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
               )}
             </div>
             {selectedVehicle.vehicleType === 'EV' && (
-              <div>
-                <label className='block text-sm font-semibold text-gray-700 mb-1'>Starting Charge (%) *</label>
-                <input type='number' min='0' max='100' value={startCharge} onChange={e => setStartCharge(e.target.value)} placeholder='e.g. 85' className='w-full px-4 py-2 border border-gray-300 rounded-lg' />
-              </div>
+              <>
+                <div>
+                  <label className='block text-sm font-semibold text-gray-700 mb-1'>Starting Charge (%) *</label>
+                  <input type='number' min='0' max='100' value={startCharge} onChange={e => setStartCharge(e.target.value)} placeholder='e.g. 85' className='w-full px-4 py-2 border border-gray-300 rounded-lg' />
+                </div>
+                <div>
+                  <label className='block text-sm font-semibold text-gray-700 mb-1'>Predicted Range (km) *</label>
+                  <input type='number' min='0' max='2000' step='1' value={startPredictedRange} onChange={e => setStartPredictedRange(e.target.value)} placeholder='e.g. 320' className='w-full px-4 py-2 border border-gray-300 rounded-lg' />
+                </div>
+              </>
             )}
           </div>
           <div className='grid grid-cols-2 gap-4 mt-6'>
-            <button onClick={() => { setSelectedVehicle(null); setError(null); }} className='py-3 bg-gray-200 text-gray-800 rounded-lg font-bold hover:bg-gray-300'>Back</button>
+            <button onClick={() => { setSelectedVehicle(null); setError(null); setStartPredictedRange(''); }} className='py-3 bg-gray-200 text-gray-800 rounded-lg font-bold hover:bg-gray-300'>Back</button>
             <button onClick={handleSubmit} disabled={submitting} className='py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 disabled:opacity-50 flex items-center justify-center'>
               {submitting ? <Loader className='animate-spin h-5 w-5' /> : 'Take Vehicle'}
             </button>

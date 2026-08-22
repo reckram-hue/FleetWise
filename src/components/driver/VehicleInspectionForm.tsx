@@ -11,6 +11,7 @@ import { Camera, CheckCircle, AlertCircle, Loader, Car, RefreshCw } from 'lucide
 export interface VehicleInspectionResult {
   endOdometer?: number;
   endChargePercent?: number;
+  endPredictedRangeKm?: number;
   returnIntent?: VehicleReturnIntent;
 }
 
@@ -82,6 +83,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
   const [damageDescription, setDamageDescription] = useState('');
   const [endOdo, setEndOdo] = useState('');
   const [endCharge, setEndCharge] = useState('');
+  const [endPredictedRange, setEndPredictedRange] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -145,6 +147,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
 
     let endOdometer: number | undefined;
     let endChargePercent: number | undefined;
+    let endPredictedRangeKm: number | undefined;
     if (isReturn) {
       const odo = parseFloat(endOdo);
       if (!endOdo || isNaN(odo) || odo < 0) { setError('Please enter a valid ending odometer reading.'); return; }
@@ -154,6 +157,12 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         const c = parseFloat(endCharge);
         if (!endCharge || isNaN(c) || c < 0 || c > 100) { setError('Please enter a valid end charge % (0-100).'); return; }
         endChargePercent = c;
+        const range = Number(endPredictedRange);
+        if (!endPredictedRange || !Number.isFinite(range) || range < 0 || range > 2000) {
+          setError('Please enter a valid predicted range between 0 and 2000 km.');
+          return;
+        }
+        endPredictedRangeKm = range;
       }
     }
 
@@ -186,7 +195,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         hasDamage,
         damageDescription: hasDamage ? damageDescription.trim() : undefined,
       });
-      onCompleted({ endOdometer, endChargePercent, returnIntent: completed.returnIntent ?? undefined });
+      onCompleted({ endOdometer, endChargePercent, endPredictedRangeKm, returnIntent: completed.returnIntent ?? undefined });
     } catch (e: any) {
       const code = String(e?.code || '');
       let msg = e?.message || 'Failed to complete inspection.';
@@ -250,6 +259,12 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
             <div>
               <label className='block text-sm font-semibold text-gray-700 mb-1'>End Charge (%) <span className='text-red-500'>*</span></label>
               <input type='number' min='0' max='100' value={endCharge} onChange={e => setEndCharge(e.target.value)} placeholder='e.g. 75' className='w-full px-4 py-3 border border-gray-300 rounded-lg text-lg' />
+            </div>
+          )}
+          {isEV && (
+            <div>
+              <label className='block text-sm font-semibold text-gray-700 mb-1'>Predicted Range (km) <span className='text-red-500'>*</span></label>
+              <input type='number' min='0' max='2000' step='1' value={endPredictedRange} onChange={e => setEndPredictedRange(e.target.value)} placeholder='e.g. 250' className='w-full px-4 py-3 border border-gray-300 rounded-lg text-lg' />
             </div>
           )}
         </div>

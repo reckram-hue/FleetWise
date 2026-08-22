@@ -247,6 +247,8 @@ export interface VehicleAssignment {
     endOdometer?: number | null;
     startChargePercent?: number | null;
     endChargePercent?: number | null;
+    startPredictedRangeKm?: number | null;
+    endPredictedRangeKm?: number | null;
     transitionReason: VehicleAssignmentTransitionReason;
     createdAt: Date;
     updatedAt: Date;

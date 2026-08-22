@@ -445,6 +445,7 @@ const api = {
     vehicleId: string;
     startOdometer?: number;
     startChargePercent?: number;
+    startPredictedRangeKm?: number;
     transitionReason?: VehicleAssignmentTransitionReason;
     deviceId?: string;
   }): Promise<{ assignmentId: string }> => {
@@ -457,6 +458,7 @@ const api = {
     };
     if (typeof assignmentData.startOdometer === 'number') payload.startOdometer = assignmentData.startOdometer;
     if (typeof assignmentData.startChargePercent === 'number') payload.startChargePercent = assignmentData.startChargePercent;
+    if (typeof assignmentData.startPredictedRangeKm === 'number') payload.startPredictedRangeKm = assignmentData.startPredictedRangeKm;
     if (assignmentData.transitionReason) payload.transitionReason = assignmentData.transitionReason;
     const data = await callFunction<{ success: boolean; assignmentId: string; message: string }>('startVehicleAssignment', payload);
     return { assignmentId: data.assignmentId };
@@ -472,6 +474,7 @@ const api = {
     assignmentId: string;
     endOdometer?: number;
     endChargePercent?: number;
+    endPredictedRangeKm?: number;
     transitionReason: VehicleAssignmentTransitionReason;
     deviceId?: string;
   }): Promise<void> => {
@@ -484,6 +487,7 @@ const api = {
     };
     if (typeof endData.endOdometer === 'number') payload.endOdometer = endData.endOdometer;
     if (typeof endData.endChargePercent === 'number') payload.endChargePercent = endData.endChargePercent;
+    if (typeof endData.endPredictedRangeKm === 'number') payload.endPredictedRangeKm = endData.endPredictedRangeKm;
     await callFunction<{ success: boolean; message: string }>('endVehicleAssignment', payload);
   },
 
