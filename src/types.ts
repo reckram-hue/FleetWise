@@ -201,6 +201,9 @@ export interface Vehicle {
     // from any Shift document's frozen vehicleId field — use these instead.
     activeAssignmentId?: string;
     activeShiftId?: string;
+    // Authoritative pointer to the single OPEN ChargingEvent, if the EV was returned
+    // for charging. It is set/cleared only by server-side lifecycle callables.
+    openChargingEventId?: string;
 }
 
 export enum ShiftStatus {
@@ -490,6 +493,52 @@ export interface ChargingLocationForDriver {
     provider?: string;
     chargerType?: string;
     costOwner: ChargingLocationCostOwner;
+}
+
+export type ChargingLifecycleStatus = 'OPEN' | 'CLOSED' | 'CANCELLED';
+
+export type ChargingOutcome = 'CHARGED' | 'NOT_CHARGED' | 'UNKNOWN';
+
+export type ChargingFinancialStatus = 'PENDING' | 'KNOWN' | 'RECONCILED' | 'NOT_APPLICABLE';
+
+export interface ChargingLocationSnapshot {
+    name: string;
+    type: ChargingLocationType;
+    provider: string | null;
+    chargerType: string | null;
+    costOwner: ChargingLocationCostOwner;
+    tariffMethod?: ChargingLocationTariffMethod;
+    tariffRate?: number | null;
+}
+
+// A handover-to-charging record. WP D creates only OPEN events; close and reconciliation
+// fields remain nullable until a later pickup-side work package owns those transitions.
+export interface ChargingEvent {
+    id: string;
+    vehicleId: string;
+    returnDriverId: string;
+    returnShiftId: string;
+    returnAssignmentId: string;
+    returnedAt: Date;
+    returnOdometer: number;
+    returnChargePercent: number;
+    returnPredictedRangeKm: number;
+    chargingLocationId: string;
+    locationSnapshot: ChargingLocationSnapshot;
+    lifecycleStatus: ChargingLifecycleStatus;
+    chargingOutcome: ChargingOutcome | null;
+    financialStatus: ChargingFinancialStatus;
+    publicChargeReference?: string | null;
+    publicChargeCost?: number | null;
+    finalCost?: number | null;
+    notes?: string | null;
+    pickupDriverId?: string | null;
+    pickupShiftId?: string | null;
+    pickupAssignmentId?: string | null;
+    closedAt?: Date | null;
+    reconciledAt?: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
 }
 
 export enum FineType {

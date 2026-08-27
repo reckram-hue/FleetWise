@@ -112,6 +112,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ---- chargingEvents ----
+    // Charging lifecycle records contain authoritative handover and cost facts. WP D opens
+    // them only from endVehicleAssignment via the Admin SDK; no browser access is allowed.
+    match /chargingEvents/{id} {
+      allow read, write: if false;
+    }
+
     // ---- server-only ----
     match /rateLimits/{id} { allow read, write: if false; }
 

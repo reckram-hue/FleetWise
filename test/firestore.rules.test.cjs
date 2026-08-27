@@ -83,6 +83,10 @@ describe('FleetWise canonical Firestore rules', () => {
         tariffMethod: 'FREE',
         costOwner: 'COMPANY',
       });
+      await db.collection('chargingEvents').doc('charging-event-1').set({
+        vehicleId: 'vehicle-1',
+        lifecycleStatus: 'OPEN',
+      });
       await db.collection('driverSessions').doc('session-1').set({
         isRevoked: false,
       });
@@ -320,5 +324,14 @@ describe('FleetWise canonical Firestore rules', () => {
     await assertFails(activeAdmin().collection('chargingLocations').doc('charging-location-1').get());
     await assertFails(activeAdmin().collection('chargingLocations').doc('charging-location-1').update({ active: false }));
     await assertFails(activeAdmin().collection('chargingLocations').doc('charging-location-2').set({ name: 'HQ' }));
+  });
+
+  test('AF: chargingEvents are server-only for every client identity', async () => {
+    await assertFails(unauth().collection('chargingEvents').doc('charging-event-1').get());
+    await assertFails(nonAdmin().collection('chargingEvents').doc('charging-event-1').get());
+    await assertFails(activeAdmin().collection('chargingEvents').doc('charging-event-1').get());
+    await assertFails(unauth().collection('chargingEvents').doc('charging-event-2').set({ lifecycleStatus: 'OPEN' }));
+    await assertFails(nonAdmin().collection('chargingEvents').doc('charging-event-2').set({ lifecycleStatus: 'OPEN' }));
+    await assertFails(activeAdmin().collection('chargingEvents').doc('charging-event-2').set({ lifecycleStatus: 'OPEN' }));
   });
 });

@@ -192,6 +192,11 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
         endOdometer: result.endOdometer,
         endChargePercent: result.endChargePercent,
         endPredictedRangeKm: result.endPredictedRangeKm,
+        leftForCharging: result.leftForCharging,
+        chargingLocationId: result.chargingLocationId,
+        publicChargeReference: result.publicChargeReference,
+        publicChargeCost: result.publicChargeCost,
+        chargingNotes: result.chargingNotes,
         transitionReason: reason,
         deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });

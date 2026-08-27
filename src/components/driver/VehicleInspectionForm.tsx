@@ -3,8 +3,9 @@
 // and persisted as Cloud Storage object paths (never public URLs).
 import React, { useState, useEffect } from 'react';
 import api from '../../services/firebaseApi';
-import { VehicleReturnIntent, VehicleInspectionPhotoRole } from '../../types';
+import { ChargingLocationForDriver, VehicleReturnIntent, VehicleInspectionPhotoRole } from '../../types';
 import { getDriverSession } from '../../store/session';
+import ChargingLocationPicker from './ChargingLocationPicker';
 import Card from '../shared/Card';
 import { Camera, CheckCircle, AlertCircle, Loader, Car, RefreshCw } from 'lucide-react';
 
@@ -12,6 +13,11 @@ export interface VehicleInspectionResult {
   endOdometer?: number;
   endChargePercent?: number;
   endPredictedRangeKm?: number;
+  leftForCharging?: boolean;
+  chargingLocationId?: string;
+  publicChargeReference?: string;
+  publicChargeCost?: number;
+  chargingNotes?: string;
   returnIntent?: VehicleReturnIntent;
 }
 
@@ -84,11 +90,17 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
   const [endOdo, setEndOdo] = useState('');
   const [endCharge, setEndCharge] = useState('');
   const [endPredictedRange, setEndPredictedRange] = useState('');
+  const [leftForCharging, setLeftForCharging] = useState<boolean | null>(null);
+  const [chargingLocation, setChargingLocation] = useState<ChargingLocationForDriver | null>(null);
+  const [publicChargeReference, setPublicChargeReference] = useState('');
+  const [publicChargeCost, setPublicChargeCost] = useState('');
+  const [chargingNotes, setChargingNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isReturn = boundaryType === 'RETURN';
   const isEV = vehicle.vehicleType === 'EV';
+  const chargingSession = leftForCharging ? getDriverSession() : null;
 
   // Restore already-uploaded photo state on resume (partial upload recovery).
   useEffect(() => {
@@ -148,6 +160,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
     let endOdometer: number | undefined;
     let endChargePercent: number | undefined;
     let endPredictedRangeKm: number | undefined;
+    let parsedPublicChargeCost: number | undefined;
     if (isReturn) {
       const odo = parseFloat(endOdo);
       if (!endOdo || isNaN(odo) || odo < 0) { setError('Please enter a valid ending odometer reading.'); return; }
@@ -163,6 +176,24 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
           return;
         }
         endPredictedRangeKm = range;
+        if (leftForCharging === null) {
+          setError('Please indicate whether the vehicle is being left for charging.');
+          return;
+        }
+        if (leftForCharging) {
+          if (!chargingLocation) {
+            setError('Please select the charging location.');
+            return;
+          }
+          if (chargingLocation.type === 'PUBLIC_THIRD_PARTY' && publicChargeCost.trim()) {
+            const cost = Number(publicChargeCost);
+            if (!Number.isFinite(cost) || cost < 0) {
+              setError('Please enter a valid public charging cost.');
+              return;
+            }
+            parsedPublicChargeCost = cost;
+          }
+        }
       }
     }
 
@@ -195,7 +226,21 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         hasDamage,
         damageDescription: hasDamage ? damageDescription.trim() : undefined,
       });
-      onCompleted({ endOdometer, endChargePercent, endPredictedRangeKm, returnIntent: completed.returnIntent ?? undefined });
+      onCompleted({
+        endOdometer,
+        endChargePercent,
+        endPredictedRangeKm,
+        leftForCharging: isEV ? leftForCharging === true : undefined,
+        chargingLocationId: leftForCharging ? chargingLocation?.id : undefined,
+        publicChargeReference: leftForCharging && chargingLocation?.type === 'PUBLIC_THIRD_PARTY'
+          ? publicChargeReference.trim() || undefined
+          : undefined,
+        publicChargeCost: leftForCharging && chargingLocation?.type === 'PUBLIC_THIRD_PARTY'
+          ? parsedPublicChargeCost
+          : undefined,
+        chargingNotes: leftForCharging ? chargingNotes.trim() || undefined : undefined,
+        returnIntent: completed.returnIntent ?? undefined,
+      });
     } catch (e: any) {
       const code = String(e?.code || '');
       let msg = e?.message || 'Failed to complete inspection.';
@@ -259,6 +304,33 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
             <div>
               <label className='block text-sm font-semibold text-gray-700 mb-1'>End Charge (%) <span className='text-red-500'>*</span></label>
               <input type='number' min='0' max='100' value={endCharge} onChange={e => setEndCharge(e.target.value)} placeholder='e.g. 75' className='w-full px-4 py-3 border border-gray-300 rounded-lg text-lg' />
+            </div>
+          )}
+          {isEV && (
+            <div className='rounded-lg border border-teal-200 bg-teal-50 p-4'>
+              <p className='text-sm font-semibold text-gray-700 mb-2'>Leaving this vehicle for charging? <span className='text-red-500'>*</span></p>
+              <div className='flex gap-3'>
+                <button type='button' onClick={() => { setLeftForCharging(false); setChargingLocation(null); setPublicChargeReference(''); setPublicChargeCost(''); setChargingNotes(''); }} className={`flex-1 py-3 rounded-lg font-bold border-2 ${leftForCharging === false ? 'bg-white border-teal-600 text-teal-700' : 'border-gray-200 text-gray-500'}`}>No</button>
+                <button type='button' onClick={() => setLeftForCharging(true)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${leftForCharging === true ? 'bg-white border-teal-600 text-teal-700' : 'border-gray-200 text-gray-500'}`}>Yes</button>
+              </div>
+              {leftForCharging && (chargingSession ? (
+                <div className='mt-4 space-y-3'>
+                    <ChargingLocationPicker
+                      driverId={driverId}
+                      sessionToken={chargingSession.sessionToken}
+                      value={chargingLocation?.id ?? ''}
+                      onChange={setChargingLocation}
+                      disabled={submitting}
+                    />
+                    {chargingLocation?.type === 'PUBLIC_THIRD_PARTY' && (
+                      <>
+                        <input type='text' value={publicChargeReference} onChange={e => setPublicChargeReference(e.target.value)} placeholder='Public charge / receipt reference (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
+                        <input type='number' min='0' step='0.01' value={publicChargeCost} onChange={e => setPublicChargeCost(e.target.value)} placeholder='Known public charge cost (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
+                      </>
+                    )}
+                    <textarea value={chargingNotes} onChange={e => setChargingNotes(e.target.value)} rows={3} maxLength={500} placeholder='Charging note (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
+                </div>
+              ) : <p className='mt-3 text-sm text-red-700'>Your session has expired. Please log in again.</p>)}
             </div>
           )}
           {isEV && (

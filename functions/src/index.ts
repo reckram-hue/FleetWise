@@ -244,6 +244,17 @@ const EndVehicleAssignmentSchema = z.object({
   ),
   endChargePercent: optionalChargePercent,
   endPredictedRangeKm: optionalPredictedRangeKm,
+  leftForCharging: z.preprocess(
+    (v) => (v === null || v === undefined ? undefined : v),
+    z.boolean().optional()
+  ),
+  chargingLocationId: optionalString,
+  publicChargeReference: optionalString,
+  publicChargeCost: z.preprocess(
+    (v) => (v === null || v === undefined ? undefined : v),
+    z.number().finite().min(0, 'Public charge cost must be non-negative').optional()
+  ),
+  chargingNotes: optionalNotes,
   // CANCELLED is intentionally NOT accepted here: ordinary driver sessions must not be
   // able to bypass RETURN-inspection enforcement via a cancellation reason (WP7D2).
   // Cancellation belongs to a future admin/recovery callable.
@@ -1223,6 +1234,51 @@ function stripToChargingLocationForDriver(
       ? { chargerType: locationData.chargerType.trim() }
       : {}),
     costOwner,
+  };
+}
+
+function assertChargingReturnIntent(
+  vehicleType: unknown,
+  leftForCharging: boolean | undefined,
+  chargingLocationId: string | undefined,
+  publicChargeReference: string | undefined,
+  publicChargeCost: number | undefined,
+  chargingNotes: string | undefined
+): void {
+  const hasChargingFields = chargingLocationId !== undefined
+    || publicChargeReference !== undefined
+    || publicChargeCost !== undefined
+    || chargingNotes !== undefined;
+
+  if (vehicleType !== 'EV') {
+    if (leftForCharging === true || hasChargingFields) {
+      throw new functions.https.HttpsError('invalid-argument', 'Charging return fields are only valid for EV vehicles.');
+    }
+    return;
+  }
+
+  if (!leftForCharging && hasChargingFields) {
+    throw new functions.https.HttpsError('invalid-argument', 'Charging details are only valid when leftForCharging is true.');
+  }
+  if (leftForCharging && !chargingLocationId) {
+    throw new functions.https.HttpsError('invalid-argument', 'chargingLocationId is required when leaving an EV for charging.');
+  }
+}
+
+function chargingLocationSnapshot(location: FirebaseFirestore.DocumentData): Record<string, any> {
+  const name = typeof location.name === 'string' ? location.name.trim() : '';
+  if (!name || (location.type !== 'OFFICE' && location.type !== 'PUBLIC_THIRD_PARTY')
+    || (location.costOwner !== 'COMPANY' && location.costOwner !== 'DRIVER')) {
+    throw new functions.https.HttpsError('failed-precondition', 'Charging location is not configured correctly.');
+  }
+  return {
+    name,
+    type: location.type,
+    provider: typeof location.provider === 'string' && location.provider.trim() ? location.provider.trim() : null,
+    chargerType: typeof location.chargerType === 'string' && location.chargerType.trim() ? location.chargerType.trim() : null,
+    costOwner: location.costOwner,
+    ...(location.tariffMethod ? { tariffMethod: location.tariffMethod } : {}),
+    ...(typeof location.tariffRate === 'number' ? { tariffRate: location.tariffRate } : {}),
   };
 }
 
@@ -2717,6 +2773,11 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       endOdometer,
       endChargePercent,
       endPredictedRangeKm,
+      leftForCharging,
+      chargingLocationId,
+      publicChargeReference,
+      publicChargeCost,
+      chargingNotes,
       transitionReason,
     } = validated;
 
@@ -2751,6 +2812,24 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       endPredictedRangeKm,
       'endPredictedRangeKm'
     );
+    assertChargingReturnIntent(
+      vehicleDoc.data()!.vehicleType,
+      leftForCharging,
+      chargingLocationId,
+      publicChargeReference,
+      publicChargeCost,
+      chargingNotes
+    );
+    if (leftForCharging && (endOdometer === undefined || endChargePercent === undefined || endPredictedRangeKm === undefined)) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'An EV returned for charging requires return odometer, charge percent, and predicted range.'
+      );
+    }
+    const chargingLocationRef = leftForCharging && chargingLocationId
+      ? db.collection('chargingLocations').doc(chargingLocationId)
+      : null;
+    const chargingEventRef = leftForCharging ? db.collection('chargingEvents').doc() : null;
 
     // WP7D2A: BOTH the PICKUP and RETURN inspections must be COMPLETED before the assignment
     // may be closed. CANCELLED has been removed from the driver-session schema, so ordinary
@@ -2783,10 +2862,12 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
     }
 
     await db.runTransaction(async (transaction) => {
-      const [txAssignmentDoc, txShiftDoc, txVehicleDoc] = await Promise.all([
+      // Every conditional read is included before the transaction issues any write.
+      const [txAssignmentDoc, txShiftDoc, txVehicleDoc, txChargingLocationDoc] = await Promise.all([
         transaction.get(assignmentRef),
         transaction.get(shiftDoc.ref),
         transaction.get(vehicleDoc.ref),
+        chargingLocationRef ? transaction.get(chargingLocationRef) : Promise.resolve(null),
       ]);
 
       const txAssignment = txAssignmentDoc.data()!;
@@ -2803,6 +2884,37 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
         endPredictedRangeKm,
         'endPredictedRangeKm'
       );
+      assertChargingReturnIntent(
+        txVehicleDoc.data()?.vehicleType,
+        leftForCharging,
+        chargingLocationId,
+        publicChargeReference,
+        publicChargeCost,
+        chargingNotes
+      );
+
+      let locationSnapshot: Record<string, any> | null = null;
+      if (leftForCharging) {
+        if (!txChargingLocationDoc?.exists) {
+          throw new functions.https.HttpsError('not-found', 'Charging location not found.');
+        }
+        const locationData = txChargingLocationDoc.data()!;
+        if (locationData.active !== true) {
+          throw new functions.https.HttpsError('failed-precondition', 'Charging location is inactive.');
+        }
+        const assignmentOrgId = txAssignment.orgId || DEFAULT_ORG_ID;
+        if (locationData.orgId && locationData.orgId !== assignmentOrgId) {
+          throw new functions.https.HttpsError('permission-denied', 'Charging location does not belong to this organisation.');
+        }
+        locationSnapshot = chargingLocationSnapshot(locationData);
+        if (locationSnapshot.type !== 'PUBLIC_THIRD_PARTY'
+          && (publicChargeReference !== undefined || publicChargeCost !== undefined)) {
+          throw new functions.https.HttpsError('invalid-argument', 'Public charge details require a public charging location.');
+        }
+        if (txVehicleDoc.data()?.openChargingEventId) {
+          throw new functions.https.HttpsError('failed-precondition', 'This vehicle already has an open charging event.');
+        }
+      }
 
       // Ensure return odometer does not regress canonical vehicle odometer
       const currentVehicleOdo = txVehicleDoc.data()?.currentOdometer;
@@ -2824,6 +2936,41 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       if (endPredictedRangeKm !== undefined) assignmentUpdate.endPredictedRangeKm = endPredictedRangeKm;
       transaction.update(assignmentRef, assignmentUpdate);
 
+      if (leftForCharging && chargingEventRef && locationSnapshot) {
+        // The existing location document may change later; this preserves the handover facts.
+        const financialStatus = locationSnapshot.type === 'PUBLIC_THIRD_PARTY' && publicChargeCost !== undefined
+          ? 'KNOWN'
+          : 'PENDING';
+        transaction.set(chargingEventRef, {
+          id: chargingEventRef.id,
+          orgId: txAssignment.orgId || DEFAULT_ORG_ID,
+          vehicleId: txAssignment.vehicleId,
+          returnDriverId: txAssignment.driverId,
+          returnShiftId: txAssignment.shiftId,
+          returnAssignmentId: assignmentId,
+          returnedAt: admin.firestore.FieldValue.serverTimestamp(),
+          returnOdometer: endOdometer,
+          returnChargePercent: endChargePercent,
+          returnPredictedRangeKm: endPredictedRangeKm,
+          chargingLocationId,
+          locationSnapshot,
+          lifecycleStatus: 'OPEN',
+          chargingOutcome: null,
+          financialStatus,
+          publicChargeReference: publicChargeReference ?? null,
+          publicChargeCost: publicChargeCost ?? null,
+          finalCost: publicChargeCost ?? null,
+          notes: chargingNotes ?? null,
+          pickupDriverId: null,
+          pickupShiftId: null,
+          pickupAssignmentId: null,
+          closedAt: null,
+          reconciledAt: null,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
       // Clear shift pointer only if it still points to this assignment.
       if (txShiftDoc.data()?.activeAssignmentId === assignmentId) {
         transaction.update(shiftDoc.ref, { activeAssignmentId: admin.firestore.FieldValue.delete() });
@@ -2841,6 +2988,9 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       }
       if (txVehicleDoc.data()?.activeShiftId === shiftId) {
         vehicleUpdate.activeShiftId = admin.firestore.FieldValue.delete();
+      }
+      if (leftForCharging && chargingEventRef) {
+        vehicleUpdate.openChargingEventId = chargingEventRef.id;
       }
       transaction.update(vehicleDoc.ref, vehicleUpdate);
     });

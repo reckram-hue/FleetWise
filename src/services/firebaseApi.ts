@@ -475,6 +475,11 @@ const api = {
     endOdometer?: number;
     endChargePercent?: number;
     endPredictedRangeKm?: number;
+    leftForCharging?: boolean;
+    chargingLocationId?: string;
+    publicChargeReference?: string;
+    publicChargeCost?: number;
+    chargingNotes?: string;
     transitionReason: VehicleAssignmentTransitionReason;
     deviceId?: string;
   }): Promise<void> => {
@@ -488,6 +493,11 @@ const api = {
     if (typeof endData.endOdometer === 'number') payload.endOdometer = endData.endOdometer;
     if (typeof endData.endChargePercent === 'number') payload.endChargePercent = endData.endChargePercent;
     if (typeof endData.endPredictedRangeKm === 'number') payload.endPredictedRangeKm = endData.endPredictedRangeKm;
+    if (typeof endData.leftForCharging === 'boolean') payload.leftForCharging = endData.leftForCharging;
+    if (endData.chargingLocationId) payload.chargingLocationId = endData.chargingLocationId;
+    if (endData.publicChargeReference) payload.publicChargeReference = endData.publicChargeReference;
+    if (typeof endData.publicChargeCost === 'number') payload.publicChargeCost = endData.publicChargeCost;
+    if (endData.chargingNotes) payload.chargingNotes = endData.chargingNotes;
     await callFunction<{ success: boolean; message: string }>('endVehicleAssignment', payload);
   },
 
