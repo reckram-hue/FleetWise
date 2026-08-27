@@ -1,0 +1,7 @@
+{
+  "firestore": {
+    "database": "fleetwise-jhb-test",
+    "rules": "firestore.jhb-test.rules",
+    "indexes": "firestore.jhb-test.indexes.json"
+  }
+}

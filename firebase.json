@@ -1,7 +1,15 @@
 {
-  "firestore": {
-    "rules": "firestore.rules"
-  },
+  "firestore": [
+    {
+      "database": "(default)",
+      "rules": "firestore.rules"
+    },
+    {
+      "database": "fleetwise-jhb-test",
+      "rules": "firestore.jhb-test.rules",
+      "indexes": "firestore.jhb-test.indexes.json"
+    }
+  ],
   "storage": {
     "rules": "storage.rules"
   },
