@@ -9,5 +9,20 @@
       "bucket": "fleetwise-9ab3a-jhb-test",
       "rules": "storage.jhb-test.rules"
     }
+  ],
+  "functions": [
+    {
+      "source": "functions-jhb",
+      "codebase": "jhb-test",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
   ]
 }
