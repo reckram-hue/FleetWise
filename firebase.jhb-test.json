@@ -3,5 +3,11 @@
     "database": "fleetwise-jhb-test",
     "rules": "firestore.jhb-test.rules",
     "indexes": "firestore.jhb-test.indexes.json"
-  }
+  },
+  "storage": [
+    {
+      "bucket": "fleetwise-9ab3a-jhb-test",
+      "rules": "storage.jhb-test.rules"
+    }
+  ]
 }
