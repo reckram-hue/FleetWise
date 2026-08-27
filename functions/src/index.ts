@@ -2888,6 +2888,169 @@ export const getDriverOperationalState = onMeasuredCall('getDriverOperationalSta
   }
 }, WARM_DRIVER_SESSION_RUNTIME);
 
+/**
+ * Compute the authenticated driver's own incident/risk stats summary (WP8H).
+ * Driver-scoped reads only: driverFines, vehicleDamages, and shifts filtered by driverId —
+ * never a full-collection scan of other drivers' records.
+ *
+ * The risk-scoring formula is not invented here: it matches the pre-migration
+ * getDriverIncidentSummary logic in legacy/services/mockApi.ts (fines +10 each, unpaid
+ * fines +5 each, damage severity weighted Critical/Major/Moderate/Minor = 25/15/8/3,
+ * capped at 100; needsTraining when riskScore >= 30, or 2+ unpaid fines, or any
+ * Major/Critical damage).
+ */
+export const getDriverStatsWithSession = onMeasuredCall('getDriverStatsWithSession', async (data, context, perf) => {
+  try {
+    const validated = RequireSessionSchema.parse(data);
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession(validated, perf));
+
+    const [finesSnapshot, damagesSnapshot, shiftsSnapshot] = await perf.phase('driverStatsReads', () => Promise.all([
+      db.collection('driverFines').where('driverId', '==', driverId).get(),
+      db.collection('vehicleDamages').where('driverId', '==', driverId).get(),
+      db.collection('shifts').where('driverId', '==', driverId).get(),
+    ]));
+
+    const stats = perf.phaseSync('driverStatsAggregation', () => {
+      const fines = finesSnapshot.docs.map(d => d.data());
+      const damages = damagesSnapshot.docs.map(d => d.data());
+
+      let totalKmDriven = 0;
+      shiftsSnapshot.docs.forEach(doc => {
+        const shift = doc.data();
+        if (shift.status !== 'Completed') return;
+        const start = shift.startOdometer;
+        const end = shift.endOdometer;
+        if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end)) return;
+        const distance = end - start;
+        if (distance > 0) totalKmDriven += distance;
+      });
+
+      const totalFines = fines.length;
+      const totalFineAmount = fines.reduce((sum, f) => sum + (Number.isFinite(f.amount) ? f.amount : 0), 0);
+      const unpaidFinesList = fines.filter(f => !f.isPaid);
+      const unpaidFines = unpaidFinesList.length;
+      const unpaidAmount = unpaidFinesList.reduce((sum, f) => sum + (Number.isFinite(f.amount) ? f.amount : 0), 0);
+
+      const totalDamages = damages.length;
+      const totalDamagesCost = damages.reduce((sum, d) => {
+        const cost = Number.isFinite(d.actualCost) ? d.actualCost : (Number.isFinite(d.estimatedCost) ? d.estimatedCost : 0);
+        return sum + cost;
+      }, 0);
+
+      const allIncidentDates = [
+        ...fines.map(f => f.date),
+        ...damages.map(d => d.date),
+      ].filter((d): d is string => typeof d === 'string').sort();
+      const lastIncidentDate = allIncidentDates.length > 0 ? allIncidentDates[allIncidentDates.length - 1] : null;
+
+      let riskScore = 0;
+      riskScore += totalFines * 10;
+      riskScore += unpaidFines * 5;
+      riskScore += damages.filter(d => d.severity === 'Critical').length * 25;
+      riskScore += damages.filter(d => d.severity === 'Major').length * 15;
+      riskScore += damages.filter(d => d.severity === 'Moderate').length * 8;
+      riskScore += damages.filter(d => d.severity === 'Minor').length * 3;
+      riskScore = Math.min(100, riskScore);
+
+      const needsTraining = riskScore >= 30
+        || unpaidFines >= 2
+        || damages.filter(d => d.severity === 'Major' || d.severity === 'Critical').length > 0;
+
+      return {
+        totalKmDriven,
+        totalFines,
+        totalFineAmount,
+        unpaidFines,
+        unpaidAmount,
+        totalDamages,
+        totalDamagesCost,
+        lastIncidentDate,
+        riskScore,
+        needsTraining,
+      };
+    });
+
+    return { success: true, stats };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in getDriverStatsWithSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to get driver stats.');
+  }
+});
+
+const GetLeaderboardSchema = z.object({
+  driverId: z.string().min(1).optional(),
+  sessionToken: z.string().min(1).optional(),
+});
+
+/**
+ * Fleet-wide driver leaderboard ranked by total distance driven. Accepts EITHER an
+ * authenticated driver session ({driverId, sessionToken}) OR an authenticated Firebase
+ * Auth admin (no params) — matching the two current frontend call shapes in
+ * firebaseApi.getLeaderboard(). Never reachable by an unauthenticated caller.
+ *
+ * Scope note: only totalKmDriven is computed, matching the actual production behavior of
+ * the pre-migration client-side getLeaderboard() (see git history of firebaseApi.ts prior
+ * to the secure-callable migration). averageKmL/averageKmPerKwh and the ICE/EV/efficiency
+ * breakdown fields on LeaderboardEntry are intentionally left unset — the elaborate scoring
+ * formula in legacy/services/mockApi.ts was mock-only scaffolding that never shipped, and
+ * the current Leaderboard.tsx UI does not render the ICE/EV/efficiency fields at all.
+ */
+export const getLeaderboard = onMeasuredCall('getLeaderboard', async (data, context, perf) => {
+  try {
+    const validated = GetLeaderboardSchema.parse(data);
+
+    if (validated.driverId || validated.sessionToken) {
+      if (!validated.driverId || !validated.sessionToken) {
+        throw new functions.https.HttpsError('invalid-argument', 'driverId and sessionToken must be provided together');
+      }
+      await perf.phase(
+        'sessionValidation',
+        () => requireDriverSession({ driverId: validated.driverId!, sessionToken: validated.sessionToken! }, perf),
+      );
+    } else {
+      await perf.phase('adminValidation', () => requireAdmin(context));
+    }
+
+    const [usersSnapshot, shiftsSnapshot] = await perf.phase('leaderboardReads', () => Promise.all([
+      db.collection('users').where('role', '==', 'driver').get(),
+      db.collection('shifts').where('status', '==', 'Completed').get(),
+    ]));
+
+    const leaderboard = perf.phaseSync('leaderboardAggregation', () => {
+      const totalKmByDriver = new Map<string, number>();
+      shiftsSnapshot.docs.forEach((doc) => {
+        const shift = doc.data();
+        const start = shift.startOdometer;
+        const end = shift.endOdometer;
+        if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end)) return;
+        const km = end - start;
+        if (km <= 0) return;
+        totalKmByDriver.set(shift.driverId, (totalKmByDriver.get(shift.driverId) || 0) + km);
+      });
+
+      return usersSnapshot.docs
+        .map((doc) => ({
+          driver: stripToDriverSafe(doc.data(), doc.id),
+          totalKmDriven: totalKmByDriver.get(doc.id) || 0,
+        }))
+        .sort((a, b) => b.totalKmDriven - a.totalKmDriven);
+    });
+
+    return { success: true, leaderboard };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in getLeaderboard:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to get leaderboard.');
+  }
+});
+
 // =============================================================================
 // VEHICLE ASSIGNMENT CALLABLES (WP7B)
 // =============================================================================
