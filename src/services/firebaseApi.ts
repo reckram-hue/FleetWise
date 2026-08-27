@@ -738,76 +738,6 @@ const api = {
       });
   },
 
-  getActiveShift: async (driverId: string): Promise<Shift | null> => {
-    const data = await callFunction<{ success: boolean; hasActiveShift: boolean; shift: any | null }>('getActiveShift', { driverId });
-    if (data.hasActiveShift && data.shift) {
-      return convertTimestamps(data.shift) as Shift;
-    }
-    return null;
-  },
-
-  getActiveShifts: async (): Promise<Shift[]> => {
-    // In-memory fetch to support logic requiring all active shifts
-    const snapshot = await getDocs(collection(db, COLLECTIONS.shifts));
-    const allShifts = snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as Shift);
-    return allShifts.filter(s => s.status === ShiftStatus.Active);
-  },
-
-  getLastCompletedShift: async (vehicleId: string): Promise<Shift | null> => {
-    // In-memory filter to avoid index requirement
-    const snapshot = await getDocs(collection(db, COLLECTIONS.shifts));
-    const shifts = snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as Shift);
-
-    const completed = shifts.filter(s => s.vehicleId === vehicleId && s.status === ShiftStatus.Completed);
-    completed.sort((a, b) => {
-      const aTime = a.endTime ? new Date(a.endTime).getTime() : 0;
-      const bTime = b.endTime ? new Date(b.endTime).getTime() : 0;
-      return bTime - aTime;
-    });
-    return completed.length > 0 ? completed[0] : null;
-  },
-
-  startShift: async (shiftData: { driverId: string; vehicleId: string; pin?: string; startOdometer?: number; startChargePercent?: number; }): Promise<Shift> => {
-    if (!shiftData.pin) {
-      throw new Error('PIN is required to start a shift.');
-    }
-    // Build payload omitting charge % for ICE (avoids serializing undefined -> null).
-    const payload: any = {
-      driverId: shiftData.driverId,
-      vehicleId: shiftData.vehicleId,
-      pin: shiftData.pin,
-      startOdometer: shiftData.startOdometer,
-    };
-    if (typeof shiftData.startChargePercent === 'number') {
-      payload.startChargePercent = shiftData.startChargePercent;
-    }
-    const data = await callFunction<{ success: boolean; shiftId: string; message: string }>('startShiftWithPin', payload);
-    return {
-      id: data.shiftId,
-      driverId: shiftData.driverId,
-      vehicleId: shiftData.vehicleId,
-      startTime: new Date(),
-      startOdometer: shiftData.startOdometer || 0,
-      startChargePercent: shiftData.startChargePercent,
-      status: ShiftStatus.Active,
-    } as Shift;
-  },
-
-  endShift: async (shiftId: string, endData: { endOdometer: number; endChargePercent?: number; notes?: string; }): Promise<Shift> => {
-    const payload: any = {
-      shiftId,
-      endOdometer: endData.endOdometer,
-    };
-    if (typeof endData.notes === 'string' && endData.notes.trim()) {
-      payload.notes = endData.notes.trim();
-    }
-    if (typeof endData.endChargePercent === 'number') {
-      payload.endChargePercent = endData.endChargePercent;
-    }
-    await callFunction<{ success: boolean; message: string }>('endShift', payload);
-    return { id: shiftId, endOdometer: endData.endOdometer, endChargePercent: endData.endChargePercent, endTime: new Date(), status: ShiftStatus.Completed } as Shift;
-  },
-
   // ==================== DEFECTS ====================
   getActiveDefects: async (): Promise<DefectReport[]> => {
     // Fetch all defects and filter in memory to avoid index requirement
@@ -832,39 +762,6 @@ const api = {
   getAllDefects: async (): Promise<DefectReport[]> => {
     const snapshot = await getDocs(collection(db, COLLECTIONS.defects));
     return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as DefectReport);
-  },
-
-  /**
-   * Report a defect via secure callable. Drivers must supply their PIN for server-side
-   * verification. The PIN comes from local component state (per-operation, not session).
-   *
-   * Direct Firestore writes to /defects are blocked by the proposed rules (allow create: if false).
-   * All defect creation must go through the reportDefect callable.
-   */
-  addDefectReport: async (defectData: Omit<DefectReport, 'id' | 'reportedDateTime' | 'status' | 'isVisibleToDriver'> & { pin?: string }): Promise<DefectReport> => {
-    if (!defectData.pin) {
-      throw new Error('PIN is required to report a defect. The reportDefect callable enforces PIN verification.');
-    }
-
-    const { pin, ...rest } = defectData;
-    const data = await callFunction<{ success: boolean; defectId: string; message: string }>('reportDefect', {
-      driverId: rest.driverId,
-      pin,
-      vehicleId: rest.vehicleId,
-      category: rest.category,
-      description: rest.description,
-      urgency: rest.urgency,
-      location: rest.location,
-      notes: rest.notes,
-      photos: rest.photos,
-    });
-    return {
-      id: data.defectId,
-      ...rest,
-      reportedDateTime: new Date(),
-      status: DefectStatus.Open,
-      isVisibleToDriver: true,
-    } as DefectReport;
   },
 
   updateDefectReport: async (defectId: string, updateData: Partial<DefectReport>): Promise<DefectReport> => {
@@ -1357,50 +1254,6 @@ const api = {
     };
   },
 
-  // ==================== SHIFT MANAGEMENT WITH PIN ====================
-  // Client-side implementation replacing Cloud Functions
-
-  /**
-   * Validate a driver's PIN
-   */
-  validateDriverPin: async (driverId: string, pin: string): Promise<{ valid: boolean; requiresPinChange: boolean; message?: string }> => {
-    try {
-      const data = await callFunction<{ valid: boolean; requiresPinChange: boolean; message?: string }>('validateDriverPin', { driverId, pin });
-      return { valid: data.valid, requiresPinChange: data.requiresPinChange, message: data.message };
-    } catch (e: any) {
-      return { valid: false, requiresPinChange: false, message: e?.message || 'PIN validation failed' };
-    }
-  },
-
-  /**
-   * End an active shift
-   * @param shiftId - The shift ID to end
-   * @param endOdo - Ending odometer reading
-   * @param endChargePercent - Optional ending charge percentage (for EVs)
-   * @param notes - Optional notes about the shift
-   * @returns Promise with success status
-   */
-  endShiftWithPin: async (
-    shiftId: string,
-    endOdo: number,
-    endChargePercent?: number,
-    notes?: string
-  ): Promise<{ success: boolean; message: string }> => {
-    try {
-      // We accept the function signature but just delegate to endShift
-      // The UI seems to call this when ending a shift
-
-      await api.endShift(shiftId, {
-        endOdometer: endOdo,
-        endChargePercent,
-        notes
-      });
-      return { success: true, message: 'Shift ended successfully' };
-    } catch (e: any) {
-      throw new Error(e.message || 'Failed to end shift');
-    }
-  },
-
   /**
    * Driver function to change pin.
    * Verifies current pin then sets new pin.
@@ -1422,67 +1275,6 @@ const api = {
   ): Promise<{ success: boolean; message: string }> => {
     const data = await callFunction<{ success: boolean; message: string }>('adminSetDriverPin', { driverId, newPin });
     return { success: data.success, message: data.message };
-  },
-
-  /**
-   * Get the driver's active shift
-   * @param driverId - Optional driver ID (defaults to current user)
-   * @returns Promise with active shift details or null
-   */
-  getActiveShiftWithDetails: async (
-    driverId?: string
-  ): Promise<{
-    success: boolean;
-    hasActiveShift: boolean;
-    shift: any | null;
-  }> => {
-    if (!driverId) {
-      // Must handle this case if strict, but for now we assume caller provides it or we return fail
-      return { success: false, hasActiveShift: false, shift: null };
-    }
-
-    try {
-      const activeShift = await api.getActiveShift(driverId);
-
-      if (activeShift) {
-        // We need to fetch vehicle details too to match the "WithDetails" expectations
-        // But the type 'any' allows us to just return the shift object for now.
-        // It might expect { ...shift, vehicle: { ... } }
-
-        const vehicle = await api.getVehicle(activeShift.vehicleId);
-
-        return {
-          success: true,
-          hasActiveShift: true,
-          shift: {
-            ...activeShift,
-            vehicle: vehicle || undefined
-          }
-        };
-      }
-
-      return {
-        success: true,
-        hasActiveShift: false,
-        shift: null
-      };
-    } catch (error: any) {
-      console.error('Failed to get active shift:', error);
-      return {
-        success: false,
-        hasActiveShift: false,
-        shift: null,
-      };
-    }
-  },
-
-  /**
-   * Get the active vehicle for a driver (via active shift)
-   */
-  getDriverActiveVehicle: async (driverId: string): Promise<Vehicle | null> => {
-    const activeShift = await api.getActiveShift(driverId);
-    if (!activeShift) return null;
-    return await api.getVehicle(activeShift.vehicleId);
   },
 
   /**
