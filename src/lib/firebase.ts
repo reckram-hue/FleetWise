@@ -40,9 +40,98 @@ export const auth = getAuth(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app); // default region us-central1
 
+// Temporary performance instrumentation for the driver journeys. The correlation ID is
+// random and opaque; it is never derived from credentials, users, or business data.
+const DRIVER_PERF_CALLABLES = new Set([
+  'driverLogin',
+  'driverLogout',
+  'listDriversSafe',
+  'getActiveShiftWithSession',
+  'getDriverOperationalState',
+  'getActiveVehicleAssignment',
+  'listVehiclesForSession',
+  'getVehicleForSession',
+  'getVehicleDefectsForSession',
+  'startShift',
+  'startVehicleAssignment',
+  'createVehicleInspection',
+  'uploadInspectionPhoto',
+  'completeVehicleInspection',
+  'getAssignmentInspections',
+  'endVehicleAssignment',
+  'endShiftWithSession',
+]);
+
+const performanceCallCounts = new Map<string, number>();
+
+type CallablePerformanceMetadata = {
+  compressedBytes?: number;
+};
+
+function createPerformanceRequestId(): string {
+  const bytes = new Uint32Array(2);
+  crypto.getRandomValues(bytes);
+  return `fwperf-${bytes[0].toString(36)}${bytes[1].toString(36)}`;
+}
+
+function currentRoute(): string {
+  return window.location.hash || window.location.pathname || '/';
+}
+
+function logCallablePerformance(
+  callable: string,
+  callNumber: number,
+  correlationId: string,
+  startedAtIso: string,
+  elapsedMs: number,
+  success: boolean,
+  metadata?: CallablePerformanceMetadata,
+): void {
+  // Keep the structured payload deliberately free of request data and credentials.
+  console.info(`[FW-PERF] ${callable} call #${callNumber}`, {
+    callable,
+    elapsedMs: Math.round(elapsedMs * 10) / 10,
+    route: currentRoute(),
+    correlationId,
+    success,
+    timestamp: startedAtIso,
+    ...(typeof metadata?.compressedBytes === 'number'
+      ? { compressedBytes: metadata.compressedBytes }
+      : {}),
+  });
+}
+
 // Helper to call a Firebase callable Cloud Function.
-export async function callFunction<T = any>(name: string, data?: unknown): Promise<T> {
+export async function callFunction<T = any>(
+  name: string,
+  data?: unknown,
+  performanceMetadata?: CallablePerformanceMetadata,
+): Promise<T> {
   const fn = httpsCallable(functions, name);
-  const result = await fn(data);
-  return result.data as T;
+  const shouldMeasure = DRIVER_PERF_CALLABLES.has(name) && !!data && typeof data === 'object' && !Array.isArray(data);
+  const startedAt = performance.now();
+  const startedAtIso = new Date().toISOString();
+  const correlationId = shouldMeasure ? createPerformanceRequestId() : '';
+  const callKey = `${currentRoute()}|${name}`;
+  const callNumber = shouldMeasure ? (performanceCallCounts.get(callKey) || 0) + 1 : 0;
+  if (shouldMeasure) performanceCallCounts.set(callKey, callNumber);
+
+  // The server treats performanceRequestId as logging-only metadata. Existing callers
+  // remain compatible because functions without instrumentation ignore unknown fields.
+  const payload = shouldMeasure
+    ? { ...(data as Record<string, unknown>), performanceRequestId: correlationId }
+    : data;
+
+  try {
+    const result = await fn(payload);
+    if (shouldMeasure) {
+      logCallablePerformance(name, callNumber, correlationId, startedAtIso, performance.now() - startedAt, true, performanceMetadata);
+    }
+    return result.data as T;
+  } catch (error) {
+    if (shouldMeasure) {
+      logCallablePerformance(name, callNumber, correlationId, startedAtIso, performance.now() - startedAt, false, performanceMetadata);
+    }
+    throw error;
+  }
 }

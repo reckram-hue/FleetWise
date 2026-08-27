@@ -86,6 +86,11 @@ const DriverDashboard: React.FC = () => {
         let cancelled = false;
         const reconcile = async () => {
             if (!currentUser) return;
+            // App hydration already stored a freshly consolidated server response before this
+            // route renders. Do not immediately repeat the same active-state lookup.
+            if (localActiveShift?.driverId === currentUser.id && Array.isArray(localActiveShift.inspections)) {
+                return;
+            }
             try {
                 const activeState = await resolveActiveShiftState(currentUser);
                 if (cancelled) return;

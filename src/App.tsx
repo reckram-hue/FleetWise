@@ -9,11 +9,11 @@ import Leaderboard from './components/shared/Leaderboard';
 import ShiftStart from './pages/ShiftStart';
 import ActiveShift from './pages/ActiveShift';
 import { UserContext } from './contexts/UserContext';
-import { User } from './types';
+import { DriverLoginResult, User } from './types';
 import { getDriverSession, clearDriverSession, isSessionLocallyExpired } from './store/session';
 import { shiftStore } from './store/shift';
 import api from './services/firebaseApi';
-import { resolveActiveShiftState } from './lib/resolveActiveShift';
+import { resolveActiveShiftState, toActiveShiftState } from './lib/resolveActiveShift';
 import DriverPinLogin from './components/auth/DriverPinLogin';
 import AdminLogin from './components/auth/AdminLogin';
 import ChangePinFlow from './components/auth/ChangePinFlow';
@@ -137,29 +137,36 @@ function App() {
     return () => { cancelled = true; };
   }, []);
 
-  const handleDriverLogin = async (driver: User, requiresPinChange: boolean) => {
-    if (requiresPinChange) {
-      setAppState({ screen: 'change-pin', driver, isForced: true });
+  const handleDriverLogin = async (result: DriverLoginResult) => {
+    if (result.requiresPinChange) {
+      setAppState({ screen: 'change-pin', driver: result.driver, isForced: true });
       return;
     }
 
-    setAppState({ screen: 'app', user: driver });
+    setAppState({ screen: 'app', user: result.driver });
 
-    // Resume an existing active shift (session expiry must not orphan a server-side shift).
-    try {
-      const session = getDriverSession();
-      if (session && !isSessionLocallyExpired(session)) {
-        const activeState = await resolveActiveShiftState(driver);
-        if (activeState) {
-          shiftStore.setActiveShift(activeState);
-          window.location.hash = '/driver/shift/active';
-        } else {
-          shiftStore.clearActiveShift();
-        }
+    console.info('[FW-PERF] driverLogin bootstrap', {
+      postLoginOperationalStateFetchAvoided: true,
+      operationalStateNeedsRefresh: result.operationalStateNeedsRefresh,
+      usedLoginOperationalState: !!result.operationalState,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (result.operationalState) {
+      const activeState = toActiveShiftState(result.driver, result.operationalState);
+      if (activeState) {
+        shiftStore.setActiveShift(activeState);
+        window.location.hash = '/driver/shift/active';
+      } else {
+        shiftStore.clearActiveShift();
       }
-    } catch {
-      // Network/server error: route to the Active Shift screen, which surfaces a retryable
-      // error rather than a "Start New Shift" prompt (avoids a false second-shift opportunity).
+      return;
+    }
+
+    shiftStore.clearActiveShift();
+    if (result.operationalStateNeedsRefresh) {
+      // Preserve the existing fail-closed UX when the server cannot safely resolve the
+      // bootstrap state during login. ActiveShift.tsx will retry authoritatively.
       window.location.hash = '/driver/shift/active';
     }
   };

@@ -303,6 +303,47 @@ export interface VehicleInspection {
     updatedAt: Date;
 }
 
+// Driver-safe summary returned with the consolidated active operational state. It contains
+// only the boundary status needed to restore the active driver workflow.
+export interface DriverOperationalInspection {
+    id: string;
+    assignmentId: string;
+    boundaryType: VehicleInspectionBoundary;
+    status: VehicleInspectionStatus;
+    returnIntent?: VehicleReturnIntent | null;
+}
+
+export interface DriverOperationalAssignment {
+    id: string;
+    driverId: string;
+    shiftId: string;
+    vehicleId: string;
+    status: VehicleAssignmentStatus;
+    startedAt?: Date | null;
+    startOdometer?: number | null;
+    startChargePercent?: number | null;
+    startPredictedRangeKm?: number | null;
+}
+
+export interface DriverOperationalState {
+    hasActiveShift: boolean;
+    shift: Shift | null;
+    hasActiveAssignment: boolean;
+    assignment: DriverOperationalAssignment | null;
+    vehicle: Vehicle | null;
+    inspections: DriverOperationalInspection[];
+}
+
+export interface DriverLoginResult {
+    sessionToken: string;
+    driverId: string;
+    expiresAt: string;
+    requiresPinChange: boolean;
+    driver: User;
+    operationalState: DriverOperationalState | null;
+    operationalStateNeedsRefresh: boolean;
+}
+
 export enum DefectUrgency {
     Critical = 'Critical',
     High = 'High',

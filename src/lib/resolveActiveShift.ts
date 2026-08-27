@@ -4,29 +4,51 @@
 // the error is propagated so callers fail closed into a retryable state.
 import { getDriverSession, isSessionLocallyExpired } from '../store/session';
 import { ActiveShiftState } from '../store/shift';
-import { User, Vehicle } from '../types';
+import { DriverOperationalState, User } from '../types';
 import api from '../services/firebaseApi';
 
-async function safeGetVehicle(driverId: string, sessionToken: string, vehicleId: string): Promise<Vehicle | null> {
-  try {
-    return await api.getVehicleForSession(driverId, sessionToken, vehicleId);
-  } catch {
-    return null;
-  }
-}
+const inFlightResolutions = new Map<string, Promise<ActiveShiftState | null>>();
 
 /**
- * Resolve the authoritative active-shift state (shift + active VehicleAssignment) for a driver.
- * Returns null when the driver has no active shift. Throws when the server state is
- * inconsistent or the session is invalid so callers can surface a retry state.
+ * Resolve the authoritative active-shift state in one session-authenticated server call.
+ * The response includes the active-assignment vehicle and inspection summaries, preventing
+ * the mounted driver path from immediately recreating the former serial callable chain.
  */
 export async function resolveActiveShiftState(driver: User): Promise<ActiveShiftState | null> {
   const session = getDriverSession();
   if (!session || isSessionLocallyExpired(session)) {
     return null;
   }
-  const shift = await api.getActiveShiftWithSession(session.driverId, session.sessionToken);
-  if (!shift) return null;
+
+  // Login and dashboard mount can overlap. Share the one in-flight state lookup rather than
+  // issuing duplicate calls with the same opaque session credential.
+  const existing = inFlightResolutions.get(session.sessionToken);
+  if (existing) return existing;
+  const resolution = resolveDriverOperationalState(driver, session.driverId, session.sessionToken);
+  inFlightResolutions.set(session.sessionToken, resolution);
+  try {
+    return await resolution;
+  } finally {
+    inFlightResolutions.delete(session.sessionToken);
+  }
+}
+
+async function resolveDriverOperationalState(
+  driver: User,
+  driverId: string,
+  sessionToken: string,
+): Promise<ActiveShiftState | null> {
+  const operationalState = await api.getDriverOperationalState(driverId, sessionToken);
+  return toActiveShiftState(driver, operationalState);
+}
+
+export function toActiveShiftState(
+  driver: User,
+  operationalState: DriverOperationalState,
+): ActiveShiftState | null {
+  if (!operationalState.hasActiveShift || !operationalState.shift) return null;
+
+  const { shift, assignment, vehicle, inspections } = operationalState;
 
   const startDate = new Date(shift.startTime as any);
   if (isNaN(startDate.getTime())) {
@@ -40,13 +62,10 @@ export async function resolveActiveShiftState(driver: User): Promise<ActiveShift
     startAt: startDate.toISOString(),
     startOdo: shift.startOdometer,
     startChargePercent: shift.startChargePercent,
+    inspections,
   };
 
-  // Resolve the active assignment for this shift. A throw here is intentional: fail closed.
-  const assignment = await api.getActiveVehicleAssignment(session.driverId, session.sessionToken, shift.id);
-
-  if (assignment) {
-    const vehicle = await safeGetVehicle(session.driverId, session.sessionToken, assignment.vehicleId);
+  if (operationalState.hasActiveAssignment && assignment) {
     base.assignmentId = assignment.id;
     base.vehicleId = assignment.vehicleId;
     base.vehicle = {
@@ -57,10 +76,9 @@ export async function resolveActiveShiftState(driver: User): Promise<ActiveShift
     };
     if (assignment.startOdometer != null) base.assignmentStartOdo = assignment.startOdometer;
     if (assignment.startChargePercent != null) base.assignmentStartChargePercent = assignment.startChargePercent;
-  } else if (shift.vehicleId) {
+  } else if (shift.vehicleId && vehicle) {
     // Legacy shift: no assignment yet, but the shift still references its original vehicle.
     // Keep it as a "continue with" suggestion (no assignmentId).
-    const vehicle = await safeGetVehicle(session.driverId, session.sessionToken, shift.vehicleId);
     base.vehicleId = shift.vehicleId;
     base.vehicle = {
       id: shift.vehicleId,

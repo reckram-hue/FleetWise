@@ -9,6 +9,84 @@ import * as crypto from 'crypto';
 admin.initializeApp();
 const db = admin.firestore();
 
+// The marker is process-local, giving an inexpensive cold-start signal without changing
+// Function configuration. It is intended only for temporary performance telemetry.
+let hasHandledMeasuredInvocation = false;
+const PERFORMANCE_REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,96}$/;
+
+type PerformanceTrace = {
+  phase<T>(name: string, operation: () => Promise<T>): Promise<T>;
+  phaseSync<T>(name: string, operation: () => T): T;
+};
+
+function monotonicNowMs(): number {
+  return Number(process.hrtime.bigint()) / 1_000_000;
+}
+
+function performanceRequestId(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const value = (data as Record<string, unknown>).performanceRequestId;
+  return typeof value === 'string' && PERFORMANCE_REQUEST_ID_PATTERN.test(value) ? value : undefined;
+}
+
+function onMeasuredCall(
+  functionName: string,
+  handler: (data: any, context: functions.https.CallableContext, perf: PerformanceTrace) => Promise<any>,
+  runtimeOptions?: functions.RuntimeOptions,
+) {
+  const measuredCallable = async (data: any, context: functions.https.CallableContext) => {
+    const startedAt = monotonicNowMs();
+    const coldStart = !hasHandledMeasuredInvocation;
+    hasHandledMeasuredInvocation = true;
+    const phases: Record<string, number> = {};
+    const perf: PerformanceTrace = {
+      async phase<T>(name: string, operation: () => Promise<T>): Promise<T> {
+        const phaseStartedAt = monotonicNowMs();
+        try {
+          return await operation();
+        } finally {
+          phases[name] = (phases[name] || 0) + (monotonicNowMs() - phaseStartedAt);
+        }
+      },
+      phaseSync<T>(name: string, operation: () => T): T {
+        const phaseStartedAt = monotonicNowMs();
+        try {
+          return operation();
+        } finally {
+          phases[name] = (phases[name] || 0) + (monotonicNowMs() - phaseStartedAt);
+        }
+      },
+    };
+
+    let success = false;
+    try {
+      const result = await handler(data, context, perf);
+      success = true;
+      return result;
+    } finally {
+      // Do not include request data, identity, credentials, or error details in telemetry.
+      console.info('[FW-PERF]', {
+        functionName,
+        correlationId: performanceRequestId(data) || null,
+        coldStart,
+        totalElapsedMs: Math.round((monotonicNowMs() - startedAt) * 10) / 10,
+        phaseElapsedMs: Object.fromEntries(
+          Object.entries(phases).map(([name, elapsedMs]) => [name, Math.round(elapsedMs * 10) / 10]),
+        ),
+        success,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  };
+  return runtimeOptions
+    ? functions.runWith(runtimeOptions).https.onCall(measuredCallable)
+    : functions.https.onCall(measuredCallable);
+}
+
+const WARM_DRIVER_SESSION_RUNTIME: functions.RuntimeOptions = {
+  minInstances: 1,
+};
+
 // =============================================================================
 // RATE LIMITING HELPERS
 // =============================================================================
@@ -914,6 +992,10 @@ export const driverChangePin = functions.https.onCall(async (data, context) => {
   }
 });
 
+// =============================================================================
+// DRIVER SESSION CALLABLES (WP6A)
+// =============================================================================
+
 /**
  * Helper function to get a driver's active shift (for driver dashboard)
  */
@@ -984,15 +1066,15 @@ export const getActiveShift = functions.https.onCall(async (data, context) => {
  *     localStorage by the caller — NOT in sessionStorage (cleared on PWA suspend),
  *     NOT in React context or component state, and NOT in any log.
  */
-export const driverLogin = functions.https.onCall(async (data, context) => {
+export const driverLogin = onMeasuredCall('driverLogin', async (data, context, perf) => {
   try {
     const validated = DriverLoginSchema.parse(data);
     const { driverId, pin, deviceId = 'unknown' } = validated;
 
     // Apply rate limiting before touching driver data (same policy as validateDriverPin)
-    await checkRateLimit(driverId, deviceId);
+    await perf.phase('rateLimitCheck', () => checkRateLimit(driverId, deviceId));
 
-    const driverDoc = await db.collection('users').doc(driverId).get();
+    const driverDoc = await perf.phase('driverRead', () => db.collection('users').doc(driverId).get());
     if (!driverDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Driver not found.');
     }
@@ -1019,13 +1101,13 @@ export const driverLogin = functions.https.onCall(async (data, context) => {
     }
 
     // PIN verification — the only point in this callable where the PIN value is used
-    const pinValid = await bcrypt.compare(pin, storedHash);
+    const pinValid = await perf.phase('pinVerification', () => bcrypt.compare(pin, storedHash));
     if (!pinValid) {
       throw new functions.https.HttpsError('permission-denied', 'Invalid PIN.');
     }
 
     // PIN is correct. Clear rate limit; the PIN reference is discarded after this point.
-    await clearRateLimit(driverId, deviceId);
+    await perf.phase('rateLimitClear', () => clearRateLimit(driverId, deviceId));
 
     // Generate session token.
     // SECURITY: The raw token is a bearer credential — it must NOT be logged or stored server-side.
@@ -1035,7 +1117,7 @@ export const driverLogin = functions.https.onCall(async (data, context) => {
     const expiresAtMs = Date.now() + SESSION_DURATION_MS;
     const expiresAtTimestamp = admin.firestore.Timestamp.fromMillis(expiresAtMs);
 
-    await db.collection('driverSessions').doc(sessionHash).set({
+    await perf.phase('sessionWrite', () => db.collection('driverSessions').doc(sessionHash).set({
       driverId,
       orgId: DEFAULT_ORG_ID,
       deviceId,
@@ -1043,9 +1125,24 @@ export const driverLogin = functions.https.onCall(async (data, context) => {
       expiresAt: expiresAtTimestamp,
       lastSeenAt: admin.firestore.FieldValue.serverTimestamp(),
       isRevoked: false,
-    });
+    }));
 
     const requiresPinChange = pin === '1234';
+    let operationalState: Record<string, any> | null = null;
+    let operationalStateNeedsRefresh = false;
+    try {
+      operationalState = await perf.phase(
+        'operationalStateResolution',
+        () => resolveDriverOperationalState(
+          driverId,
+          typeof driverData.activeShiftId === 'string' ? driverData.activeShiftId : undefined,
+          perf,
+        ),
+      );
+    } catch {
+      operationalStateNeedsRefresh = true;
+      console.warn('driverLogin operational state resolution deferred');
+    }
 
     return {
       sessionToken,
@@ -1053,6 +1150,8 @@ export const driverLogin = functions.https.onCall(async (data, context) => {
       expiresAt: new Date(expiresAtMs).toISOString(),
       requiresPinChange,
       driver: stripToDriverSafe(driverData, driverId),
+      operationalState,
+      operationalStateNeedsRefresh,
     };
   } catch (error: any) {
     if (error instanceof functions.https.HttpsError) throw error;
@@ -1074,19 +1173,19 @@ export const driverLogin = functions.https.onCall(async (data, context) => {
  * immediately revoked. The client must clear it from localStorage on success.
  * The raw sessionToken must NEVER be logged.
  */
-export const driverLogout = functions.https.onCall(async (data, context) => {
+export const driverLogout = onMeasuredCall('driverLogout', async (data, context, perf) => {
   try {
     const validated = DriverLogoutSchema.parse(data);
     const { driverId, sessionToken } = validated;
 
     // Validate session before revoking (confirms it exists and belongs to this driver)
-    const { sessionHash } = await requireDriverSession({ driverId, sessionToken });
+    const { sessionHash } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId, sessionToken }));
 
-    await db.collection('driverSessions').doc(sessionHash).update({
+    await perf.phase('sessionRevocationWrite', () => db.collection('driverSessions').doc(sessionHash).update({
       isRevoked: true,
       revokedAt: admin.firestore.FieldValue.serverTimestamp(),
       revokedReason: 'logout',
-    });
+    }));
 
     return { success: true, message: 'Logged out successfully.' };
   } catch (error: any) {
@@ -1183,6 +1282,172 @@ function stripToVehicleSafe(vehicleData: FirebaseFirestore.DocumentData, id: str
     activeShiftId: vehicleData.activeShiftId || null,
     activeAssignmentId: vehicleData.activeAssignmentId || null,
     isTestData: vehicleData.isTestData === true,
+  };
+}
+
+function stripToDriverOperationalShift(shiftData: FirebaseFirestore.DocumentData, id: string): Record<string, any> {
+  return {
+    id,
+    driverId: shiftData.driverId,
+    vehicleId: shiftData.vehicleId || null,
+    startTime: shiftData.startTime || null,
+    endTime: shiftData.endTime || null,
+    startOdometer: shiftData.startOdometer ?? null,
+    endOdometer: shiftData.endOdometer ?? null,
+    startChargePercent: shiftData.startChargePercent ?? null,
+    endChargePercent: shiftData.endChargePercent ?? null,
+    status: shiftData.status,
+    activeAssignmentId: shiftData.activeAssignmentId || null,
+  };
+}
+
+function stripToDriverOperationalAssignment(assignmentData: FirebaseFirestore.DocumentData, id: string): Record<string, any> {
+  return {
+    id,
+    driverId: assignmentData.driverId,
+    shiftId: assignmentData.shiftId,
+    vehicleId: assignmentData.vehicleId,
+    status: assignmentData.status,
+    startedAt: assignmentData.startedAt || null,
+    startOdometer: assignmentData.startOdometer ?? null,
+    startChargePercent: assignmentData.startChargePercent ?? null,
+    startPredictedRangeKm: assignmentData.startPredictedRangeKm ?? null,
+  };
+}
+
+function stripToDriverOperationalInspection(inspectionData: FirebaseFirestore.DocumentData, id: string): Record<string, any> {
+  return {
+    id,
+    assignmentId: inspectionData.assignmentId,
+    boundaryType: inspectionData.boundaryType,
+    status: inspectionData.status,
+    returnIntent: inspectionData.returnIntent || null,
+  };
+}
+
+function emptyDriverOperationalState(): Record<string, any> {
+  return {
+    success: true,
+    hasActiveShift: false,
+    shift: null,
+    hasActiveAssignment: false,
+    assignment: null,
+    vehicle: null,
+    inspections: [],
+  };
+}
+
+/**
+ * Resolve the complete driver-facing operational state in one session-authenticated read.
+ * This replaces the mounted client chain of active-shift, assignment, vehicle, and
+ * inspection callables while retaining the individual callables for compatibility.
+ */
+async function resolveDriverOperationalState(
+  driverId: string,
+  activeShiftId?: string,
+  perf?: PerformanceTrace,
+): Promise<Record<string, any>> {
+  const phase = <T>(name: string, operation: () => Promise<T>): Promise<T> => (
+    perf ? perf.phase(name, operation) : operation()
+  );
+
+  let activeShift: { id: string; data: FirebaseFirestore.DocumentData } | null = null;
+  if (activeShiftId) {
+    const pointedShiftDoc = await phase(
+      'shiftLookup',
+      () => db.collection('shifts').doc(activeShiftId).get(),
+    );
+    const pointedShiftData = pointedShiftDoc.data();
+    if (
+      pointedShiftDoc.exists
+      && pointedShiftData?.driverId === driverId
+      && pointedShiftData.status === 'Active'
+    ) {
+      activeShift = { id: pointedShiftDoc.id, data: pointedShiftData };
+    }
+  }
+
+  // Pointer-less and stale-pointer documents retain the legacy fallback until historical
+  // shifts have all been reconciled. The query remains scoped to the authenticated driver.
+  if (!activeShift) {
+    const snapshot = await phase(
+      'legacyShiftLookup',
+      () => db.collection('shifts').where('driverId', '==', driverId).get(),
+    );
+    const legacy = snapshot.docs.find((doc) => doc.data()?.status === 'Active');
+    if (legacy) activeShift = { id: legacy.id, data: legacy.data() };
+  }
+
+  if (!activeShift) {
+    return emptyDriverOperationalState();
+  }
+
+  const shiftData = activeShift.data;
+  const shift = stripToDriverOperationalShift(shiftData, activeShift.id);
+  const activeAssignmentId = shiftData.activeAssignmentId;
+  if (activeAssignmentId != null && typeof activeAssignmentId !== 'string') {
+    throw new functions.https.HttpsError('failed-precondition', 'Your active assignment pointer is invalid. Please contact support.');
+  }
+
+  if (!activeAssignmentId) {
+    const legacyVehicleId = typeof shiftData.vehicleId === 'string' ? shiftData.vehicleId : null;
+    const legacyVehicleDoc = legacyVehicleId
+      ? await phase('vehicleLookup', () => db.collection('vehicles').doc(legacyVehicleId).get())
+      : null;
+    return {
+      success: true,
+      hasActiveShift: true,
+      shift,
+      hasActiveAssignment: false,
+      assignment: null,
+      vehicle: legacyVehicleDoc?.exists ? stripToVehicleSafe(legacyVehicleDoc.data()!, legacyVehicleDoc.id) : null,
+      inspections: [],
+    };
+  }
+
+  const assignmentDoc = await phase(
+    'assignmentLookup',
+    () => db.collection('vehicleAssignments').doc(activeAssignmentId).get(),
+  );
+  if (!assignmentDoc.exists) {
+    throw new functions.https.HttpsError('failed-precondition', 'Your active assignment record is inconsistent. Please contact support.');
+  }
+  const assignmentData = assignmentDoc.data()!;
+  if (
+    assignmentData.driverId !== driverId
+    || assignmentData.shiftId !== activeShift.id
+    || assignmentData.status !== 'ACTIVE'
+  ) {
+    throw new functions.https.HttpsError('failed-precondition', 'Your active assignment record is inconsistent. Please contact support.');
+  }
+
+  const [vehicleDoc, inspectionDocs] = await Promise.all([
+    phase('vehicleLookup', () => db.collection('vehicles').doc(assignmentData.vehicleId).get()),
+    phase('inspectionsLookup', () => Promise.all([
+      db.collection('vehicleInspections').doc(inspectionDocId(activeAssignmentId, 'PICKUP')).get(),
+      db.collection('vehicleInspections').doc(inspectionDocId(activeAssignmentId, 'RETURN')).get(),
+    ])),
+  ]);
+
+  return {
+    success: true,
+    hasActiveShift: true,
+    shift,
+    hasActiveAssignment: true,
+    assignment: stripToDriverOperationalAssignment(assignmentData, assignmentDoc.id),
+    vehicle: vehicleDoc.exists ? stripToVehicleSafe(vehicleDoc.data()!, vehicleDoc.id) : null,
+    inspections: inspectionDocs
+      // Deterministic document IDs are not an authorization boundary. Only expose
+      // inspection summaries that still match the validated active assignment chain.
+      .filter((doc) => {
+        if (!doc.exists) return false;
+        const inspectionData = doc.data()!;
+        return inspectionData.assignmentId === activeAssignmentId
+          && inspectionData.driverId === driverId
+          && inspectionData.shiftId === activeShift.id
+          && inspectionData.vehicleId === assignmentData.vehicleId;
+      })
+      .map((doc) => stripToDriverOperationalInspection(doc.data()!, doc.id)),
   };
 }
 
@@ -1369,59 +1634,76 @@ async function revokeActiveDriverSessions(
 async function requireDriverSession(data: {
   driverId: string;
   sessionToken: string;
-}): Promise<{ driverId: string; orgId: string; sessionHash: string; deviceId: string }> {
-  const validated = RequireSessionSchema.parse(data);
-  const { driverId, sessionToken } = validated;
+}, perf?: PerformanceTrace): Promise<{ driverId: string; orgId: string; sessionHash: string; deviceId: string; activeShiftId?: string }> {
+  const phaseSync = <T>(name: string, operation: () => T): T => (
+    perf ? perf.phaseSync(name, operation) : operation()
+  );
+  const phase = <T>(name: string, operation: () => Promise<T>): Promise<T> => (
+    perf ? perf.phase(name, operation) : operation()
+  );
 
-  const sessionHash = hashSessionToken(sessionToken);
-  const sessionRef = db.collection('driverSessions').doc(sessionHash);
-  const sessionDoc = await sessionRef.get();
+  const { driverId, sessionHash, sessionRef } = phaseSync('sessionTokenPreparation', () => {
+    const validated = RequireSessionSchema.parse(data);
+    const hash = hashSessionToken(validated.sessionToken);
+    return {
+      driverId: validated.driverId,
+      sessionHash: hash,
+      sessionRef: db.collection('driverSessions').doc(hash),
+    };
+  });
 
-  if (!sessionDoc.exists) {
-    throw new functions.https.HttpsError('unauthenticated', 'Session not found. Please log in again.');
-  }
+  const sessionDoc = await phase('sessionDocumentRead', () => sessionRef.get());
+  const session = phaseSync('sessionChecks', () => {
+    if (!sessionDoc.exists) {
+      throw new functions.https.HttpsError('unauthenticated', 'Session not found. Please log in again.');
+    }
 
-  const session = sessionDoc.data()!;
-
-  if (session.driverId !== driverId) {
-    throw new functions.https.HttpsError('permission-denied', 'Session does not belong to this driver.');
-  }
-
-  if (session.isRevoked) {
-    throw new functions.https.HttpsError('unauthenticated', 'Session has been revoked. Please log in again.');
-  }
-
-  if (session.expiresAt.toMillis() < Date.now()) {
-    throw new functions.https.HttpsError('unauthenticated', 'Session has expired. Please log in again.');
-  }
+    const sessionData = sessionDoc.data()!;
+    if (sessionData.driverId !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'Session does not belong to this driver.');
+    }
+    if (sessionData.isRevoked) {
+      throw new functions.https.HttpsError('unauthenticated', 'Session has been revoked. Please log in again.');
+    }
+    if (sessionData.expiresAt.toMillis() < Date.now()) {
+      throw new functions.https.HttpsError('unauthenticated', 'Session has expired. Please log in again.');
+    }
+    return sessionData;
+  });
 
   // Confirm driver still exists and is active (catches archival/inactivation mid-session)
-  const driverDoc = await db.collection('users').doc(driverId).get();
-  if (!driverDoc.exists) {
-    throw new functions.https.HttpsError('not-found', 'Driver account not found.');
-  }
-  const driverData = driverDoc.data()!;
-  if (driverData.employmentStatus !== 'Active') {
-    throw new functions.https.HttpsError('permission-denied', 'Driver account is not active.');
-  }
-  if (driverData.role && driverData.role !== 'driver') {
-    throw new functions.https.HttpsError('permission-denied', 'Account is not a driver account.');
-  }
+  const driverDoc = await phase('driverDocumentRead', () => db.collection('users').doc(driverId).get());
+  const driverData = phaseSync('driverChecks', () => {
+    if (!driverDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Driver account not found.');
+    }
+    const driverData = driverDoc.data()!;
+    if (driverData.employmentStatus !== 'Active') {
+      throw new functions.https.HttpsError('permission-denied', 'Driver account is not active.');
+    }
+    if (driverData.role && driverData.role !== 'driver') {
+      throw new functions.https.HttpsError('permission-denied', 'Account is not a driver account.');
+    }
+    return driverData;
+  });
 
   // Update lastSeenAt — throttled: only if more than 5 minutes since the last update.
   // Fire-and-forget so session activity tracking does not add latency to the caller's response.
-  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-  if (session.lastSeenAt.toMillis() < fiveMinutesAgo) {
-    sessionRef
-      .update({ lastSeenAt: admin.firestore.FieldValue.serverTimestamp() })
-      .catch((err) => console.error('requireDriverSession: lastSeenAt update failed:', err));
-  }
+  phaseSync('lastSeenScheduling', () => {
+    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+    if (session.lastSeenAt.toMillis() < fiveMinutesAgo) {
+      sessionRef
+        .update({ lastSeenAt: admin.firestore.FieldValue.serverTimestamp() })
+        .catch((err) => console.error('requireDriverSession: lastSeenAt update failed:', err));
+    }
+  });
 
   return {
     driverId: session.driverId,
     orgId: session.orgId,
     sessionHash,
     deviceId: session.deviceId,
+    activeShiftId: typeof driverData.activeShiftId === 'string' ? driverData.activeShiftId : undefined,
   };
 }
 
@@ -1538,9 +1820,9 @@ const ReportDefectSchema = z.object({
  * Returns: id, firstName, surname, area, department, employmentStatus, role
  * NEVER returns: pinHash, idNumber, driversLicenceImageUrl, email, contactNumber
  */
-export const listDriversSafe = functions.https.onCall(async (_data, _context) => {
+export const listDriversSafe = onMeasuredCall('listDriversSafe', async (_data, _context, perf) => {
   try {
-    const snapshot = await db.collection('users').get();
+    const snapshot = await perf.phase('driverListQuery', () => db.collection('users').get());
     const drivers = snapshot.docs
       .filter(doc => {
         const data = doc.data();
@@ -2052,7 +2334,13 @@ export const listChargingLocationsAdmin = functions.https.onCall(async (_data, c
 });
 
 // =============================================================================
-// DEFECT REPORTING (PIN-VERIFIED)
+// SESSION-AUTHENTICATED DRIVER CALLABLES (WP6B)
+// These callables replace PIN-per-action with a session bearer token.
+// Each one calls requireDriverSession() as the SOLE authentication mechanism.
+// The raw sessionToken is NEVER logged or written to Firestore.
+// Legacy PIN-based callables (startShiftWithPin, reportDefect, endShift,
+// getActiveShift) remain live for rollback until WP6C frontend migration is
+// complete and runtime-tested.
 // =============================================================================
 
 /**
@@ -2172,7 +2460,7 @@ export const reportDefect = functions.https.onCall(async (data, context) => {
  * All shift collision and vehicle-availability logic is identical to
  * startShiftWithPin; the only difference is the authentication path.
  */
-export const startShift = functions.https.onCall(async (data, context) => {
+export const startShift = onMeasuredCall('startShift', async (data, context, perf) => {
   try {
     const validated = StartShiftWithSessionSchema.parse(data);
     const {
@@ -2186,13 +2474,13 @@ export const startShift = functions.https.onCall(async (data, context) => {
     // Session validation is the sole authentication step — no PIN, no rate limit.
     // requireDriverSession cross-validates driverId against the stored session,
     // checks revocation/expiry, and confirms the driver is still Active.
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     // Parallel reads — driverDoc needed for allowedVehicles and activeShiftId checks.
-    const [driverDoc, vehicleDoc] = await Promise.all([
+    const [driverDoc, vehicleDoc] = await perf.phase('initialRecordReads', () => Promise.all([
       db.collection('users').doc(driverId).get(),
       db.collection('vehicles').doc(vehicleId).get(),
-    ]);
+    ]));
 
     if (!driverDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Driver not found');
@@ -2244,10 +2532,10 @@ export const startShift = functions.https.onCall(async (data, context) => {
     // Legacy shift-collision detection: scans by driverId/vehicleId for docs
     // that predate the activeShiftId pointer field. Single-field queries — no
     // composite index required.
-    const [driverShifts, vehicleShifts] = await Promise.all([
+    const [driverShifts, vehicleShifts] = await perf.phase('legacyShiftQueries', () => Promise.all([
       db.collection('shifts').where('driverId', '==', driverId).get(),
       db.collection('shifts').where('vehicleId', '==', vehicleId).get(),
-    ]);
+    ]));
     if (driverShifts.docs.some(d => d.data().status === 'Active')) {
       throw new functions.https.HttpsError(
         'failed-precondition',
@@ -2265,7 +2553,7 @@ export const startShift = functions.https.onCall(async (data, context) => {
     const shiftRef = db.collection('shifts').doc();
     const shiftId = shiftRef.id;
 
-    await db.runTransaction(async (transaction) => {
+    await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
       // Re-check pointer fields inside the transaction to prevent TOCTOU races.
       const [txDriverDoc, txVehicleDoc] = await Promise.all([
         transaction.get(driverDoc.ref),
@@ -2339,7 +2627,7 @@ export const startShift = functions.https.onCall(async (data, context) => {
         vehicleUpdate.currentOdometer = startOdometer;
       }
       transaction.update(vehicleDoc.ref, vehicleUpdate);
-    });
+    }));
 
     return { success: true, shiftId, message: 'Shift started successfully' };
   } catch (error: any) {
@@ -2429,16 +2717,16 @@ export const reportDefectWithSession = functions.https.onCall(async (data, conte
  * credential), this callable enforces that the authenticated driver can only
  * end their OWN shift — preventing cross-driver shift termination.
  */
-export const endShiftWithSession = functions.https.onCall(async (data, context) => {
+export const endShiftWithSession = onMeasuredCall('endShiftWithSession', async (data, context, perf) => {
   try {
     const validated = EndShiftWithSessionSchema.parse(data);
     const { driverId: reqDriverId, sessionToken, shiftId, endOdometer, endChargePercent, notes } = validated;
 
     // Session validation — returns the authoritative driverId.
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     const shiftRef = db.collection('shifts').doc(shiftId);
-    const shiftDoc = await shiftRef.get();
+    const shiftDoc = await perf.phase('shiftRead', () => shiftRef.get());
 
     if (!shiftDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Shift not found');
@@ -2472,7 +2760,7 @@ export const endShiftWithSession = functions.https.onCall(async (data, context) 
 
     const vehicleId = shiftData.vehicleId;
 
-    await db.runTransaction(async (transaction) => {
+    await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
       const driverRef = db.collection('users').doc(driverId);
 
       // Re-check the active-assignment pointer inside the transaction (race protection).
@@ -2507,7 +2795,7 @@ export const endShiftWithSession = functions.https.onCall(async (data, context) 
         const vehicleRef = db.collection('vehicles').doc(vehicleId);
         transaction.update(vehicleRef, { activeShiftId: admin.firestore.FieldValue.delete() });
       }
-    });
+    }));
 
     return { success: true, message: 'Shift ended successfully' };
   } catch (error: any) {
@@ -2530,16 +2818,16 @@ export const endShiftWithSession = functions.https.onCall(async (data, context) 
  * credential), this callable enforces that the query is restricted to the
  * authenticated driver — preventing cross-driver shift data leakage.
  */
-export const getActiveShiftWithSession = functions.https.onCall(async (data, context) => {
+export const getActiveShiftWithSession = onMeasuredCall('getActiveShiftWithSession', async (data, context, perf) => {
   try {
     const validated = GetActiveShiftWithSessionSchema.parse(data);
     const { driverId: reqDriverId, sessionToken } = validated;
 
     // Session validation — the query is scoped to this authoritative driverId only.
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     const driverRef = db.collection('users').doc(driverId);
-    const driverDoc = await driverRef.get();
+    const driverDoc = await perf.phase('driverPointerRead', () => driverRef.get());
     if (!driverDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Driver not found');
     }
@@ -2547,7 +2835,7 @@ export const getActiveShiftWithSession = functions.https.onCall(async (data, con
     // A. Fast path: additive activeShiftId pointer on new-style driver documents.
     const activeShiftId = driverDoc.data()?.activeShiftId;
     if (activeShiftId) {
-      const shiftDoc = await db.collection('shifts').doc(activeShiftId).get();
+      const shiftDoc = await perf.phase('activeShiftRead', () => db.collection('shifts').doc(activeShiftId).get());
       if (shiftDoc.exists && shiftDoc.data()?.status === 'Active') {
         return { success: true, hasActiveShift: true, shift: { id: shiftDoc.id, ...shiftDoc.data() } };
       }
@@ -2556,7 +2844,7 @@ export const getActiveShiftWithSession = functions.https.onCall(async (data, con
 
     // B. Legacy scan: query by driverId, filter Active in-memory. Single-field
     // query avoids the need for a composite index. Scoped to this driver only.
-    const snapshot = await db.collection('shifts').where('driverId', '==', driverId).get();
+    const snapshot = await perf.phase('legacyShiftQuery', () => db.collection('shifts').where('driverId', '==', driverId).get());
     let active: any = null;
     snapshot.docs.forEach(d => {
       const sd = d.data();
@@ -2577,6 +2865,29 @@ export const getActiveShiftWithSession = functions.https.onCall(async (data, con
   }
 });
 
+/**
+ * Resolve the complete driver-facing operational state in one session-authenticated read.
+ * This replaces the mounted client chain of active-shift, assignment, vehicle, and
+ * inspection callables while retaining the individual callables for compatibility.
+ */
+export const getDriverOperationalState = onMeasuredCall('getDriverOperationalState', async (data, context, perf) => {
+  try {
+    const validated = RequireSessionSchema.parse(data);
+    const { driverId, activeShiftId } = await perf.phase(
+      'sessionValidation',
+      () => requireDriverSession(validated, perf),
+    );
+    return await resolveDriverOperationalState(driverId, activeShiftId, perf);
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in getDriverOperationalState:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to get driver operational state.');
+  }
+}, WARM_DRIVER_SESSION_RUNTIME);
+
 // =============================================================================
 // VEHICLE ASSIGNMENT CALLABLES (WP7B)
 // =============================================================================
@@ -2585,7 +2896,7 @@ export const getActiveShiftWithSession = functions.https.onCall(async (data, con
  * Start a VehicleAssignment under an existing Active shift. Session-authenticated;
  * no PIN re-entry. Enforces one ACTIVE assignment per shift and per vehicle.
  */
-export const startVehicleAssignment = functions.https.onCall(async (data, context) => {
+export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', async (data, context, perf) => {
   try {
     const validated = StartVehicleAssignmentSchema.parse(data);
     const {
@@ -2599,13 +2910,13 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
       transitionReason = 'SHIFT_START',
     } = validated;
 
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
-    const [shiftDoc, vehicleDoc, driverDoc] = await Promise.all([
+    const [shiftDoc, vehicleDoc, driverDoc] = await perf.phase('initialRecordReads', () => Promise.all([
       db.collection('shifts').doc(shiftId).get(),
       db.collection('vehicles').doc(vehicleId).get(),
       db.collection('users').doc(driverId).get(),
-    ]);
+    ]));
 
     if (!shiftDoc.exists) throw new functions.https.HttpsError('not-found', 'Shift not found');
     const shiftData = shiftDoc.data()!;
@@ -2641,7 +2952,7 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
     const assignmentRef = db.collection('vehicleAssignments').doc();
     const assignmentId = assignmentRef.id;
 
-    await db.runTransaction(async (transaction) => {
+    await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
       const [txShiftDoc, txVehicleDoc, txDriverDoc] = await Promise.all([
         transaction.get(shiftDoc.ref),
         transaction.get(vehicleDoc.ref),
@@ -2746,7 +3057,7 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
         vehicleUpdate.currentOdometer = startOdometer;
       }
       transaction.update(vehicleDoc.ref, vehicleUpdate);
-    });
+    }));
 
     return { success: true, assignmentId, message: 'Vehicle assignment started' };
   } catch (error: any) {
@@ -2763,7 +3074,7 @@ export const startVehicleAssignment = functions.https.onCall(async (data, contex
  * End a VehicleAssignment. Session-authenticated. Clears the shift/vehicle pointers only
  * when they still point to this assignment/shift. Idempotent on COMPLETED.
  */
-export const endVehicleAssignment = functions.https.onCall(async (data, context) => {
+export const endVehicleAssignment = onMeasuredCall('endVehicleAssignment', async (data, context, perf) => {
   try {
     const validated = EndVehicleAssignmentSchema.parse(data);
     const {
@@ -2781,10 +3092,10 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       transitionReason,
     } = validated;
 
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
-    const assignmentDoc = await assignmentRef.get();
+    const assignmentDoc = await perf.phase('assignmentRead', () => assignmentRef.get());
     if (!assignmentDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
     }
@@ -2797,10 +3108,10 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
     const shiftId = assignmentData.shiftId;
     const vehicleId = assignmentData.vehicleId;
 
-    const [shiftDoc, vehicleDoc] = await Promise.all([
+    const [shiftDoc, vehicleDoc] = await perf.phase('shiftAndVehicleReads', () => Promise.all([
       db.collection('shifts').doc(shiftId).get(),
       db.collection('vehicles').doc(vehicleId).get(),
-    ]);
+    ]));
 
     if (!shiftDoc.exists) throw new functions.https.HttpsError('not-found', 'Shift not found');
     if (shiftDoc.data()!.driverId !== driverId) {
@@ -2838,7 +3149,7 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
     // assignmentId + boundaryType by construction; we additionally verify the server-written
     // driverId/shiftId/vehicleId match the assignment being closed.
     const pickupInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'PICKUP'));
-    const pickupInspectionDoc = await pickupInspectionRef.get();
+    const pickupInspectionDoc = await perf.phase('inspectionValidationReads', () => pickupInspectionRef.get());
     if (!pickupInspectionDoc.exists || pickupInspectionDoc.data()!.status !== 'COMPLETED') {
       throw new functions.https.HttpsError('failed-precondition', 'A completed pickup inspection is required before returning the vehicle.');
     }
@@ -2848,7 +3159,7 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
     }
 
     const returnInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN'));
-    const returnInspectionDoc = await returnInspectionRef.get();
+    const returnInspectionDoc = await perf.phase('inspectionValidationReads', () => returnInspectionRef.get());
     if (!returnInspectionDoc.exists || returnInspectionDoc.data()!.status !== 'COMPLETED') {
       throw new functions.https.HttpsError('failed-precondition', 'A completed return inspection is required before returning the vehicle.');
     }
@@ -2861,7 +3172,7 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
       throw new functions.https.HttpsError('invalid-argument', 'End odometer must be greater than or equal to start odometer');
     }
 
-    await db.runTransaction(async (transaction) => {
+    await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
       // Every conditional read is included before the transaction issues any write.
       const [txAssignmentDoc, txShiftDoc, txVehicleDoc, txChargingLocationDoc] = await Promise.all([
         transaction.get(assignmentRef),
@@ -2993,7 +3304,7 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
         vehicleUpdate.openChargingEventId = chargingEventRef.id;
       }
       transaction.update(vehicleDoc.ref, vehicleUpdate);
-    });
+    }));
 
     return { success: true, message: 'Vehicle assignment ended' };
   } catch (error: any) {
@@ -3010,18 +3321,19 @@ export const endVehicleAssignment = functions.https.onCall(async (data, context)
  * Get the driver's current ACTIVE VehicleAssignment (O(1) via shift.activeAssignmentId).
  * Session-authenticated. Returns null for legacy shifts that have no assignment.
  */
-export const getActiveVehicleAssignment = functions.https.onCall(async (data, context) => {
+export const getActiveVehicleAssignment = onMeasuredCall('getActiveVehicleAssignment', async (data, context, perf) => {
   try {
     const validated = GetActiveVehicleAssignmentSchema.parse(data);
     const { driverId: reqDriverId, sessionToken, shiftId: reqShiftId } = validated;
 
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     let shiftId: string | undefined = reqShiftId;
     let shiftData: any = null;
 
     if (shiftId) {
-      const shiftDoc = await db.collection('shifts').doc(shiftId).get();
+      const activeShiftIdForRead = shiftId;
+      const shiftDoc = await perf.phase('shiftRead', () => db.collection('shifts').doc(activeShiftIdForRead).get());
       if (!shiftDoc.exists) throw new functions.https.HttpsError('not-found', 'Shift not found');
       const sd = shiftDoc.data()!;
       if (sd.driverId !== driverId) {
@@ -3032,17 +3344,17 @@ export const getActiveVehicleAssignment = functions.https.onCall(async (data, co
       }
       shiftData = sd;
     } else {
-      const driverDoc = await db.collection('users').doc(driverId).get();
+      const driverDoc = await perf.phase('driverPointerRead', () => db.collection('users').doc(driverId).get());
       const activeShiftId = driverDoc.exists ? driverDoc.data()?.activeShiftId : null;
       if (activeShiftId) {
-        const shiftDoc = await db.collection('shifts').doc(activeShiftId).get();
+        const shiftDoc = await perf.phase('shiftRead', () => db.collection('shifts').doc(activeShiftId).get());
         if (shiftDoc.exists && shiftDoc.data()?.status === 'Active') {
           shiftId = activeShiftId;
           shiftData = shiftDoc.data()!;
         }
       }
       if (!shiftId) {
-        const snapshot = await db.collection('shifts').where('driverId', '==', driverId).get();
+        const snapshot = await perf.phase('legacyShiftQuery', () => db.collection('shifts').where('driverId', '==', driverId).get());
         for (const d of snapshot.docs) {
           if (d.data()?.status === 'Active') {
             shiftId = d.id;
@@ -3062,7 +3374,7 @@ export const getActiveVehicleAssignment = functions.https.onCall(async (data, co
       return { success: true, hasActiveAssignment: false, assignment: null };
     }
 
-    const assignmentDoc = await db.collection('vehicleAssignments').doc(activeAssignmentId).get();
+    const assignmentDoc = await perf.phase('assignmentRead', () => db.collection('vehicleAssignments').doc(activeAssignmentId).get());
     // shift.activeAssignmentId is present — the pointed document MUST be valid and consistent.
     // Returning null here could allow a second assignment to start while a stale pointer remains.
     if (!assignmentDoc.exists) {
@@ -3150,11 +3462,11 @@ const INSPECTION_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
  * Create a PENDING inspection for an ACTIVE assignment (idempotent).
  * The deterministic ID guarantees at most one PICKUP and one RETURN inspection per assignment.
  */
-export const createVehicleInspection = functions.https.onCall(async (data, context) => {
+export const createVehicleInspection = onMeasuredCall('createVehicleInspection', async (data, context, perf) => {
   try {
     const validated = CreateVehicleInspectionSchema.parse(data);
     const { driverId: reqDriverId, sessionToken, assignmentId, boundaryType, returnIntent } = validated;
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     // RETURN inspections require an explicit, server-validated return intent.
     if (boundaryType === 'RETURN' && !returnIntent) {
@@ -3162,7 +3474,7 @@ export const createVehicleInspection = functions.https.onCall(async (data, conte
     }
 
     const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
-    const assignmentDoc = await assignmentRef.get();
+    const assignmentDoc = await perf.phase('assignmentRead', () => assignmentRef.get());
     if (!assignmentDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
     }
@@ -3176,7 +3488,7 @@ export const createVehicleInspection = functions.https.onCall(async (data, conte
 
     const inspectionId = inspectionDocId(assignmentId, boundaryType);
     const inspectionRef = db.collection('vehicleInspections').doc(inspectionId);
-    const existing = await inspectionRef.get();
+    const existing = await perf.phase('inspectionRead', () => inspectionRef.get());
     if (existing.exists) {
       // Idempotent — never create a duplicate boundary inspection.
       return { success: true, inspection: { id: inspectionId, ...existing.data() } };
@@ -3205,7 +3517,7 @@ export const createVehicleInspection = functions.https.onCall(async (data, conte
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
-    await inspectionRef.set(inspectionData);
+    await perf.phase('inspectionWrite', () => inspectionRef.set(inspectionData));
 
     return { success: true, inspection: { id: inspectionId, ...inspectionData } };
   } catch (error: any) {
@@ -3224,7 +3536,7 @@ export const createVehicleInspection = functions.https.onCall(async (data, conte
  * session/assignment/inspection, derives an authoritative path, stores the object, and
  * persists the object path + metadata. The client NEVER chooses a Storage path.
  */
-export const uploadInspectionPhoto = functions.https.onCall(async (data, context) => {
+export const uploadInspectionPhoto = onMeasuredCall('uploadInspectionPhoto', async (data, context, perf) => {
   try {
     const validated = UploadInspectionPhotoSchema.parse(data);
     const {
@@ -3235,10 +3547,10 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
       photoRole,
       imageDataUrl,
     } = validated;
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
-    const assignmentDoc = await assignmentRef.get();
+    const assignmentDoc = await perf.phase('assignmentRead', () => assignmentRef.get());
     if (!assignmentDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
     }
@@ -3252,7 +3564,7 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
 
     const inspectionId = inspectionDocId(assignmentId, boundaryType);
     const inspectionRef = db.collection('vehicleInspections').doc(inspectionId);
-    const inspectionDoc = await inspectionRef.get();
+    const inspectionDoc = await perf.phase('inspectionRead', () => inspectionRef.get());
     if (!inspectionDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Vehicle inspection not found');
     }
@@ -3289,11 +3601,11 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
     const bucket = inspectionStorageBucket();
 
     // Save bytes directly to the unique permanent path.
-    await bucket.file(objectPath).save(buffer, { contentType: mimeType, resumable: false });
+    await perf.phase('storageUpload', () => bucket.file(objectPath).save(buffer, { contentType: mimeType, resumable: false }));
 
     // Re-read the inspection before touching Firestore metadata. The unique path guarantees
     // the object write could not have clobbered completed evidence even if completion raced it.
-    const recheckDoc = await inspectionRef.get();
+    const recheckDoc = await perf.phase('inspectionRecheck', () => inspectionRef.get());
     if (!recheckDoc.exists) {
       await bucket.file(objectPath).delete().catch(() => {});
       throw new functions.https.HttpsError('not-found', 'Vehicle inspection not found');
@@ -3319,7 +3631,7 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
       update.interiorPhotoSize = buffer.length;
       update.interiorPhotoContentType = mimeType;
     }
-    await inspectionRef.update(update);
+    await perf.phase('inspectionMetadataWrite', () => inspectionRef.update(update));
 
     return { success: true, photoRole, photoPath: objectPath };
   } catch (error: any) {
@@ -3337,7 +3649,7 @@ export const uploadInspectionPhoto = functions.https.onCall(async (data, context
  * retentionClass is determined SERVER-SIDE from hasDamage (never trusted from the client).
  * A COMPLETED inspection cannot be rewritten.
  */
-export const completeVehicleInspection = functions.https.onCall(async (data, context) => {
+export const completeVehicleInspection = onMeasuredCall('completeVehicleInspection', async (data, context, perf) => {
   try {
     const validated = CompleteVehicleInspectionSchema.parse(data);
     const {
@@ -3347,10 +3659,10 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
       hasDamage,
       damageDescription,
     } = validated;
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     const inspectionRef = db.collection('vehicleInspections').doc(inspectionId);
-    const inspectionDoc = await inspectionRef.get();
+    const inspectionDoc = await perf.phase('inspectionRead', () => inspectionRef.get());
     if (!inspectionDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Vehicle inspection not found');
     }
@@ -3365,7 +3677,7 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
 
     // The inspection must still belong to an ACTIVE assignment owned by this driver.
     const assignmentRef = db.collection('vehicleAssignments').doc(inspectionData.assignmentId);
-    const assignmentDoc = await assignmentRef.get();
+    const assignmentDoc = await perf.phase('assignmentRead', () => assignmentRef.get());
     if (!assignmentDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
     }
@@ -3395,10 +3707,10 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
     if (!extPath || !intPath) {
       throw new functions.https.HttpsError('failed-precondition', 'Both inspection photos must be uploaded before completing the inspection.');
     }
-    const [extExists, intExists] = await Promise.all([
+    const [extExists, intExists] = await perf.phase('storageVerification', () => Promise.all([
       bucket.file(extPath).exists(),
       bucket.file(intPath).exists(),
-    ]);
+    ]));
     if (!extExists[0]) {
       throw new functions.https.HttpsError('failed-precondition', 'The exterior inspection photo is missing.');
     }
@@ -3411,7 +3723,7 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
       ? null
       : admin.firestore.Timestamp.fromMillis(Date.now() + ROUTINE_INSPECTION_RETENTION_MS);
 
-    await inspectionRef.update({
+    await perf.phase('inspectionCompletionWrite', () => inspectionRef.update({
       status: 'COMPLETED',
       capturedAt: admin.firestore.FieldValue.serverTimestamp(),
       completedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -3427,9 +3739,9 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
       retentionClass,
       expiresAt,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    }));
 
-    const updated = await inspectionRef.get();
+    const updated = await perf.phase('inspectionReadback', () => inspectionRef.get());
     return { success: true, inspection: { id: inspectionId, ...updated.data() } };
   } catch (error: any) {
     if (error instanceof functions.https.HttpsError) throw error;
@@ -3444,14 +3756,14 @@ export const completeVehicleInspection = functions.https.onCall(async (data, con
 /**
  * List both boundary inspections for an assignment (O(1) deterministic reads).
  */
-export const getAssignmentInspections = functions.https.onCall(async (data, context) => {
+export const getAssignmentInspections = onMeasuredCall('getAssignmentInspections', async (data, context, perf) => {
   try {
     const validated = GetAssignmentInspectionsSchema.parse(data);
     const { driverId: reqDriverId, sessionToken, assignmentId } = validated;
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
-    const assignmentDoc = await assignmentRef.get();
+    const assignmentDoc = await perf.phase('assignmentRead', () => assignmentRef.get());
     if (!assignmentDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
     }
@@ -3459,10 +3771,10 @@ export const getAssignmentInspections = functions.https.onCall(async (data, cont
       throw new functions.https.HttpsError('permission-denied', 'You can only view your own inspections.');
     }
 
-    const [pickupDoc, returnDoc] = await Promise.all([
+    const [pickupDoc, returnDoc] = await perf.phase('inspectionReads', () => Promise.all([
       db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'PICKUP')).get(),
       db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN')).get(),
-    ]);
+    ]));
 
     const inspections: any[] = [];
     if (pickupDoc.exists) inspections.push({ id: pickupDoc.id, ...pickupDoc.data() });
@@ -3545,15 +3857,15 @@ export const updateOdometerDiscrepancyStatus = functions.https.onCall(async (dat
 /**
  * Session-authenticated safe vehicle listing for drivers.
  */
-export const listVehiclesForSession = functions.https.onCall(async (data, context) => {
+export const listVehiclesForSession = onMeasuredCall('listVehiclesForSession', async (data, context, perf) => {
   try {
     const validated = RequireSessionSchema.parse(data);
-    const session = await requireDriverSession(validated);
+    const session = await perf.phase('sessionValidation', () => requireDriverSession(validated));
 
-    const driverDoc = await db.collection('users').doc(session.driverId).get();
+    const driverDoc = await perf.phase('driverRead', () => db.collection('users').doc(session.driverId).get());
     const driverData = driverDoc.data();
 
-    const snapshot = await db.collection('vehicles').get();
+    const snapshot = await perf.phase('vehicleQuery', () => db.collection('vehicles').get());
     let vehicles = snapshot.docs
       .map(doc => stripToVehicleSafe(doc.data(), doc.id))
       .filter(v => v.status === 'Active');
@@ -3576,14 +3888,14 @@ export const listVehiclesForSession = functions.https.onCall(async (data, contex
 /**
  * Session-authenticated safe vehicle read for drivers.
  */
-export const getVehicleForSession = functions.https.onCall(async (data, context) => {
+export const getVehicleForSession = onMeasuredCall('getVehicleForSession', async (data, context, perf) => {
   try {
     const validated = GetVehicleForSessionSchema.parse(data);
     const { vehicleId } = validated;
 
-    await requireDriverSession(validated);
+    await perf.phase('sessionValidation', () => requireDriverSession(validated));
 
-    const doc = await db.collection('vehicles').doc(vehicleId).get();
+    const doc = await perf.phase('vehicleRead', () => db.collection('vehicles').doc(vehicleId).get());
     if (!doc.exists) {
       throw new functions.https.HttpsError('not-found', 'Vehicle not found');
     }
@@ -3602,18 +3914,18 @@ export const getVehicleForSession = functions.https.onCall(async (data, context)
 /**
  * Session-authenticated active defects read for a vehicle.
  */
-export const getVehicleDefectsForSession = functions.https.onCall(async (data, context) => {
+export const getVehicleDefectsForSession = onMeasuredCall('getVehicleDefectsForSession', async (data, context, perf) => {
   try {
     const validated = GetVehicleDefectsForSessionSchema.parse(data);
     const { vehicleId } = validated;
 
-    await requireDriverSession(validated);
+    await perf.phase('sessionValidation', () => requireDriverSession(validated));
 
     // Match the legacy driver-visible pickup behavior: return all driver-visible defects for
     // the selected vehicle, regardless of legacy/new status labels, and sort newest-first.
-    const snap = await db.collection('defects')
+    const snap = await perf.phase('defectQuery', () => db.collection('defects')
       .where('vehicleId', '==', vehicleId)
-      .get();
+      .get());
 
     const defects = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))

@@ -2,14 +2,15 @@
 // PIN-based login for drivers
 
 import React, { useState, useEffect } from 'react';
-import { User } from '../../types';
+import { DriverLoginResult, User } from '../../types';
 import api from '../../services/firebaseApi';
 import { setDriverSession } from '../../store/session';
+import { readDriverDirectoryCache, writeDriverDirectoryCache } from '../../lib/driverDirectoryCache';
 import { ShieldCheck, User as UserIcon, Lock, AlertCircle, Loader } from 'lucide-react';
 import Card from '../shared/Card';
 
 interface DriverPinLoginProps {
-  onLogin: (user: User, requiresPinChange: boolean) => void;
+  onLogin: (result: DriverLoginResult) => void | Promise<void>;
   onAdminLogin: () => void;
 }
 
@@ -30,21 +31,57 @@ const DriverPinLogin: React.FC<DriverPinLoginProps> = ({ onLogin, onAdminLogin }
 
   // Load active drivers on mount (safe listing — no PII or pinHash)
   useEffect(() => {
+    let cancelled = false;
     const loadDrivers = async () => {
+      const cached = readDriverDirectoryCache();
+      if (cached) {
+        setDrivers(cached.users);
+        setLoadingDrivers(false);
+        console.info('[FW-PERF] driverDirectory cache', {
+          source: 'cache',
+          stale: cached.isStale,
+          count: cached.users.length,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      if (cached && !cached.isStale) {
+        return;
+      }
+
+      const startedAt = performance.now();
       try {
         // listDriversSafe returns only: id, firstName, surname, area, department, employmentStatus, role
         // Never returns pinHash, idNumber, email, contactNumber, driversLicenceImageUrl
         const activeDrivers = await api.listDriversSafe();
+        if (cancelled) return;
         setDrivers(activeDrivers);
+        writeDriverDirectoryCache(activeDrivers);
+        console.info('[FW-PERF] driverDirectory fetch', {
+          source: 'network',
+          cachePrimed: !!cached,
+          staleCache: cached?.isStale === true,
+          elapsedMs: Math.round((performance.now() - startedAt) * 10) / 10,
+          count: activeDrivers.length,
+          timestamp: new Date().toISOString(),
+        });
       } catch (err) {
+        if (cancelled) return;
         console.error('Failed to load drivers:', err);
-        setError('Failed to load drivers. Please refresh the page.');
+        if (!cached) {
+          setError('Failed to load drivers. Please refresh the page.');
+        }
       } finally {
-        setLoadingDrivers(false);
+        if (!cancelled) {
+          setLoadingDrivers(false);
+        }
       }
     };
 
-    loadDrivers();
+    void loadDrivers();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleDriverSelect = (driver: User) => {
@@ -92,7 +129,7 @@ const DriverPinLogin: React.FC<DriverPinLoginProps> = ({ onLogin, onAdminLogin }
       // Clear the PIN immediately; never persist it anywhere.
       setPin('');
 
-      onLogin(result.driver, result.requiresPinChange);
+      await onLogin(result);
     } catch (err: any) {
       const code = String(err?.code || '');
       const msg = String(err?.message || '');

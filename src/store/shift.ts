@@ -1,6 +1,6 @@
 // src/store/shift.ts — FULL DROP-IN shift state management with localStorage persistence
 
-import { Vehicle } from '../types';
+import { DriverOperationalInspection, Vehicle } from '../types';
 
 // Shift state interface
 export interface ActiveShiftState {
@@ -24,6 +24,8 @@ export interface ActiveShiftState {
     alias?: string;
     vehicleType: 'ICE' | 'EV';
   };
+  // Server-returned inspection summary from the consolidated hydration callable.
+  inspections?: DriverOperationalInspection[];
 }
 
 // localStorage key

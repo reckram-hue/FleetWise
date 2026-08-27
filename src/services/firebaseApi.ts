@@ -52,7 +52,9 @@ import {
   FuelEconomyAlert,
   ServiceProvider,
   LicenseRenewalReminder,
-  OdometerDiscrepancy
+  OdometerDiscrepancy,
+  DriverOperationalState,
+  DriverLoginResult
 } from '../types';
 
 // Collection names
@@ -258,13 +260,7 @@ const api = {
    * returned sessionToken is a bearer credential used by all later session-authenticated
    * calls. Returns a SAFE driver profile (no pinHash/email/idNumber/contact).
    */
-  driverLogin: async (driverId: string, pin: string, deviceId?: string): Promise<{
-    sessionToken: string;
-    driverId: string;
-    expiresAt: string;
-    requiresPinChange: boolean;
-    driver: User;
-  }> => {
+  driverLogin: async (driverId: string, pin: string, deviceId?: string): Promise<DriverLoginResult> => {
     const data = await callFunction<any>('driverLogin', { driverId, pin, deviceId });
     return {
       sessionToken: data.sessionToken,
@@ -272,6 +268,23 @@ const api = {
       expiresAt: data.expiresAt,
       requiresPinChange: data.requiresPinChange,
       driver: data.driver as User,
+      operationalState: data.operationalState
+        ? {
+          hasActiveShift: data.operationalState.hasActiveShift,
+          shift: data.operationalState.shift ? (convertTimestamps(data.operationalState.shift) as DriverOperationalState['shift']) : null,
+          hasActiveAssignment: data.operationalState.hasActiveAssignment,
+          assignment: data.operationalState.assignment
+            ? (convertTimestamps(data.operationalState.assignment) as DriverOperationalState['assignment'])
+            : null,
+          vehicle: data.operationalState.vehicle
+            ? (convertTimestamps(data.operationalState.vehicle) as DriverOperationalState['vehicle'])
+            : null,
+          inspections: (data.operationalState.inspections || []).map(
+            (inspection: any) => convertTimestamps(inspection) as DriverOperationalState['inspections'][number],
+          ),
+        }
+        : null,
+      operationalStateNeedsRefresh: data.operationalStateNeedsRefresh === true,
     };
   },
 
@@ -516,6 +529,30 @@ const api = {
   },
 
   /**
+   * Consolidated session-authenticated active driver state for hydration. The server returns
+   * only the safe shift, assignment, vehicle, and inspection summaries needed by driver UI.
+   */
+  getDriverOperationalState: async (driverId: string, sessionToken: string): Promise<DriverOperationalState> => {
+    const data = await callFunction<{
+      success: boolean;
+      hasActiveShift: boolean;
+      shift: any | null;
+      hasActiveAssignment: boolean;
+      assignment: any | null;
+      vehicle: any | null;
+      inspections: any[];
+    }>('getDriverOperationalState', { driverId, sessionToken });
+    return {
+      hasActiveShift: data.hasActiveShift,
+      shift: data.shift ? (convertTimestamps(data.shift) as Shift) : null,
+      hasActiveAssignment: data.hasActiveAssignment,
+      assignment: data.assignment ? (convertTimestamps(data.assignment) as DriverOperationalState['assignment']) : null,
+      vehicle: data.vehicle ? (convertTimestamps(data.vehicle) as Vehicle) : null,
+      inspections: (data.inspections || []).map((inspection) => convertTimestamps(inspection) as DriverOperationalState['inspections'][number]),
+    };
+  },
+
+  /**
    * Create (or return the existing) PENDING inspection for an ACTIVE assignment (WP7D1).
    * Deterministic doc ID guarantees at most one PICKUP and one RETURN per assignment.
    */
@@ -545,7 +582,15 @@ const api = {
    * Storage path and persists metadata; the client never chooses a path (WP7D2).
    */
   uploadInspectionPhoto: async (driverId: string, sessionToken: string, assignmentId: string, boundaryType: VehicleInspectionBoundary, photoRole: VehicleInspectionPhotoRole, imageDataUrl: string): Promise<{ photoPath: string }> => {
-    const data = await callFunction<{ success: boolean; photoPath: string }>('uploadInspectionPhoto', { driverId, sessionToken, assignmentId, boundaryType, photoRole, imageDataUrl });
+    // Base64 payload length is used only for temporary performance telemetry; no image
+    // content, filename, or path is logged.
+    const base64 = imageDataUrl.slice(imageDataUrl.indexOf(',') + 1);
+    const compressedBytes = Math.max(0, Math.floor((base64.length * 3) / 4) - (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0));
+    const data = await callFunction<{ success: boolean; photoPath: string }>(
+      'uploadInspectionPhoto',
+      { driverId, sessionToken, assignmentId, boundaryType, photoRole, imageDataUrl },
+      { compressedBytes },
+    );
     return { photoPath: data.photoPath };
   },
 

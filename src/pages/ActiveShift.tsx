@@ -45,11 +45,11 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
   const [returnReason, setReturnReason] = useState<'VEHICLE_SWAP' | 'SHIFT_END' | null>(null);
   const [takingVehicle, setTakingVehicle] = useState(false);
 
-  // Resolve shift + active assignment + the required inspection boundary from the server.
+  // Resolve shift, assignment, vehicle, and inspection summaries in one server call.
   // The server remains authoritative; never invent a "safe to use" state on failure.
-  const resolveAll = async () => {
+  const resolveAll = async (cachedState?: typeof activeShift | null) => {
     if (!currentUser) return;
-    const state = await resolveActiveShiftState(currentUser);
+    const state = cachedState || await resolveActiveShiftState(currentUser);
     if (!state) {
       clearActiveShift();
       setInspecting(null);
@@ -57,9 +57,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
     }
     setActiveShift(state);
     if (state.assignmentId) {
-      const session = getDriverSession();
-      if (!session) { setInspecting(null); return; }
-      const inspections = await api.getAssignmentInspections(session.driverId, session.sessionToken, state.assignmentId);
+      const inspections = state.inspections || [];
       const pickupDone = inspections.some(i => i.boundaryType === 'PICKUP' && i.status === 'COMPLETED');
       if (!pickupDone) {
         setInspecting('PICKUP');
@@ -89,7 +87,12 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       setReconciling(true);
       setLookupError(null);
       try {
-        await resolveAll();
+        // App hydration and dashboard reconciliation persist this exact server response in the
+        // shift store. Reuse it on route entry instead of immediately issuing a duplicate call.
+        const cachedState = activeShift?.driverId === currentUser.id && Array.isArray(activeShift.inspections)
+          ? activeShift
+          : null;
+        await resolveAll(cachedState);
       } catch (e: any) {
         if (!cancelled) setLookupError(e?.message || 'Failed to look up active shift');
       } finally {
