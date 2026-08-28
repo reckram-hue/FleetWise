@@ -1,5 +1,6 @@
 ﻿{
   "projects": {
-    "default": "fleetwise-9ab3a"
+    "default": "fleetwise-9ab3a",
+    "prod-jhb": "fleetwise-prod-jhb"
   }
 }
