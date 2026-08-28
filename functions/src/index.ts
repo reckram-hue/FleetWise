@@ -4,6 +4,7 @@ import * as admin from 'firebase-admin';
 import * as bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import * as crypto from 'crypto';
+import { createActiveAdminProfile, requireActiveAdmin } from './adminAuthorization';
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -408,26 +409,7 @@ const LogRefuelWithSessionSchema = z.object({
  */
 export const adminSetDriverPin = functions.https.onCall(async (data, context) => {
   try {
-    // Require authentication
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
-    }
-
-    // Check if user is admin (you can implement more sophisticated role checking)
-    const callerUid = context.auth.uid;
-    const callerDoc = await db.collection('users').doc(callerUid).get();
-
-    if (!callerDoc.exists) {
-      throw new functions.https.HttpsError('permission-denied', 'User not found');
-    }
-
-    const callerData = callerDoc.data()!;
-    if (callerData.role !== 'admin') {
-      throw new functions.https.HttpsError(
-        'permission-denied',
-        'Only administrators can set driver PINs'
-      );
-    }
+    const { uid: callerUid } = await requireAdmin(context);
 
     // Validate input
     const validated = SetPinSchema.parse(data);
@@ -741,35 +723,20 @@ export const driverLogout = onMeasuredCall('driverLogout', async (data, context,
 // =============================================================================
 
 /**
- * Require that the caller is an authenticated admin.
- * Reads users/{uid} and confirms role == 'admin'.
+ * Require that the caller is an authenticated, active admin.
+ * Reads users/{uid} and confirms role == 'admin' and employmentStatus == 'Active'.
  * Returns the admin user data for audit logging.
  * Throws HttpsError('unauthenticated' | 'permission-denied') otherwise.
  */
 async function requireAdmin(context: functions.https.CallableContext): Promise<{ uid: string; data: FirebaseFirestore.DocumentData }> {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
-  }
-
-  const uid = context.auth.uid;
-  const userDoc = await db.collection('users').doc(uid).get();
-
-  if (!userDoc.exists) {
-    throw new functions.https.HttpsError('permission-denied', 'User profile not found');
-  }
-
-  const userData = userDoc.data()!;
-  if (userData.role !== 'admin') {
-    throw new functions.https.HttpsError('permission-denied', 'Admin privileges required');
-  }
-
-  return { uid, data: userData };
-}
-
-function assertActiveAdmin(userData: FirebaseFirestore.DocumentData): void {
-  if (userData.employmentStatus !== 'Active') {
-    throw new functions.https.HttpsError('permission-denied', 'Active admin privileges required');
-  }
+  const authorization = await requireActiveAdmin(
+    context.auth,
+    (uid) => db.collection('users').doc(uid).get(),
+  );
+  return {
+    uid: authorization.uid,
+    data: authorization.data as FirebaseFirestore.DocumentData,
+  };
 }
 
 /**
@@ -1359,26 +1326,12 @@ export const listDriversSafe = onMeasuredCall('listDriversSafe', async (_data, _
 
 /**
  * Get the authenticated admin's profile.
- * Requires context.auth. Reads users/{uid}, verifies role == 'admin'.
+ * Requires context.auth. Reads users/{uid}, verifies an active admin profile.
  * Returns all fields except pinHash.
  */
 export const getAdminProfile = functions.https.onCall(async (_data, context) => {
   try {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
-    }
-
-    const uid = context.auth.uid;
-    const userDoc = await db.collection('users').doc(uid).get();
-
-    if (!userDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Admin profile not found');
-    }
-
-    const userData = userDoc.data()!;
-    if (userData.role !== 'admin') {
-      throw new functions.https.HttpsError('permission-denied', 'Not an admin account');
-    }
+    const { uid, data: userData } = await requireAdmin(context);
 
     return { success: true, user: stripSensitiveFields(userData, uid) };
   } catch (error: any) {
@@ -1702,13 +1655,12 @@ export const createAdminUser = functions.https.onCall(async (data, context) => {
     });
 
     // Create matching Firestore document
-    const userData = {
+    const userData = createActiveAdminProfile(
       firstName,
       surname,
       email,
-      role: 'admin',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
+      admin.firestore.FieldValue.serverTimestamp(),
+    );
 
     await db.collection('users').doc(authUser.uid).set(userData);
 
@@ -1749,7 +1701,6 @@ export const createAdminUser = functions.https.onCall(async (data, context) => {
 export const createChargingLocation = functions.https.onCall(async (data, context) => {
   try {
     const { uid: adminUid, data: adminData } = await requireAdmin(context);
-    assertActiveAdmin(adminData);
     const validated = CreateChargingLocationSchema.parse(data);
 
     const chargingLocation: Record<string, any> = {
@@ -1789,8 +1740,7 @@ export const createChargingLocation = functions.https.onCall(async (data, contex
 
 export const updateChargingLocation = functions.https.onCall(async (data, context) => {
   try {
-    const { uid: adminUid, data: adminData } = await requireAdmin(context);
-    assertActiveAdmin(adminData);
+    const { uid: adminUid } = await requireAdmin(context);
     const validated = UpdateChargingLocationSchema.parse(data);
     const { id, ...updateFields } = validated;
 
@@ -1838,8 +1788,7 @@ export const updateChargingLocation = functions.https.onCall(async (data, contex
 
 export const listChargingLocationsAdmin = functions.https.onCall(async (_data, context) => {
   try {
-    const { data: adminData } = await requireAdmin(context);
-    assertActiveAdmin(adminData);
+    await requireAdmin(context);
 
     const snapshot = await db.collection('chargingLocations').orderBy('name', 'asc').get();
     const chargingLocations = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
