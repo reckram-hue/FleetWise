@@ -88,7 +88,7 @@ function normalizeCallableError(functionName: string, error: unknown): never {
 
 function onMeasuredCall(functionName: string, handler: JhbCallableHandler) {
   return onCall(
-    { region: REGION, minInstances: 0 },
+    { region: REGION },
     async (request) => {
       const startedAt = monotonicNowMs();
       const coldStart = !hasHandledMeasuredInvocation;

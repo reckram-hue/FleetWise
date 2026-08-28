@@ -91,7 +91,7 @@ function normalizeCallableError(functionName, error) {
     throw new https_1.HttpsError('internal', 'The request could not be completed.');
 }
 function onMeasuredCall(functionName, handler) {
-    return (0, https_1.onCall)({ region: REGION, minInstances: 0 }, async (request) => {
+    return (0, https_1.onCall)({ region: REGION }, async (request) => {
         const startedAt = monotonicNowMs();
         const coldStart = !hasHandledMeasuredInvocation;
         hasHandledMeasuredInvocation = true;
