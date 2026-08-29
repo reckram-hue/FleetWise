@@ -98,6 +98,16 @@ const convertTimestamps = (data: any): any => {
   return result;
 };
 
+// Test-data isolation helper for records that reference a driverId. The `users` collection
+// denies all direct client reads (see firestore.rules), so the only permitted path to a
+// driver's isTestData flag from the browser is the existing listUsersAdmin-backed
+// api.getUsers() call already used elsewhere to populate admin driver pickers.
+async function resolveDriverIsTestData(driverId?: string): Promise<boolean> {
+  if (!driverId) return false;
+  const users = await api.getUsers();
+  return users.find(u => u.id === driverId)?.isTestData === true;
+}
+
 const api = {
   // ==================== USERS / DRIVERS (SECURE CALLABLE BRIDGE) ====================
 
@@ -707,21 +717,24 @@ const api = {
 
   // ==================== MAINTENANCE ====================
   addMaintenanceRecord: async (recordData: Omit<MaintenanceRecord, 'id'>): Promise<MaintenanceRecord> => {
+    // Fetched up front (rather than after the write) so the same read can both determine
+    // test-data isolation and drive the existing lastServiceOdometer update below.
+    const vehicle = recordData.vehicleId ? await api.getVehicle(recordData.vehicleId) : null;
+    const isTestData = vehicle?.isTestData === true;
+
     const newRecord = {
       ...recordData,
+      isTestData,
       createdAt: serverTimestamp()
     };
     const docRef = await addDoc(collection(db, COLLECTIONS.maintenanceRecords), newRecord);
 
     // Update vehicle's last service odometer
-    if (recordData.vehicleId) {
-      const vehicle = await api.getVehicle(recordData.vehicleId);
-      if (vehicle && recordData.odometer > (vehicle.lastServiceOdometer || 0)) {
-        await api.updateVehicle({ ...vehicle, lastServiceOdometer: recordData.odometer });
-      }
+    if (vehicle && recordData.odometer > (vehicle.lastServiceOdometer || 0)) {
+      await api.updateVehicle({ ...vehicle, lastServiceOdometer: recordData.odometer });
     }
 
-    return { id: docRef.id, ...recordData } as MaintenanceRecord;
+    return { id: docRef.id, ...recordData, isTestData } as MaintenanceRecord;
   },
 
   // ==================== SHIFTS ====================
@@ -820,12 +833,16 @@ const api = {
   },
 
   addCost: async (costData: Omit<Cost, 'id'>): Promise<Cost> => {
+    const vehicle = costData.vehicleId ? await api.getVehicle(costData.vehicleId) : null;
+    const isTestData = vehicle?.isTestData === true;
+
     const newCost = {
       ...costData,
+      isTestData,
       createdAt: serverTimestamp()
     };
     const docRef = await addDoc(collection(db, COLLECTIONS.costs), newCost);
-    return { id: docRef.id, ...costData } as Cost;
+    return { id: docRef.id, ...costData, isTestData } as Cost;
   },
 
   updateCost: async (costId: string, costData: Partial<Cost>): Promise<Cost> => {
@@ -974,8 +991,15 @@ const api = {
   },
 
   addDriverFine: async (fineData: Omit<DriverFine, 'id'>): Promise<DriverFine> => {
-    const docRef = await addDoc(collection(db, COLLECTIONS.driverFines), fineData);
-    return { id: docRef.id, ...fineData } as DriverFine;
+    const [vehicle, driverIsTestData] = await Promise.all([
+      fineData.vehicleId ? api.getVehicle(fineData.vehicleId) : Promise.resolve(null),
+      resolveDriverIsTestData(fineData.driverId),
+    ]);
+    const isTestData = driverIsTestData || vehicle?.isTestData === true;
+
+    const newFine = { ...fineData, isTestData };
+    const docRef = await addDoc(collection(db, COLLECTIONS.driverFines), newFine);
+    return { id: docRef.id, ...fineData, isTestData } as DriverFine;
   },
 
   updateDriverFine: async (fine: DriverFine): Promise<DriverFine> => {
@@ -1048,8 +1072,15 @@ const api = {
   },
 
   addVehicleDamage: async (damageData: Omit<VehicleDamage, 'id'>): Promise<VehicleDamage> => {
-    const docRef = await addDoc(collection(db, COLLECTIONS.vehicleDamages), damageData);
-    return { id: docRef.id, ...damageData } as VehicleDamage;
+    const [vehicle, driverIsTestData] = await Promise.all([
+      damageData.vehicleId ? api.getVehicle(damageData.vehicleId) : Promise.resolve(null),
+      resolveDriverIsTestData(damageData.driverId),
+    ]);
+    const isTestData = driverIsTestData || vehicle?.isTestData === true;
+
+    const newDamage = { ...damageData, isTestData };
+    const docRef = await addDoc(collection(db, COLLECTIONS.vehicleDamages), newDamage);
+    return { id: docRef.id, ...damageData, isTestData } as VehicleDamage;
   },
 
   updateVehicleDamage: async (damage: VehicleDamage): Promise<VehicleDamage> => {
@@ -1073,7 +1104,7 @@ const api = {
 
   getVehicleUsageStats: async (): Promise<VehicleUsageStats[]> => {
     const vehicles = await api.getVehicles();
-    return vehicles.map(v => ({
+    return vehicles.filter(v => v.isTestData !== true).map(v => ({
       vehicleId: v.id,
       avgDailyUsageKm: 0, // Placeholder
       totalDaysTracked: 0, // Placeholder
@@ -1090,10 +1121,12 @@ const api = {
       api.getUsers()
     ]);
 
-    // 2. Filter drivers
+    // 2. Filter drivers. A specific driverId is always honoured even if it is the test
+    // driver (admin viewing that driver's own detail); the fleet-wide summary (no
+    // driverId) excludes test drivers so they never appear in aggregate rankings.
     const drivers = driverId
       ? allUsers.filter(u => u.id === driverId)
-      : allUsers.filter(u => u.role === UserRole.Driver);
+      : allUsers.filter(u => u.role === UserRole.Driver && u.isTestData !== true);
 
     // 3. Aggregate stats per driver
     const summaries: DriverIncidentSummary[] = drivers.map(driver => {

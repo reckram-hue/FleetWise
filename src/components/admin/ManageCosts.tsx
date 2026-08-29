@@ -33,7 +33,14 @@ const ManageCosts: React.FC<ManageCostsProps> = ({ onBack, hideBackButton }) => 
                 api.getVehicleCosts(),
                 api.getVehicles()
             ]);
-            setCosts(costData.sort((a,b) => b.date.getTime() - a.date.getTime()));
+            // Test-data isolation: cost totals/charts below must exclude TEST EV/TEST ICE
+            // spend. A record's own isTestData covers new writes; falling back to the
+            // vehicle's isTestData covers historical costs logged before this marker
+            // existed. The vehicle picker in the Add Cost form intentionally stays
+            // unfiltered so test vehicles remain usable for ongoing testing.
+            const testVehicleIds = new Set(vehicleData.filter(v => v.isTestData === true).map(v => v.id));
+            const realCosts = costData.filter(c => c.isTestData !== true && !testVehicleIds.has(c.vehicleId));
+            setCosts(realCosts.sort((a,b) => b.date.getTime() - a.date.getTime()));
             setVehicles(vehicleData);
             if (vehicleData.length > 0) {
                 setNewCost(prev => ({ ...prev, vehicleId: vehicleData[0].id }));

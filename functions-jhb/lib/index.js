@@ -272,6 +272,7 @@ async function requireDriverSession(input, perf) {
         sessionHash: prepared.sessionHash,
         deviceId: typeof session.deviceId === 'string' ? session.deviceId : 'unknown',
         activeShiftId: typeof driverData.activeShiftId === 'string' ? driverData.activeShiftId : undefined,
+        isTestData: driverData.isTestData === true,
     };
 }
 function stripToDriverSafe(data, id) {
@@ -572,7 +573,13 @@ exports.startShiftJhb = onMeasuredCall('startShiftJhb', async (data, _request, p
             && !currentDriver.data()?.allowedVehicles.includes(vehicleId)) {
             throw new https_1.HttpsError('permission-denied', 'You are not authorized to use this vehicle.');
         }
-        applyStartOdometerContinuity(transaction, currentVehicle.data(), startOdometer, { vehicleId, driverId, shiftId: shiftRef.id });
+        applyStartOdometerContinuity(transaction, currentVehicle.data(), startOdometer, {
+            vehicleId,
+            driverId,
+            shiftId: shiftRef.id,
+            // Test-data isolation: inherited from either party (see shiftData below).
+            isTestData: driverData.isTestData === true || vehicleData.isTestData === true,
+        });
         const shiftData = {
             driverId,
             vehicleId,
@@ -582,6 +589,8 @@ exports.startShiftJhb = onMeasuredCall('startShiftJhb', async (data, _request, p
             endOdometer: null,
             endChargePercent: null,
             status: 'Active',
+            // Test-data isolation: inherited from either party.
+            isTestData: driverData.isTestData === true || vehicleData.isTestData === true,
             createdAt: firestore_1.FieldValue.serverTimestamp(),
             updatedAt: firestore_1.FieldValue.serverTimestamp(),
         };
@@ -662,13 +671,22 @@ exports.startVehicleAssignmentJhb = onMeasuredCall('startVehicleAssignmentJhb', 
             throw new https_1.HttpsError('permission-denied', 'You are not authorized to use this vehicle.');
         }
         assertPredictedRangeMatchesVehicle(currentVehicle.data()?.vehicleType, startPredictedRangeKm);
-        applyStartOdometerContinuity(transaction, currentVehicle.data(), startOdometer, { vehicleId, driverId, shiftId, assignmentId: assignmentRef.id });
+        applyStartOdometerContinuity(transaction, currentVehicle.data(), startOdometer, {
+            vehicleId,
+            driverId,
+            shiftId,
+            assignmentId: assignmentRef.id,
+            // Test-data isolation: inherited from either party (see assignmentRef.set below).
+            isTestData: session.isTestData || currentVehicle.data()?.isTestData === true,
+        });
         transaction.set(assignmentRef, {
             orgId: session.orgId,
             driverId,
             shiftId,
             vehicleId,
             status: 'ACTIVE',
+            // Test-data isolation: inherited from either party.
+            isTestData: session.isTestData || currentVehicle.data()?.isTestData === true,
             startedAt: firestore_1.FieldValue.serverTimestamp(),
             endedAt: null,
             startOdometer: startOdometer ?? null,
@@ -742,6 +760,8 @@ exports.createVehicleInspectionJhb = onMeasuredCall('createVehicleInspectionJhb'
         boundaryType,
         returnIntent: boundaryType === 'PICKUP' ? null : returnIntent,
         status: 'PENDING',
+        // Test-data isolation: inherited directly from the parent assignment.
+        isTestData: assignmentData.isTestData === true,
         capturedAt: null,
         completedAt: null,
         exteriorPhotoPath: null,

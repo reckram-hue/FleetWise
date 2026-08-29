@@ -253,6 +253,7 @@ type DriverSessionContext = {
   sessionHash: string;
   deviceId: string;
   activeShiftId?: string;
+  isTestData: boolean;
 };
 
 async function requireDriverSession(
@@ -326,6 +327,7 @@ async function requireDriverSession(
     sessionHash: prepared.sessionHash,
     deviceId: typeof session.deviceId === 'string' ? session.deviceId : 'unknown',
     activeShiftId: typeof driverData.activeShiftId === 'string' ? driverData.activeShiftId : undefined,
+    isTestData: driverData.isTestData === true,
   };
 }
 
@@ -704,7 +706,13 @@ export const startShiftJhb = onMeasuredCall(
         transaction,
         currentVehicle.data(),
         startOdometer,
-        { vehicleId, driverId, shiftId: shiftRef.id },
+        {
+          vehicleId,
+          driverId,
+          shiftId: shiftRef.id,
+          // Test-data isolation: inherited from either party (see shiftData below).
+          isTestData: driverData.isTestData === true || vehicleData.isTestData === true,
+        },
       );
 
       const shiftData: Record<string, unknown> = {
@@ -716,6 +724,8 @@ export const startShiftJhb = onMeasuredCall(
         endOdometer: null,
         endChargePercent: null,
         status: 'Active',
+        // Test-data isolation: inherited from either party.
+        isTestData: driverData.isTestData === true || vehicleData.isTestData === true,
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       };
@@ -742,6 +752,7 @@ type OdometerContext = {
   driverId: string;
   shiftId: string;
   assignmentId?: string;
+  isTestData: boolean;
 };
 
 function applyStartOdometerContinuity(
@@ -834,7 +845,14 @@ export const startVehicleAssignmentJhb = onMeasuredCall(
         transaction,
         currentVehicle.data(),
         startOdometer,
-        { vehicleId, driverId, shiftId, assignmentId: assignmentRef.id },
+        {
+          vehicleId,
+          driverId,
+          shiftId,
+          assignmentId: assignmentRef.id,
+          // Test-data isolation: inherited from either party (see assignmentRef.set below).
+          isTestData: session.isTestData || currentVehicle.data()?.isTestData === true,
+        },
       );
 
       transaction.set(assignmentRef, {
@@ -843,6 +861,8 @@ export const startVehicleAssignmentJhb = onMeasuredCall(
         shiftId,
         vehicleId,
         status: 'ACTIVE',
+        // Test-data isolation: inherited from either party.
+        isTestData: session.isTestData || currentVehicle.data()?.isTestData === true,
         startedAt: FieldValue.serverTimestamp(),
         endedAt: null,
         startOdometer: startOdometer ?? null,
@@ -942,6 +962,8 @@ export const createVehicleInspectionJhb = onMeasuredCall(
       boundaryType,
       returnIntent: boundaryType === 'PICKUP' ? null : returnIntent,
       status: 'PENDING',
+      // Test-data isolation: inherited directly from the parent assignment.
+      isTestData: assignmentData.isTestData === true,
       capturedAt: null,
       completedAt: null,
       exteriorPhotoPath: null,

@@ -1136,7 +1136,7 @@ async function revokeActiveDriverSessions(
 async function requireDriverSession(data: {
   driverId: string;
   sessionToken: string;
-}, perf?: PerformanceTrace): Promise<{ driverId: string; orgId: string; sessionHash: string; deviceId: string; activeShiftId?: string }> {
+}, perf?: PerformanceTrace): Promise<{ driverId: string; orgId: string; sessionHash: string; deviceId: string; activeShiftId?: string; isTestData: boolean }> {
   const phaseSync = <T>(name: string, operation: () => T): T => (
     perf ? perf.phaseSync(name, operation) : operation()
   );
@@ -1206,6 +1206,7 @@ async function requireDriverSession(data: {
     sessionHash,
     deviceId: session.deviceId,
     activeShiftId: typeof driverData.activeShiftId === 'string' ? driverData.activeShiftId : undefined,
+    isTestData: driverData.isTestData === true,
   };
 }
 
@@ -1949,6 +1950,8 @@ export const startShift = onMeasuredCall('startShift', async (data, context, per
             detectedAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'OPEN',
             type: 'UNACCOUNTED_MILEAGE',
+            // Test-data isolation: inherited from either party (see startShift's shiftData).
+            isTestData: driverData.isTestData === true || vehicleData.isTestData === true,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
@@ -1965,6 +1968,9 @@ export const startShift = onMeasuredCall('startShift', async (data, context, per
         endOdometer: null,
         endChargePercent: null,
         status: 'Active',
+        // Test-data isolation: inherited from either party so downstream stats/leaderboard
+        // aggregation can exclude this record without joining back to users/vehicles.
+        isTestData: driverData.isTestData === true || vehicleData.isTestData === true,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
@@ -2024,13 +2030,14 @@ export const reportDefectWithSession = functions.https.onCall(async (data, conte
     } = validated;
 
     // Session validation — no rate limiting for routine actions post-login.
-    const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
+    const { driverId, isTestData: driverIsTestData } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
 
     // Vehicle must exist (no status restriction — defects can be reported on any vehicle)
     const vehicleDoc = await db.collection('vehicles').doc(vehicleId).get();
     if (!vehicleDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'Vehicle not found');
     }
+    const vehicleData = vehicleDoc.data()!;
 
     // Build defect document using the same schema as reportDefect.
     const defectData: Record<string, any> = {
@@ -2041,6 +2048,8 @@ export const reportDefectWithSession = functions.https.onCall(async (data, conte
       urgency,
       status: 'Open',
       isVisibleToDriver: true,
+      // Test-data isolation: inherited from either party (see startShift).
+      isTestData: driverIsTestData || vehicleData.isTestData === true,
       reportedDateTime: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     };
@@ -2380,9 +2389,17 @@ export const getLeaderboard = onMeasuredCall('getLeaderboard', async (data, cont
     ]));
 
     const leaderboard = perf.phaseSync('leaderboardAggregation', () => {
+      // Test-data isolation: build the set of test driverIds first (covers both drivers
+      // explicitly marked isTestData and, via the shift-level check below, any historical
+      // shift that predates isTestData stamping but still references a test driver).
+      const testDriverIds = new Set(
+        usersSnapshot.docs.filter((doc) => doc.data().isTestData === true).map((doc) => doc.id),
+      );
+
       const totalKmByDriver = new Map<string, number>();
       shiftsSnapshot.docs.forEach((doc) => {
         const shift = doc.data();
+        if (shift.isTestData === true || testDriverIds.has(shift.driverId)) return;
         const start = shift.startOdometer;
         const end = shift.endOdometer;
         if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end)) return;
@@ -2392,6 +2409,7 @@ export const getLeaderboard = onMeasuredCall('getLeaderboard', async (data, cont
       });
 
       return usersSnapshot.docs
+        .filter((doc) => doc.data().isTestData !== true)
         .map((doc) => ({
           driver: stripToDriverSafe(doc.data(), doc.id),
           totalKmDriven: totalKmByDriver.get(doc.id) || 0,
@@ -2432,7 +2450,7 @@ export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', a
       transitionReason = 'SHIFT_START',
     } = validated;
 
-    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
+    const { driverId, isTestData: driverIsTestData } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     const [shiftDoc, vehicleDoc, driverDoc] = await perf.phase('initialRecordReads', () => Promise.all([
       db.collection('shifts').doc(shiftId).get(),
@@ -2539,6 +2557,8 @@ export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', a
             detectedAt: admin.firestore.FieldValue.serverTimestamp(),
             status: 'OPEN',
             type: 'UNACCOUNTED_MILEAGE',
+            // Test-data isolation: inherited from either party (see startVehicleAssignment's assignmentData).
+            isTestData: driverIsTestData || vehicleData.isTestData === true,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
@@ -2551,6 +2571,8 @@ export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', a
         shiftId,
         vehicleId,
         status: 'ACTIVE',
+        // Test-data isolation: inherited from either party (see startShift).
+        isTestData: driverIsTestData || vehicleData.isTestData === true,
         startedAt: admin.firestore.FieldValue.serverTimestamp(),
         endedAt: null,
         startOdometer: startOdometer ?? null,
@@ -3026,6 +3048,9 @@ export const createVehicleInspection = onMeasuredCall('createVehicleInspection',
       // PICKUP -> null; RETURN -> the validated intent (first write wins; never overwritten).
       returnIntent: boundaryType === 'PICKUP' ? null : returnIntent,
       status: 'PENDING',
+      // Test-data isolation: inherited directly from the parent assignment (which already
+      // combined driver/vehicle isTestData at startVehicleAssignment time).
+      isTestData: assignmentData.isTestData === true,
       capturedAt: null,
       completedAt: null,
       exteriorPhotoPath: null,
@@ -3542,6 +3567,8 @@ export const logRefuelWithSession = functions.https.onCall(async (data, context)
       odometer,
       litresFilled,
       fuelCost,
+      // Test-data isolation: inherited from the parent assignment or the vehicle itself.
+      isTestData: assignmentData.isTestData === true || vehicleData.isTestData === true,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };

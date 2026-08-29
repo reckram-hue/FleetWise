@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Edit, AlertTriangle, DollarSign, Calendar, User, Car, X, TrendingUp, Gauge, CheckCircle2 } from 'lucide-react';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
@@ -34,6 +34,12 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
     const [showDamageForm, setShowDamageForm] = useState(false);
     const [selectedFine, setSelectedFine] = useState<DriverFine | null>(null);
     const [selectedDamage, setSelectedDamage] = useState<VehicleDamage | null>(null);
+    // Test-data isolation: the Fines/Damages tabs double as both a real-operational
+    // report AND the edit surface for those same records, so they can't simply exclude
+    // test data unconditionally (that would make a test fine/damage impossible to find
+    // and edit during ongoing testing). Default view is the clean, real-only list; this
+    // toggle is the explicit, deliberate action needed to reveal test records for editing.
+    const [showTestData, setShowTestData] = useState(false);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -61,6 +67,32 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
         };
         fetchData();
     }, []);
+
+    // Test-data isolation (Part C): a record counts as test data if its own isTestData
+    // is true, OR its driverId belongs to a test driver, OR its vehicleId belongs to a
+    // test vehicle — this covers historical fines/damages that predate the isTestData
+    // field entirely, not just newly-created ones.
+    const testDriverIds = useMemo(
+        () => new Set(users.filter(u => u.isTestData === true).map(u => u.id)),
+        [users]
+    );
+    const testVehicleIds = useMemo(
+        () => new Set(vehicles.filter(v => v.isTestData === true).map(v => v.id)),
+        [vehicles]
+    );
+    const isTestRecord = (record: { isTestData?: boolean; driverId: string; vehicleId: string }) =>
+        record.isTestData === true || testDriverIds.has(record.driverId) || testVehicleIds.has(record.vehicleId);
+
+    // Category A (real-operational list + implicit totals): excludes test data by
+    // default. Category B (management/editing of test records) is reached only via the
+    // explicit "Show test data" toggle above — never accidentally hidden functionality,
+    // since the driver/vehicle pickers inside the Add/Edit forms remain fully unfiltered.
+    const visibleFines = showTestData ? fines : fines.filter(f => !isTestRecord(f));
+    const visibleDamages = showTestData ? damages : damages.filter(d => !isTestRecord(d));
+    const visibleDiscrepancies = showTestData ? discrepancies : discrepancies.filter(d => !isTestRecord(d));
+    // The tab badge is a fleet-health indicator, not tied to the toggle — it always
+    // reflects real open discrepancies regardless of whether test data is being viewed.
+    const realOpenDiscrepancyCount = discrepancies.filter(d => d.status === 'OPEN' && !isTestRecord(d)).length;
 
     const handleAddFine = () => {
         setSelectedFine(null);
@@ -107,11 +139,16 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
         return vehicle ? `${vehicle.make} ${vehicle.model} (${vehicle.registration})` : 'Unknown Vehicle';
     };
 
-    const FineCard = ({ fine }: { fine: DriverFine }) => (
-        <Card className="mb-4">
+    const FineCard = ({ fine, isTest }: { fine: DriverFine; isTest?: boolean }) => (
+        <Card className={`mb-4 ${isTest ? 'border-2 border-dashed border-amber-300' : ''}`}>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                    <h4 className="font-semibold text-gray-800">{fine.fineType}</h4>
+                    <h4 className="font-semibold text-gray-800 flex items-center gap-2">
+                        {fine.fineType}
+                        {isTest && (
+                            <span className="px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800">TEST</span>
+                        )}
+                    </h4>
                     <p className="text-sm text-gray-600">{getDriverName(fine.driverId)}</p>
                     <p className="text-sm text-gray-500">{getVehicleInfo(fine.vehicleId)}</p>
                 </div>
@@ -147,11 +184,16 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
         </Card>
     );
 
-    const DamageCard = ({ damage }: { damage: VehicleDamage }) => (
-        <Card className="mb-4">
+    const DamageCard = ({ damage, isTest }: { damage: VehicleDamage; isTest?: boolean }) => (
+        <Card className={`mb-4 ${isTest ? 'border-2 border-dashed border-amber-300' : ''}`}>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                    <h4 className="font-semibold text-gray-800">{damage.damageType}</h4>
+                    <h4 className="font-semibold text-gray-800 flex items-center gap-2">
+                        {damage.damageType}
+                        {isTest && (
+                            <span className="px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800">TEST</span>
+                        )}
+                    </h4>
                     <p className="text-sm text-gray-600">{getDriverName(damage.driverId)}</p>
                     <p className="text-sm text-gray-500">{getVehicleInfo(damage.vehicleId)}</p>
                 </div>
@@ -275,7 +317,7 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                                 { key: 'fines', label: 'Driver Fines', icon: DollarSign },
                                 { key: 'damages', label: 'Vehicle Damages', icon: AlertTriangle },
                                 { key: 'analytics', label: 'Driver Analytics', icon: User },
-                                { key: 'odometer', label: 'Odometer Discrepancies', icon: Gauge, badge: discrepancies.filter(d => d.status === 'OPEN').length }
+                                { key: 'odometer', label: 'Odometer Discrepancies', icon: Gauge, badge: realOpenDiscrepancyCount }
                             ].map(({ key, label, icon: Icon, badge }) => (
                                 <button
                                     key={key}
@@ -307,18 +349,31 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                                 <div>
                                     <div className="flex justify-between items-center mb-4">
                                         <h3 className="text-lg font-semibold">Driver Fines</h3>
-                                        <button
-                                            onClick={handleAddFine}
-                                            className="flex items-center bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg"
-                                        >
-                                            <Plus className="h-4 w-4 mr-2" />
-                                            Add Fine
-                                        </button>
+                                        <div className="flex items-center gap-4">
+                                            <label className="flex items-center text-sm text-gray-600 gap-1.5">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={showTestData}
+                                                    onChange={(e) => setShowTestData(e.target.checked)}
+                                                    className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                                                />
+                                                Show test data
+                                            </label>
+                                            <button
+                                                onClick={handleAddFine}
+                                                className="flex items-center bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg"
+                                            >
+                                                <Plus className="h-4 w-4 mr-2" />
+                                                Add Fine
+                                            </button>
+                                        </div>
                                     </div>
-                                    {fines.length === 0 ? (
-                                        <p className="text-gray-500 text-center py-8">No fines recorded yet.</p>
+                                    {visibleFines.length === 0 ? (
+                                        <p className="text-gray-500 text-center py-8">
+                                            {fines.length === 0 ? 'No fines recorded yet.' : 'No real fines to show. Toggle "Show test data" to view test records.'}
+                                        </p>
                                     ) : (
-                                        fines.map(fine => <FineCard key={fine.id} fine={fine} />)
+                                        visibleFines.map(fine => <FineCard key={fine.id} fine={fine} isTest={isTestRecord(fine)} />)
                                     )}
                                 </div>
                             )}
@@ -328,18 +383,31 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                                 <div>
                                     <div className="flex justify-between items-center mb-4">
                                         <h3 className="text-lg font-semibold">Vehicle Damages</h3>
-                                        <button
-                                            onClick={handleAddDamage}
-                                            className="flex items-center bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg"
-                                        >
-                                            <Plus className="h-4 w-4 mr-2" />
-                                            Add Damage
-                                        </button>
+                                        <div className="flex items-center gap-4">
+                                            <label className="flex items-center text-sm text-gray-600 gap-1.5">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={showTestData}
+                                                    onChange={(e) => setShowTestData(e.target.checked)}
+                                                    className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                                                />
+                                                Show test data
+                                            </label>
+                                            <button
+                                                onClick={handleAddDamage}
+                                                className="flex items-center bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg"
+                                            >
+                                                <Plus className="h-4 w-4 mr-2" />
+                                                Add Damage
+                                            </button>
+                                        </div>
                                     </div>
-                                    {damages.length === 0 ? (
-                                        <p className="text-gray-500 text-center py-8">No damages recorded yet.</p>
+                                    {visibleDamages.length === 0 ? (
+                                        <p className="text-gray-500 text-center py-8">
+                                            {damages.length === 0 ? 'No damages recorded yet.' : 'No real damages to show. Toggle "Show test data" to view test records.'}
+                                        </p>
                                     ) : (
-                                        damages.map(damage => <DamageCard key={damage.id} damage={damage} />)
+                                        visibleDamages.map(damage => <DamageCard key={damage.id} damage={damage} isTest={isTestRecord(damage)} />)
                                     )}
                                 </div>
                             )}
@@ -370,10 +438,23 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                                             <h3 className="text-lg font-semibold text-gray-900">Unaccounted Mileage & Odometer Discrepancies</h3>
                                             <p className="text-sm text-gray-500">Flags instances where a vehicle's pickup odometer was higher than its last recorded return odometer.</p>
                                         </div>
+                                        <label className="flex items-center text-sm text-gray-600 gap-1.5">
+                                            <input
+                                                type="checkbox"
+                                                checked={showTestData}
+                                                onChange={(e) => setShowTestData(e.target.checked)}
+                                                className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                                            />
+                                            Show test data
+                                        </label>
                                     </div>
 
-                                    {discrepancies.length === 0 ? (
-                                        <p className="text-gray-500 text-center py-8">No odometer discrepancies recorded. All vehicle transitions are consistent.</p>
+                                    {visibleDiscrepancies.length === 0 ? (
+                                        <p className="text-gray-500 text-center py-8">
+                                            {discrepancies.length === 0
+                                                ? 'No odometer discrepancies recorded. All vehicle transitions are consistent.'
+                                                : 'No real discrepancies to show. Toggle "Show test data" to view test records.'}
+                                        </p>
                                     ) : (
                                         <div className="overflow-x-auto">
                                             <table className="min-w-full divide-y divide-gray-200 border border-gray-200 rounded-lg">
@@ -390,16 +471,20 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                                                     </tr>
                                                 </thead>
                                                 <tbody className="bg-white divide-y divide-gray-200">
-                                                    {discrepancies.map(d => {
+                                                    {visibleDiscrepancies.map(d => {
                                                         const vehicle = vehicles.find(v => v.id === d.vehicleId);
                                                         const driver = users.find(u => u.id === d.driverId);
                                                         const dateStr = d.detectedAt ? (typeof d.detectedAt === 'string' ? new Date(d.detectedAt).toLocaleString() : (d.detectedAt.toDate ? d.detectedAt.toDate().toLocaleString() : new Date(d.detectedAt).toLocaleString())) : '—';
+                                                        const isTest = isTestRecord(d);
                                                         return (
-                                                            <tr key={d.id} className="hover:bg-gray-50">
+                                                            <tr key={d.id} className={`hover:bg-gray-50 ${isTest ? 'bg-amber-50' : ''}`}>
                                                                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{dateStr}</td>
                                                                 <td className="px-4 py-3 whitespace-nowrap text-sm font-semibold text-gray-900">
                                                                     {vehicle?.registration || d.vehicleId}
                                                                     {vehicle?.alias && <span className="text-gray-500 font-normal ml-1">({vehicle.alias})</span>}
+                                                                    {isTest && (
+                                                                        <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800">TEST</span>
+                                                                    )}
                                                                 </td>
                                                                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-800">
                                                                     {driver ? `${driver.firstName} ${driver.surname}` : d.driverId}

@@ -31,12 +31,16 @@ const AdminDashboard: React.FC = () => {
     useEffect(() => {
         // Fetch vehicle data
         api.getVehicles().then(vehicles => {
+            // Test-data isolation: TEST EV/TEST ICE must remain manageable in
+            // ManageVehicles, but never count toward these fleet-wide KPI cards.
+            const realVehicles = vehicles.filter(v => v.isTestData !== true);
+
             // Exclude sold and end-of-life vehicles from total count
-            const operationalVehicles = vehicles.filter(v =>
+            const operationalVehicles = realVehicles.filter(v =>
                 v.status !== 'Sold' && v.status !== 'End of Life'
             );
             // Count only active vehicles
-            const activeVehicleCount = vehicles.filter(v => v.status === 'Active').length;
+            const activeVehicleCount = realVehicles.filter(v => v.status === 'Active').length;
 
             setTotalVehicles(operationalVehicles.length);
             setActiveVehicles(activeVehicleCount);
@@ -44,7 +48,7 @@ const AdminDashboard: React.FC = () => {
             // Count vehicles needing license renewal within 30 days
             const today = new Date();
             const thirtyDaysFromNow = new Date(today.getTime() + (30 * 24 * 60 * 60 * 1000));
-            const needingLicense = vehicles.filter(v => {
+            const needingLicense = realVehicles.filter(v => {
                 if (!v.licenseExpiryDate) return false;
                 const expiryDate = new Date(v.licenseExpiryDate);
                 return expiryDate <= thirtyDaysFromNow;
@@ -54,8 +58,9 @@ const AdminDashboard: React.FC = () => {
 
         // Fetch driver data
         api.getUsers().then(users => {
-            // Filter only drivers with driver role
-            const drivers = users.filter(u => u.role === UserRole.Driver);
+            // Filter only drivers with driver role, excluding the test driver from
+            // this fleet-wide KPI (still fully visible/manageable in ManageDrivers).
+            const drivers = users.filter(u => u.role === UserRole.Driver && u.isTestData !== true);
 
             // Count drivers needing license renewal within 30 days
             const today = new Date();
@@ -71,7 +76,8 @@ const AdminDashboard: React.FC = () => {
         // Fetch active defects count
         api.getActiveDefects().then(defects => {
             const criticalDefects = defects.filter(d =>
-                d.urgency === DefectUrgency.High || d.urgency === DefectUrgency.Critical
+                d.isTestData !== true
+                && (d.urgency === DefectUrgency.High || d.urgency === DefectUrgency.Critical)
             );
             setActiveDefectsCount(criticalDefects.length);
         });
@@ -320,7 +326,8 @@ const CriticalDefects: React.FC<CriticalDefectsProps> = ({ onDefectClick }) => {
     const fetchDefects = async () => {
       const allDefects = await api.getActiveDefects();
       const critical = allDefects.filter(d =>
-        d.urgency === DefectUrgency.High || d.urgency === DefectUrgency.Critical
+        d.isTestData !== true
+        && (d.urgency === DefectUrgency.High || d.urgency === DefectUrgency.Critical)
       );
       setDefects(critical);
     };
@@ -1159,7 +1166,7 @@ const DriverLicenseRenewalAlerts: React.FC<DriverLicenseRenewalAlertsProps> = ({
         setLoading(true);
         try {
             const users = await api.getUsers();
-            const drivers = users.filter(u => u.role === UserRole.Driver);
+            const drivers = users.filter(u => u.role === UserRole.Driver && u.isTestData !== true);
 
             // Get drivers with licenses expiring in the next 30 days
             const today = new Date();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Vehicle, FuelEconomyAlert } from '../../types';
 import api from '../../services/firebaseApi';
 import Card from '../shared/Card';
@@ -23,32 +23,43 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
     const [loading, setLoading] = useState(true);
     const [selectedVehicle, setSelectedVehicle] = useState<string | null>(null);
 
+    // Test-data isolation: fleet economy KPIs must never include TEST EV/TEST ICE,
+    // regardless of whether the caller already filtered its vehicles prop.
+    const realVehicles = useMemo(
+        () => (vehicles || []).filter(v => v.isTestData !== true),
+        [vehicles]
+    );
+
     useEffect(() => {
-        if (vehicles && vehicles.length > 0) {
+        if (realVehicles.length > 0) {
             fetchEconomyData();
+        } else {
+            setAlerts([]);
+            setEconomyStatuses({});
         }
-    }, [vehicles]);
+    }, [realVehicles]);
 
     const fetchEconomyData = async () => {
         setLoading(true);
         try {
-            if (!vehicles || vehicles.length === 0) {
+            if (realVehicles.length === 0) {
                 setAlerts([]);
                 setEconomyStatuses({});
                 return;
             }
 
-            const [alertsData, ...statusPromises] = await Promise.all([
+            const [allAlertsData, ...statusPromises] = await Promise.all([
                 api.getFuelEconomyAlerts(),
-                ...vehicles.map(v => api.calculateFuelEconomyStatus(v.id))
+                ...realVehicles.map(v => api.calculateFuelEconomyStatus(v.id))
             ]);
 
-            setAlerts(alertsData || []);
+            const realVehicleIds = new Set(realVehicles.map(v => v.id));
+            setAlerts((allAlertsData || []).filter(a => realVehicleIds.has(a.vehicleId)));
 
             const statusMap: { [vehicleId: string]: any } = {};
             statusPromises.forEach((status, index) => {
-                if (status && vehicles[index]) {
-                    statusMap[vehicles[index].id] = status;
+                if (status && realVehicles[index]) {
+                    statusMap[realVehicles[index].id] = status;
                 }
             });
             setEconomyStatuses(statusMap);
@@ -130,7 +141,7 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
                     <div className="flex items-center">
                         <CheckCircle className="h-8 w-8 text-green-500 mr-3" />
                         <div>
-                            <p className="text-2xl font-bold text-gray-900">{(vehicles || []).length - criticalVehicles.length}</p>
+                            <p className="text-2xl font-bold text-gray-900">{realVehicles.length - criticalVehicles.length}</p>
                             <p className="text-sm text-gray-500">Performing Well</p>
                         </div>
                     </div>
@@ -146,7 +157,7 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
                     </h3>
                     <div className="space-y-3">
                         {activeAlerts.map(alert => {
-                            const vehicle = vehicles.find(v => v.id === alert.vehicleId);
+                            const vehicle = realVehicles.find(v => v.id === alert.vehicleId);
                             const severityColor = {
                                 low: 'border-yellow-200 bg-yellow-50',
                                 medium: 'border-orange-200 bg-orange-50',
@@ -201,7 +212,7 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                            {(vehicles || []).map(vehicle => {
+                            {realVehicles.map(vehicle => {
                                 const status = economyStatuses[vehicle.id];
                                 if (!status) return null;
 

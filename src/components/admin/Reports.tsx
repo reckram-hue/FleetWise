@@ -33,8 +33,11 @@ const Reports: React.FC<ReportsProps> = ({ onBack }) => {
                 api.getVehicles(),
                 api.getUsers()
             ]);
-            setVehicles(vehicleData);
-            setDrivers(userData.filter(u => u.role === UserRole.Driver));
+            // Test-data isolation: every consumer of this state (fuel economy KPIs,
+            // printable fleet/driver reports) is a fleet-wide report, not a management
+            // screen, so test entities are excluded here rather than per-consumer.
+            setVehicles(vehicleData.filter(v => v.isTestData !== true));
+            setDrivers(userData.filter(u => u.role === UserRole.Driver && u.isTestData !== true));
         } catch (error) {
             console.error('Failed to fetch report data:', error);
             setError('Failed to load report data');

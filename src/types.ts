@@ -84,6 +84,8 @@ export interface MaintenanceRecord {
     serviceType: string;
     cost: number;
     notes?: string;
+    // Test-data isolation marker — inherited from the vehicle at creation time.
+    isTestData?: boolean;
 }
 
 export interface ScheduledService {
@@ -222,6 +224,8 @@ export interface Shift {
     startChargePercent?: number; // for EVs
     endChargePercent?: number; // for EVs
     status: ShiftStatus;
+    // Test-data isolation marker — inherited from the driver or vehicle at creation time.
+    isTestData?: boolean;
 }
 
 // A VehicleAssignment represents "this driver possessed/used this vehicle during this
@@ -255,6 +259,8 @@ export interface VehicleAssignment {
     transitionReason: VehicleAssignmentTransitionReason;
     createdAt: Date;
     updatedAt: Date;
+    // Test-data isolation marker — inherited from the driver or vehicle at creation time.
+    isTestData?: boolean;
 }
 
 // A VehicleInspection captures chain-of-custody / condition evidence at a
@@ -301,6 +307,8 @@ export interface VehicleInspection {
     expiresAt?: Date | null;
     createdAt: Date;
     updatedAt: Date;
+    // Test-data isolation marker — inherited from the parent VehicleAssignment.
+    isTestData?: boolean;
 }
 
 // Driver-safe summary returned with the consolidated active operational state. It contains
@@ -398,6 +406,8 @@ export interface DefectReport {
 
     // Tracking
     isVisibleToDriver: boolean; // False if marked as duplicate
+    // Test-data isolation marker — inherited from the driver or vehicle at creation time.
+    isTestData?: boolean;
 }
 
 export enum CostCategory {
@@ -415,6 +425,8 @@ export interface Cost {
     cost: number;
     category: CostCategory;
     description: string;
+    // Test-data isolation marker — inherited from the vehicle at creation time.
+    isTestData?: boolean;
 }
 
 export interface LeaderboardEntry {
@@ -475,6 +487,8 @@ export interface RefuelRecord {
     fuelCost: number;
     oilCost?: number;
     notes?: string;
+    // Test-data isolation marker — inherited from the assignment or vehicle at creation time.
+    isTestData?: boolean;
 }
 
 export interface ChargeRecord {
@@ -632,6 +646,8 @@ export interface DriverFine {
     // Auto-allocation tracking
     allocatedAutomatically?: boolean; // True if driver was determined via shift lookup
     allocationMethod?: 'manual' | 'shift_lookup' | 'single_driver'; // How the driver was determined
+    // Test-data isolation marker — inherited from the driver or vehicle at creation time.
+    isTestData?: boolean;
 }
 
 export interface VehicleDamage {
@@ -651,6 +667,8 @@ export interface VehicleDamage {
     claimNumber?: string;
     notes?: string;
     photos?: string[]; // URLs or base64
+    // Test-data isolation marker — inherited from the driver or vehicle at creation time.
+    isTestData?: boolean;
 }
 
 export interface DriverIncidentSummary {
@@ -748,4 +766,6 @@ export interface OdometerDiscrepancy {
     createdAt?: Date | string | any;
     updatedAt?: Date | string | any;
     notes?: string;
+    // Test-data isolation marker — inherited from the driver or vehicle at creation time.
+    isTestData?: boolean;
 }
