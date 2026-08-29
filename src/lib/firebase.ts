@@ -38,7 +38,8 @@ initializeFirestore(app, {
 export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
-export const functions = getFunctions(app); // default region us-central1
+const functionsRegion = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || "us-central1";
+export const functions = getFunctions(app, functionsRegion);
 
 // Temporary performance instrumentation for the driver journeys. The correlation ID is
 // random and opaque; it is never derived from credentials, users, or business data.
