@@ -1785,15 +1785,21 @@ export const createChargingLocation = onProdCall(async (data, context) => {
     const { uid: adminUid, data: adminData } = await requireAdmin(context);
     const validated = CreateChargingLocationSchema.parse(data);
 
-    const chargingLocation: Record<string, any> = {
-      ...validated,
-      name: validated.name.trim(),
-      active: validated.active ?? true,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      createdBy: adminUid,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedBy: adminUid,
-    };
+    // Optional fields left blank must be OMITTED entirely — the Admin SDK rejects an
+    // explicit `undefined` value (ignoreUndefinedProperties is deliberately not enabled
+    // globally), and Zod's parsed output always includes every schema key, even unset
+    // optional ones, so spreading `validated` directly would leak `undefined` into Firestore.
+    const chargingLocation: Record<string, any> = {};
+    for (const [key, value] of Object.entries(validated)) {
+      if (value !== undefined) {
+        chargingLocation[key] = key === 'name' && typeof value === 'string' ? value.trim() : value;
+      }
+    }
+    chargingLocation.active = chargingLocation.active ?? true;
+    chargingLocation.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    chargingLocation.createdBy = adminUid;
+    chargingLocation.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    chargingLocation.updatedBy = adminUid;
 
     if (!chargingLocation.orgId && typeof adminData.orgId === 'string' && adminData.orgId.trim()) {
       chargingLocation.orgId = adminData.orgId.trim();
