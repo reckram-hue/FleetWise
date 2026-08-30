@@ -23,6 +23,11 @@ export interface ActiveShiftState {
     registration: string;
     alias?: string;
     vehicleType: 'ICE' | 'EV';
+    // Mirrors Vehicle.activeChargingSessionId — present while a mid-shift charging session
+    // is OPEN for this vehicle. Kept in sync client-side by LogChargeForm immediately after
+    // startChargingSession/endChargingSession, and refreshed from the server on every
+    // resolveActiveShiftState() call (e.g. app mount).
+    activeChargingSessionId?: string;
   };
   // Server-returned inspection summary from the consolidated hydration callable.
   inspections?: DriverOperationalInspection[];

@@ -73,6 +73,7 @@ export function toActiveShiftState(
       registration: vehicle?.registration || 'Unknown',
       alias: vehicle?.alias,
       vehicleType: vehicle?.vehicleType || 'ICE',
+      activeChargingSessionId: vehicle?.activeChargingSessionId || undefined,
     };
     if (assignment.startOdometer != null) base.assignmentStartOdo = assignment.startOdometer;
     if (assignment.startChargePercent != null) base.assignmentStartChargePercent = assignment.startChargePercent;

@@ -48,6 +48,7 @@ import {
   ChargeRecord,
   ChargingLocation,
   ChargingLocationForDriver,
+  ChargingType,
   AppSettings,
   FuelEconomyAlert,
   ServiceProvider,
@@ -981,6 +982,7 @@ const api = {
     return convertTimestamps(data.record) as RefuelRecord;
   },
 
+  /** @deprecated See ChargeRecord — dead read path (chargeRecords has never been written to). */
   getChargeRecords: async (vehicleId?: string): Promise<ChargeRecord[]> => {
     let q;
     if (vehicleId) {
@@ -992,9 +994,53 @@ const api = {
     return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as ChargeRecord);
   },
 
+  /**
+   * @deprecated Dead write path: Firestore rules deny client `create` on chargeRecords
+   * unconditionally, so this has never successfully written a document. Superseded by
+   * startChargingSession/endChargingSession below. Kept for backwards compatibility only.
+   */
   addChargeRecord: async (recordData: Omit<ChargeRecord, 'id'>): Promise<ChargeRecord> => {
     const docRef = await addDoc(collection(db, COLLECTIONS.chargeRecords), recordData);
     return { id: docRef.id, ...recordData } as ChargeRecord;
+  },
+
+  // ==================== MID-SHIFT CHARGING SESSIONS ====================
+  /**
+   * Start a mid-shift EV charging session for the driver's current active assignment.
+   * No vehicleId parameter: the vehicle is always derived server-side from assignmentId.
+   */
+  startChargingSession: async (params: {
+    driverId: string;
+    sessionToken: string;
+    assignmentId: string;
+    startOdometer: number;
+    startChargePercent: number;
+    startPredictedRangeKm: number;
+    chargingLocationId: string;
+    chargingType: ChargingType;
+    deviceId?: string;
+  }): Promise<{ chargingSessionId: string }> => {
+    const data = await callFunction<{ success: boolean; chargingSessionId: string; message: string }>('startChargingSession', params);
+    return { chargingSessionId: data.chargingSessionId };
+  },
+
+  /**
+   * End a mid-shift EV charging session. The driver's shift and vehicle assignment are left
+   * untouched — the same assignment remains active afterwards.
+   */
+  endChargingSession: async (params: {
+    driverId: string;
+    sessionToken: string;
+    chargingSessionId: string;
+    endChargePercent: number;
+    endPredictedRangeKm: number;
+    chargerEnergyDeliveredKWh?: number;
+    chargeCost?: number;
+    notes?: string;
+    deviceId?: string;
+  }): Promise<{ estimatedBatteryEnergyAddedKWh: number | null }> => {
+    const data = await callFunction<{ success: boolean; chargingSessionId: string; estimatedBatteryEnergyAddedKWh: number | null; message: string }>('endChargingSession', params);
+    return { estimatedBatteryEnergyAddedKWh: data.estimatedBatteryEnergyAddedKWh };
   },
 
   // ==================== DRIVER INCIDENTS ====================

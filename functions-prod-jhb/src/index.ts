@@ -6,6 +6,13 @@ import { z } from 'zod';
 import * as crypto from 'crypto';
 import { createActiveAdminProfile, requireActiveAdmin } from './adminAuthorization';
 import { onCall as onCallV2 } from 'firebase-functions/v2/https';
+import {
+  assertCanStartChargingSession,
+  assertCanEndChargingSession,
+  shouldClearVehicleChargingGuard,
+  estimateBatteryEnergyAddedKWh,
+  resolveChargingSessionIsTestData,
+} from './chargingSession';
 
 const PROJECT_ID = 'fleetwise-prod-jhb';
 const STORAGE_BUCKET = 'fleetwise-prod-jhb.firebasestorage.app';
@@ -342,6 +349,47 @@ const EndVehicleAssignmentSchema = z.object({
   // able to bypass RETURN-inspection enforcement via a cancellation reason (WP7D2).
   // Cancellation belongs to a future admin/recovery callable.
   transitionReason: z.enum(['VEHICLE_SWAP', 'SHIFT_END']),
+  deviceId: optionalString,
+});
+
+// Mid-shift EV charging: the driver stops to charge without ending the shift/assignment.
+// Distinct from the leftForCharging fields above (endVehicleAssignment), which record a
+// vehicle being RETURNED and left charging at end-of-assignment — a different business event.
+const ChargingTypeEnum = z.enum(['COMPANY_AC', 'COMPANY_DC', 'PUBLIC_AC', 'PUBLIC_DC']);
+
+const StartChargingSessionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  assignmentId: z.string().min(1, 'Assignment ID is required'),
+  // No vehicleId field by design: the vehicle is always derived from the active assignment,
+  // so a driver has no way to select or assert a different vehicle (business rule 1).
+  startOdometer: z.number().min(0, 'Start odometer must be positive'),
+  startChargePercent: z.number().min(0).max(100, 'Start charge percent must be between 0 and 100'),
+  startPredictedRangeKm: z.number().finite().min(0, 'Predicted range must be non-negative')
+    .max(MAX_PREDICTED_RANGE_KM, `Predicted range cannot exceed ${MAX_PREDICTED_RANGE_KM} km`),
+  chargingLocationId: z.string().min(1, 'Charging location is required'),
+  chargingType: ChargingTypeEnum,
+  deviceId: optionalString,
+});
+
+const EndChargingSessionSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  chargingSessionId: z.string().min(1, 'Charging session ID is required'),
+  endChargePercent: z.number().min(0).max(100, 'End charge percent must be between 0 and 100'),
+  endPredictedRangeKm: z.number().finite().min(0, 'Predicted range must be non-negative')
+    .max(MAX_PREDICTED_RANGE_KM, `Predicted range cannot exceed ${MAX_PREDICTED_RANGE_KM} km`),
+  // Charger-metered/billed energy — optional. Never required: not every location has
+  // trustworthy metering, and the driver must never be forced to invent a number.
+  chargerEnergyDeliveredKWh: z.preprocess(
+    (v) => (v === null || v === undefined ? undefined : v),
+    z.number().finite().min(0, 'Charger energy delivered must be non-negative').optional()
+  ),
+  chargeCost: z.preprocess(
+    (v) => (v === null || v === undefined ? undefined : v),
+    z.number().finite().min(0, 'Charge cost must be non-negative').optional()
+  ),
+  notes: optionalNotes,
   deviceId: optionalString,
 });
 
@@ -815,6 +863,7 @@ function stripToVehicleSafe(vehicleData: FirebaseFirestore.DocumentData, id: str
     currentOdometer: typeof vehicleData.currentOdometer === 'number' ? vehicleData.currentOdometer : null,
     activeShiftId: vehicleData.activeShiftId || null,
     activeAssignmentId: vehicleData.activeAssignmentId || null,
+    activeChargingSessionId: vehicleData.activeChargingSessionId || null,
     isTestData: vehicleData.isTestData === true,
   };
 }
@@ -2898,6 +2947,196 @@ export const endVehicleAssignment = onMeasuredCall('endVehicleAssignment', async
     }
     console.error('Error in endVehicleAssignment:', error);
     throw new functions.https.HttpsError('internal', 'Failed to end vehicle assignment: ' + error.message);
+  }
+});
+
+/**
+ * Start a mid-shift EV charging session. Session-authenticated. The driver stops to charge
+ * without ending the shift or vehicle assignment — this callable never mutates shifts or
+ * vehicleAssignments, only the new chargingSessions collection plus a vehicle-level guard
+ * pointer (activeChargingSessionId) that is intentionally SEPARATE from openChargingEventId
+ * (the return-for-charging handover flow's own guard — the two business events must never
+ * share a document or a guard field).
+ */
+export const startChargingSession = onMeasuredCall('startChargingSession', async (data, context, perf) => {
+  try {
+    const validated = StartChargingSessionSchema.parse(data);
+    const {
+      driverId: reqDriverId,
+      sessionToken,
+      assignmentId,
+      startOdometer,
+      startChargePercent,
+      startPredictedRangeKm,
+      chargingLocationId,
+      chargingType,
+    } = validated;
+
+    const { driverId, isTestData: driverIsTestData } = await perf.phase(
+      'sessionValidation',
+      () => requireDriverSession({ driverId: reqDriverId, sessionToken }),
+    );
+
+    // Validates: assignment belongs to this driver, assignment is ACTIVE, vehicle exists.
+    // The vehicle is derived entirely from the assignment — there is no vehicleId input, so
+    // the driver has no way to select or assert a different vehicle (business rule 1).
+    const { assignmentData, vehicleRef, vehicleData } = await perf.phase(
+      'assignmentValidation',
+      () => getActiveAssignmentForDriverAction(driverId, assignmentId),
+    );
+
+    const orgId = assignmentData.orgId || DEFAULT_ORG_ID;
+    const chargingLocationRef = db.collection('chargingLocations').doc(chargingLocationId);
+    const chargingSessionRef = db.collection('chargingSessions').doc();
+
+    await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
+      const [txVehicleDoc, txLocationDoc] = await Promise.all([
+        transaction.get(vehicleRef),
+        transaction.get(chargingLocationRef),
+      ]);
+
+      // Single authoritative validation pass, re-run against transactionally-fresh reads to
+      // close the race window (in particular: a second OPEN session, or the location being
+      // deactivated, between the earlier reads and this transaction).
+      assertCanStartChargingSession(
+        driverId,
+        assignmentData as { driverId: string; status: string },
+        txVehicleDoc.data() as { vehicleType: string; activeChargingSessionId?: string | null },
+        txLocationDoc.exists ? (txLocationDoc.data() as { active: boolean; orgId?: string | null }) : null,
+        orgId,
+      );
+
+      // Preserves the handover facts even if the location document changes later.
+      const locationSnapshot = chargingLocationSnapshot(txLocationDoc.data()!);
+
+      transaction.set(chargingSessionRef, {
+        id: chargingSessionRef.id,
+        orgId,
+        vehicleId: assignmentData.vehicleId,
+        driverId,
+        shiftId: assignmentData.shiftId,
+        assignmentId,
+        status: 'OPEN',
+        startedAt: admin.firestore.FieldValue.serverTimestamp(),
+        endedAt: null,
+        startOdometer,
+        startChargePercent,
+        startPredictedRangeKm,
+        endChargePercent: null,
+        endPredictedRangeKm: null,
+        chargingLocationId,
+        chargingLocationSnapshot: locationSnapshot,
+        chargingType,
+        chargerEnergyDeliveredKWh: null,
+        estimatedBatteryEnergyAddedKWh: null,
+        chargeCost: null,
+        notes: null,
+        // Test-data isolation: inherited from either party, matching every other
+        // driver-session-authenticated write in this file.
+        isTestData: resolveChargingSessionIsTestData(driverIsTestData, vehicleData.isTestData === true),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      transaction.update(vehicleRef, {
+        activeChargingSessionId: chargingSessionRef.id,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }));
+
+    return { success: true, chargingSessionId: chargingSessionRef.id, message: 'Charging session started' };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => e.path.join('.') + ': ' + e.message).join(', '));
+    }
+    console.error('Error in startChargingSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to start charging session: ' + error.message);
+  }
+});
+
+/**
+ * End a mid-shift EV charging session. Session-authenticated. Never touches shifts or
+ * vehicleAssignments — the same assignment remains ACTIVE throughout and after this call.
+ */
+export const endChargingSession = onMeasuredCall('endChargingSession', async (data, context, perf) => {
+  try {
+    const validated = EndChargingSessionSchema.parse(data);
+    const {
+      driverId: reqDriverId,
+      sessionToken,
+      chargingSessionId,
+      endChargePercent,
+      endPredictedRangeKm,
+      chargerEnergyDeliveredKWh,
+      chargeCost,
+      notes,
+    } = validated;
+
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
+
+    const sessionRef = db.collection('chargingSessions').doc(chargingSessionId);
+    const sessionDoc = await perf.phase('sessionRead', () => sessionRef.get());
+    if (!sessionDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Charging session not found.');
+    }
+    const sessionData = sessionDoc.data()!;
+    // Fast-fail before opening a transaction (matches endVehicleAssignment's pattern of an
+    // early check followed by an authoritative in-transaction re-check).
+    assertCanEndChargingSession(driverId, sessionData as { driverId: string; status: string });
+
+    const vehicleRef = db.collection('vehicles').doc(sessionData.vehicleId);
+    let resultEstimatedBatteryEnergyAddedKWh: number | null = null;
+
+    await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
+      const [txSessionDoc, txVehicleDoc] = await Promise.all([
+        transaction.get(sessionRef),
+        transaction.get(vehicleRef),
+      ]);
+      const txSession = txSessionDoc.data()!;
+      assertCanEndChargingSession(driverId, txSession as { driverId: string; status: string });
+
+      // Battery energy added is ALWAYS server-derived from usable battery capacity x SOC
+      // delta — never client-asserted — so it can't be fabricated or inflated. chargerEnergy
+      // DeliveredKWh (below) is the separate, driver/meter-reported figure for locations
+      // with trustworthy metering — the two concepts are never merged (business rule 12).
+      const txVehicleData = txVehicleDoc.data() || {};
+      resultEstimatedBatteryEnergyAddedKWh = estimateBatteryEnergyAddedKWh(
+        txVehicleData.batteryCapacityKwh,
+        txSession.startChargePercent,
+        endChargePercent,
+      );
+
+      transaction.update(sessionRef, {
+        status: 'CLOSED',
+        endedAt: admin.firestore.FieldValue.serverTimestamp(),
+        endChargePercent,
+        endPredictedRangeKm,
+        chargerEnergyDeliveredKWh: chargerEnergyDeliveredKWh ?? null,
+        estimatedBatteryEnergyAddedKWh: resultEstimatedBatteryEnergyAddedKWh,
+        chargeCost: chargeCost ?? null,
+        notes: notes ?? null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // Clear the vehicle guard only if it still points to this session (idempotency safety,
+      // matching the same pattern endVehicleAssignment uses for shift/vehicle pointers).
+      if (shouldClearVehicleChargingGuard(txVehicleDoc.data() || {}, chargingSessionId)) {
+        transaction.update(vehicleRef, {
+          activeChargingSessionId: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    }));
+
+    return { success: true, chargingSessionId, estimatedBatteryEnergyAddedKWh: resultEstimatedBatteryEnergyAddedKWh, message: 'Charging session ended' };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => e.path.join('.') + ': ' + e.message).join(', '));
+    }
+    console.error('Error in endChargingSession:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to end charging session: ' + error.message);
   }
 });
 

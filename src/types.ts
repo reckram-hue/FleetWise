@@ -206,6 +206,12 @@ export interface Vehicle {
     // Authoritative pointer to the single OPEN ChargingEvent, if the EV was returned
     // for charging. It is set/cleared only by server-side lifecycle callables.
     openChargingEventId?: string;
+    // Authoritative pointer to the single OPEN mid-shift ChargingSession, if the driver is
+    // currently charging without ending the shift/assignment. Distinct from
+    // openChargingEventId (return-for-charging handover) — the two flows are different
+    // business events and must never share a guard field. Set/cleared only by
+    // startChargingSession / endChargingSession.
+    activeChargingSessionId?: string;
 }
 
 export enum ShiftStatus {
@@ -495,6 +501,12 @@ export interface RefuelRecord {
     isTestData?: boolean;
 }
 
+/**
+ * @deprecated Legacy single-shot charge record. Never successfully written — the frontend
+ * never called addChargeRecord, and Firestore rules deny client `create` on chargeRecords
+ * outright. Superseded by ChargingSession (mid-shift, stateful start/end) below. Kept for
+ * backwards compatibility per policy; do not build new features against this type.
+ */
 export interface ChargeRecord {
     id: string;
     vehicleId: string;
@@ -596,6 +608,61 @@ export interface ChargingEvent {
     pickupAssignmentId?: string | null;
     closedAt?: Date | null;
     reconciledAt?: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
+// Charging source/type for a mid-shift charging session. Structured as a closed union (not
+// arbitrary strings) so backend validation and frontend selects stay in lockstep.
+export type ChargingType =
+    | 'COMPANY_AC'
+    | 'COMPANY_DC'
+    | 'PUBLIC_AC'
+    | 'PUBLIC_DC';
+
+export const CHARGING_TYPE_LABELS: Record<ChargingType, string> = {
+    COMPANY_AC: 'Company AC',
+    COMPANY_DC: 'Company DC',
+    PUBLIC_AC: 'Public AC',
+    PUBLIC_DC: 'Public DC',
+};
+
+/**
+ * A mid-shift EV charging session: the driver stops to charge without ending the shift or
+ * vehicle assignment, then continues on the same assignment afterwards. This is a distinct
+ * business event from ChargingEvent (which records a vehicle being RETURNED and left for
+ * charging at end-of-assignment) — the two must never share Firestore documents or the
+ * vehicle-level guard field (see Vehicle.activeChargingSessionId vs openChargingEventId).
+ */
+export interface ChargingSession {
+    id: string;
+    orgId: string;
+    vehicleId: string;
+    driverId: string;
+    shiftId: string;
+    assignmentId: string;
+    status: ChargingLifecycleStatus;
+    startedAt: Date;
+    endedAt?: Date | null;
+    startOdometer: number;
+    startChargePercent: number;
+    startPredictedRangeKm: number;
+    endChargePercent?: number | null;
+    endPredictedRangeKm?: number | null;
+    chargingLocationId: string;
+    chargingLocationSnapshot: ChargingLocationSnapshot;
+    chargingType: ChargingType;
+    // Charger-metered/billed energy, when known — reported by the driver or later
+    // reconciled by admin from an invoice. Never invented; null when not known.
+    chargerEnergyDeliveredKWh?: number | null;
+    // Server-derived estimate from usable battery capacity x SOC delta. Left null (never
+    // fabricated) when the vehicle's battery capacity isn't known. Deliberately a SEPARATE
+    // field from chargerEnergyDeliveredKWh — battery energy gained and charger energy
+    // supplied/billed are different concepts (charging losses mean they're rarely equal).
+    estimatedBatteryEnergyAddedKWh?: number | null;
+    chargeCost?: number | null;
+    notes?: string | null;
+    isTestData?: boolean;
     createdAt: Date;
     updatedAt: Date;
 }

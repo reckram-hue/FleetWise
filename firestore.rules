@@ -119,6 +119,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ---- chargingSessions ----
+    // Mid-shift EV charging session records. Opened/closed only from startChargingSession /
+    // endChargingSession via the Admin SDK — never directly by the client, matching every
+    // other driver operational collection in this file.
+    match /chargingSessions/{id} {
+      allow read, write: if false;
+    }
+
     // ---- server-only ----
     match /rateLimits/{id} { allow read, write: if false; }
 

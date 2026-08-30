@@ -140,7 +140,7 @@ const DriverDashboard: React.FC = () => {
 
     if (showReportDefect && hasActiveAssignment && activeVehicle) return <ReportDefectForm onBack={() => setShowReportDefect(false)} currentVehicle={activeVehicle} />;
     if (showMyStats) return <MyStats onBack={() => setShowMyStats(false)} currentUser={currentUser} />;
-    if (showLogCharge) return <LogChargeForm onBack={() => setShowLogCharge(false)} activeVehicle={activeVehicle} />;
+    if (showLogCharge) return <LogChargeForm onBack={() => setShowLogCharge(false)} assignmentId={localActiveShift!.assignmentId!} activeVehicle={activeVehicle} />;
     if (showLogRefuel && hasActiveAssignment && activeVehicle) return <LogRefuelForm onBack={() => setShowLogRefuel(false)} assignmentId={localActiveShift!.assignmentId!} activeVehicle={activeVehicle} />;
 
 
@@ -192,9 +192,9 @@ const DriverDashboard: React.FC = () => {
                         {hasActiveAssignment && (activeVehicle?.vehicleType === VehicleType.EV ? (
                             <MainButton
                                 icon={<Bolt size={48} />}
-                                text="Log Charge"
+                                text={activeVehicle?.activeChargingSessionId ? "End Charge" : "Log Charge"}
                                 onClick={() => setShowLogCharge(true)}
-                                color="bg-teal-500 hover:bg-teal-600"
+                                color={activeVehicle?.activeChargingSessionId ? "bg-orange-500 hover:bg-orange-600" : "bg-teal-500 hover:bg-teal-600"}
                             />
                         ) : (
                             <MainButton

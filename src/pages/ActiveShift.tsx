@@ -457,8 +457,8 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
                   </button>
                   {currentVehicle.vehicleType === 'EV' ? (
                     <button onClick={() => setShowLogCharge(true)} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all active:scale-95">
-                      <div className="bg-teal-50 p-3 rounded-full mb-2"><Bolt className="h-6 w-6 text-teal-600" /></div>
-                      <span className="font-medium text-gray-800">Log Charge</span>
+                      <div className={`p-3 rounded-full mb-2 ${currentVehicle.activeChargingSessionId ? 'bg-orange-50' : 'bg-teal-50'}`}><Bolt className={`h-6 w-6 ${currentVehicle.activeChargingSessionId ? 'text-orange-600' : 'text-teal-600'}`} /></div>
+                      <span className="font-medium text-gray-800">{currentVehicle.activeChargingSessionId ? 'End Charge' : 'Log Charge'}</span>
                     </button>
                   ) : (
                     <button onClick={() => setShowLogRefuel(true)} className="flex flex-col items-center justify-center p-4 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-all active:scale-95">
@@ -501,7 +501,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
           <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><ReportDefectForm onBack={() => setShowReportFault(false)} currentVehicle={currentVehicle} /></div>
         )}
         {showLogCharge && currentVehicle && (
-          <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><LogChargeForm onBack={() => setShowLogCharge(false)} activeVehicle={currentVehicle} /></div>
+          <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><LogChargeForm onBack={() => setShowLogCharge(false)} assignmentId={activeShift.assignmentId || ''} activeVehicle={currentVehicle} /></div>
         )}
         {showLogRefuel && currentVehicle && (
           <div className="fixed inset-0 bg-white z-50 overflow-y-auto"><LogRefuelForm onBack={() => setShowLogRefuel(false)} assignmentId={activeShift.assignmentId || ''} activeVehicle={currentVehicle} /></div>
