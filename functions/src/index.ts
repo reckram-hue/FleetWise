@@ -3539,8 +3539,14 @@ export const getVehicleDefectsForSession = onMeasuredCall('getVehicleDefectsForS
 
     await perf.phase('sessionValidation', () => requireDriverSession(validated));
 
-    // Match the legacy driver-visible pickup behavior: return all driver-visible defects for
-    // the selected vehicle, regardless of legacy/new status labels, and sort newest-first.
+    // Return the driver-visible, currently-OUTSTANDING defects for the selected vehicle —
+    // this powers driver-facing "does this vehicle have active faults" views, not history.
+    // Resolved defects are excluded: a fixed fault is no longer outstanding. Duplicate
+    // defects are also excluded: a Duplicate-status record exists only to point at another
+    // (still-tracked) defect as the authoritative report via `duplicateOf`, so it never
+    // represents an independently-actionable fault of its own. Neither exclusion deletes or
+    // hides these records from admin — getAllDefects (admin) reads the full collection
+    // directly and is unaffected by this callable's filtering.
     const snap = await perf.phase('defectQuery', () => db.collection('defects')
       .where('vehicleId', '==', vehicleId)
       .get());
@@ -3548,6 +3554,7 @@ export const getVehicleDefectsForSession = onMeasuredCall('getVehicleDefectsForS
     const defects = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .filter((defect: any) => defect.isVisibleToDriver)
+      .filter((defect: any) => defect.status !== 'Resolved' && defect.status !== 'Duplicate')
       .sort((a: any, b: any) => {
         const aTime = a?.reportedDateTime?.toDate ? a.reportedDateTime.toDate().getTime() : 0;
         const bTime = b?.reportedDateTime?.toDate ? b.reportedDateTime.toDate().getTime() : 0;

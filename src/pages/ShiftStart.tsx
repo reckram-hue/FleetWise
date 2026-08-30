@@ -30,6 +30,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
   const [newDefectUrgency, setNewDefectUrgency] = useState<DefectUrgency>(DefectUrgency.Low);
   const [newDefectPhotos, setNewDefectPhotos] = useState<string[]>([]);
   const [submittingDefect, setSubmittingDefect] = useState(false);
+  const [defectSubmitError, setDefectSubmitError] = useState<string | null>(null);
 
   // State for wizard steps (1 = Vehicle, 2 = Confirm & Start)
   const [currentStep, setCurrentStep] = useState<1 | 2>(1);
@@ -209,11 +210,21 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
     if (!selectedVehicle || !currentUser) return;
 
     setSubmittingDefect(true);
+    setDefectSubmitError(null);
     try {
       const session = getDriverSession();
       if (!session) {
         throw new Error('Your session has expired. Please log in again.');
       }
+
+      // Upload photos to Cloud Storage first. If any upload fails, abort here — no
+      // defect record is created for a submission with a missing photo.
+      const photoPaths: string[] = [];
+      for (const photo of newDefectPhotos) {
+        const { photoPath } = await api.uploadDefectPhoto(currentUser.id, session.sessionToken, selectedVehicle.id, photo);
+        photoPaths.push(photoPath);
+      }
+
       await api.reportDefectWithSession({
         vehicleId: selectedVehicle.id,
         driverId: currentUser.id,
@@ -221,12 +232,12 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
         category: newDefectCategory,
         description: newDefectDescription,
         urgency: newDefectUrgency,
-        photos: newDefectPhotos,
+        photos: photoPaths.length > 0 ? photoPaths : undefined,
         location: 'Reported at Shift Start',
         deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });
 
-      // Reset form
+      // Reset form (success only — on failure it's left intact so the driver can retry)
       setNewDefectDescription('');
       setNewDefectPhotos([]);
       setShowDefectModal(false);
@@ -236,7 +247,10 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
       setActiveDefects(defects);
     } catch (err) {
       console.error("Failed to report defect:", err);
-      alert("Failed to report defect. Please try again.");
+      // Backend HttpsError messages here (e.g. "Unsupported image format...", "Image must
+      // be between 1 byte and 5 MB.", "Vehicle not found") are already written to be
+      // driver-facing, so it's safe to surface err.message directly when present.
+      setDefectSubmitError(err instanceof Error && err.message ? err.message : 'Failed to report defect. Please try again.');
     } finally {
       setSubmittingDefect(false);
     }
@@ -509,7 +523,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
               <div className="bg-gray-50 px-4 py-3 border-b flex justify-between items-center">
                 <h3 className="font-bold text-gray-700">Reported Defects</h3>
                 <button
-                  onClick={() => setShowDefectModal(true)}
+                  onClick={() => { setDefectSubmitError(null); setShowDefectModal(true); }}
                   className="text-sm bg-red-100 text-red-700 px-3 py-1 rounded-md font-medium hover:bg-red-200"
                 >
                   + Report Defect
@@ -650,7 +664,7 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
             <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-y-auto">
               <div className="p-4 border-b flex justify-between items-center sticky top-0 bg-white">
                 <h3 className="text-lg font-bold">Report New Defect</h3>
-                <button onClick={() => { setShowDefectModal(false); }} className="text-gray-500 hover:text-gray-700">
+                <button onClick={() => { setShowDefectModal(false); setDefectSubmitError(null); }} className="text-gray-500 hover:text-gray-700">
                   <X size={24} />
                 </button>
               </div>
@@ -720,6 +734,13 @@ const ShiftStart: React.FC<ShiftStartProps> = ({ onShiftStarted, onBack }) => {
                     </label>
                   </div>
                 </div>
+
+                {defectSubmitError && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start">
+                    <AlertCircle className="h-4 w-4 mr-1.5 text-red-600 flex-shrink-0 mt-0.5" />
+                    <p className="text-sm text-red-700">{defectSubmitError}</p>
+                  </div>
+                )}
 
                 <button
                   type="submit"
