@@ -391,7 +391,11 @@ export interface DefectReport {
     urgency: DefectUrgency;
     status: DefectStatus;
     location?: string; // Where on the vehicle
-    photos?: string[]; // URLs or base64
+    // Cloud Storage object paths from uploadDefectPhoto (e.g. "vehicle-defects/..."). Legacy
+    // records created before the Storage migration may still hold raw base64 data: URLs —
+    // any future renderer must branch on that (a data: URL is directly usable as an <img src>;
+    // a Storage path is not and must be resolved to a download URL first).
+    photos?: string[];
     notes?: string;
 
     // Admin fields

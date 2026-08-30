@@ -32,6 +32,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
     const [loading, setLoading] = useState(false);
     const [showSimilar, setShowSimilar] = useState(false);
     const [photos, setPhotos] = useState<string[]>([]);
+    const [submitError, setSubmitError] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState({
@@ -117,11 +118,21 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
         if (!currentUser || !currentVehicle) return;
 
         setLoading(true);
+        setSubmitError(null);
         try {
             const session = getDriverSession();
             if (!session) {
                 throw new Error('Your session has expired. Please log in again.');
             }
+
+            // Upload photos to Cloud Storage first. If any upload fails, abort here —
+            // no defect record is created for a submission with a missing photo.
+            const photoPaths: string[] = [];
+            for (const photo of photos) {
+                const { photoPath } = await api.uploadDefectPhoto(currentUser.id, session.sessionToken, currentVehicle.id, photo);
+                photoPaths.push(photoPath);
+            }
+
             await api.reportDefectWithSession({
                 vehicleId: currentVehicle.id,
                 driverId: currentUser.id,
@@ -131,14 +142,20 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                 urgency: formData.urgency,
                 location: formData.location || undefined,
                 notes: formData.notes || undefined,
-                photos: photos.length > 0 ? photos : undefined,
+                photos: photoPaths.length > 0 ? photoPaths : undefined,
                 deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
             });
 
             alert('Defect report submitted successfully! The maintenance team will review it shortly.');
             onBack();
         } catch (err) {
-            alert('Failed to submit defect report. Please try again.');
+            console.error('Failed to submit defect report:', err);
+            // Backend HttpsError messages here (e.g. "Unsupported image format...", "Image
+            // must be between 1 byte and 5 MB.", "Vehicle not found") are already written to
+            // be driver-facing, so it's safe to surface err.message directly when present.
+            setSubmitError(err instanceof Error && err.message ? err.message : 'Failed to submit defect report. Please try again.');
+            // formData and photos are intentionally left untouched so the driver can retry
+            // without re-entering anything.
         } finally {
             setLoading(false);
         }
@@ -375,6 +392,17 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                         </p>
                                     </div>
                                 </div>
+
+                                {/* Submission Error */}
+                                {submitError && (
+                                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start">
+                                        <AlertTriangle className="h-5 w-5 text-red-600 mr-2 mt-0.5 flex-shrink-0" />
+                                        <div>
+                                            <h4 className="text-sm font-medium text-red-800">Submission Failed</h4>
+                                            <p className="text-sm text-red-700 mt-1">{submitError}</p>
+                                        </div>
+                                    </div>
+                                )}
 
                                 {/* Submit */}
                                 <div className="flex justify-end">

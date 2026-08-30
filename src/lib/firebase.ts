@@ -57,6 +57,7 @@ const DRIVER_PERF_CALLABLES = new Set([
   'startVehicleAssignment',
   'createVehicleInspection',
   'uploadInspectionPhoto',
+  'uploadDefectPhoto',
   'completeVehicleInspection',
   'getAssignmentInspections',
   'endVehicleAssignment',

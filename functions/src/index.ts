@@ -266,9 +266,11 @@ const ReportDefectWithSessionSchema = z.object({
   urgency: z.string().min(1, 'Urgency is required'),
   location: optionalString,
   notes: optionalString,
+  // Storage object paths returned by uploadDefectPhoto — never raw image data. The length
+  // cap rejects any accidental base64 payload (a data: URL is always far longer than a path).
   photos: z.preprocess(
     (value) => value === null ? undefined : value,
-    z.array(z.string()).optional()
+    z.array(z.string().max(512, 'Photo must be a Storage path from uploadDefectPhoto, not image data')).optional()
   ),
   deviceId: optionalString,
 });
@@ -358,6 +360,13 @@ const UploadInspectionPhotoSchema = z.object({
   assignmentId: z.string().min(1, 'Assignment ID is required'),
   boundaryType: z.enum(['PICKUP', 'RETURN']),
   photoRole: z.enum(['EXTERIOR', 'INTERIOR']),
+  imageDataUrl: z.string().min(1, 'Image data is required'),
+});
+
+const UploadDefectPhotoSchema = z.object({
+  driverId: z.string().min(1, 'Driver ID is required'),
+  sessionToken: z.string().min(1, 'Session token is required'),
+  vehicleId: z.string().min(1, 'Vehicle ID is required'),
   imageDataUrl: z.string().min(1, 'Image data is required'),
 });
 
@@ -2013,6 +2022,14 @@ export const startShift = onMeasuredCall('startShift', async (data, context, per
  * The driverId used in the defect document is always the one returned by
  * requireDriverSession — the client-supplied value is cross-validated against
  * the stored session to prevent impersonation.
+ *
+ * `photos` must be Storage object paths returned by uploadDefectPhoto (see below), uploaded
+ * BEFORE this callable is invoked — never raw base64 image data. Residual risk: if the photo
+ * uploads succeed but this call then fails (network blip, validation error, etc.), those
+ * already-uploaded objects are orphaned in Storage under vehicle-defects/. This is accepted
+ * as a low-severity storage-cost tradeoff rather than adding a cross-request cleanup/rollback
+ * mechanism; orphaned objects carry no PII beyond the photo itself and are not linked from
+ * any Firestore document.
  */
 export const reportDefectWithSession = functions.https.onCall(async (data, context) => {
   try {
@@ -3188,6 +3205,60 @@ export const uploadInspectionPhoto = onMeasuredCall('uploadInspectionPhoto', asy
     }
     console.error('Error in uploadInspectionPhoto:', error);
     throw new functions.https.HttpsError('internal', 'Failed to upload inspection photo: ' + error.message);
+  }
+});
+
+/**
+ * Upload one defect-report photo to Cloud Storage. Server-mediated, mirroring
+ * uploadInspectionPhoto: the client sends compressed image data, the server validates the
+ * session + target vehicle, derives an authoritative unique path, stores the object, and
+ * returns the path. The client never chooses a Storage path and never writes image bytes
+ * into Firestore. Call this once per photo BEFORE reportDefectWithSession, then pass the
+ * returned paths as reportDefectWithSession's `photos`.
+ */
+export const uploadDefectPhoto = onMeasuredCall('uploadDefectPhoto', async (data, context, perf) => {
+  try {
+    const validated = UploadDefectPhotoSchema.parse(data);
+    const { driverId: reqDriverId, sessionToken, vehicleId, imageDataUrl } = validated;
+    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
+
+    // Vehicle must exist (matches reportDefectWithSession's own precondition — no status
+    // or assignment restriction; defects and their photos can be reported on any vehicle).
+    const vehicleDoc = await perf.phase('vehicleRead', () => db.collection('vehicles').doc(vehicleId).get());
+    if (!vehicleDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Vehicle not found');
+    }
+    const vehicleData = vehicleDoc.data()!;
+
+    // Validate the image content (MIME + size), never the filename. Same allow-list and
+    // size cap as inspection photos.
+    const match = imageDataUrl.match(/^data:(image\/jpeg|image\/png|image\/webp);base64,([A-Za-z0-9+/=]+)$/);
+    if (!match) {
+      throw new functions.https.HttpsError('invalid-argument', 'Unsupported image format. Use JPEG, PNG, or WebP.');
+    }
+    const mimeType = match[1];
+    const ext = INSPECTION_PHOTO_MIME_TYPES[mimeType];
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length === 0 || buffer.length > INSPECTION_PHOTO_MAX_BYTES) {
+      throw new functions.https.HttpsError('invalid-argument', 'Image must be between 1 byte and 5 MB.');
+    }
+
+    // Server-derived UNIQUE object path, under its own top-level prefix so a defect photo can
+    // never collide with (or overwrite) an inspection photo path.
+    const orgId = vehicleData.orgId || DEFAULT_ORG_ID;
+    const objectPath = `vehicle-defects/${orgId}/${vehicleId}/${driverId}-${crypto.randomUUID()}.${ext}`;
+
+    const bucket = inspectionStorageBucket();
+    await perf.phase('storageUpload', () => bucket.file(objectPath).save(buffer, { contentType: mimeType, resumable: false }));
+
+    return { success: true, photoPath: objectPath };
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    if (error instanceof z.ZodError) {
+      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '));
+    }
+    console.error('Error in uploadDefectPhoto:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to upload defect photo: ' + error.message);
   }
 });
 

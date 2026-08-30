@@ -339,7 +339,26 @@ const api = {
   },
 
   /**
+   * Upload one defect-report photo to Cloud Storage and return its object path. Call once
+   * per photo BEFORE reportDefectWithSession, and pass the returned paths as its `photos` —
+   * never pass raw base64 image data to reportDefectWithSession.
+   */
+  uploadDefectPhoto: async (driverId: string, sessionToken: string, vehicleId: string, imageDataUrl: string): Promise<{ photoPath: string }> => {
+    // Base64 payload length is used only for temporary performance telemetry; no image
+    // content, filename, or path is logged.
+    const base64 = imageDataUrl.slice(imageDataUrl.indexOf(',') + 1);
+    const compressedBytes = Math.max(0, Math.floor((base64.length * 3) / 4) - (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0));
+    const data = await callFunction<{ success: boolean; photoPath: string }>(
+      'uploadDefectPhoto',
+      { driverId, sessionToken, vehicleId, imageDataUrl },
+      { compressedBytes },
+    );
+    return { photoPath: data.photoPath };
+  },
+
+  /**
    * Session-authenticated defect reporting (WP6B). No PIN re-entry.
+   * `photos` must be Storage object paths from uploadDefectPhoto (see above), not image data.
    */
   reportDefectWithSession: async (defectData: {
     driverId: string;

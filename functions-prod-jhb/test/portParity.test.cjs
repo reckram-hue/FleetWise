@@ -41,16 +41,17 @@ const expectedCallables = [
   'updateDriver',
   'updateEmploymentStatus',
   'updateOdometerDiscrepancyStatus',
+  'uploadDefectPhoto',
   'uploadInspectionPhoto',
 ].sort();
 
 describe('Johannesburg production port invariants', () => {
-  test('exports exactly the 36 production callable names through v2 adapters', () => {
+  test('exports exactly the 37 production callable names through v2 adapters', () => {
     const exports = [...source.matchAll(/^export const (\w+) = (onProdCall|onMeasuredCall)\(/gm)]
       .map((match) => match[1])
       .sort();
 
-    assert.equal(exports.length, 36);
+    assert.equal(exports.length, 37);
     assert.deepEqual(exports, expectedCallables);
     assert.equal((source.match(/onCallV2\(/g) || []).length, 1);
     assert.doesNotMatch(source, /functions\.https\.onCall|runWith\s*\(/);
