@@ -301,6 +301,11 @@ const ChargingLocationModal: React.FC<ChargingLocationModalProps> = ({ location,
         }
         // FREE locations never carry a rate, even if one was left over from a prior selection.
 
+        // tariffRate is omitted entirely for FREE — never sent as `undefined`. The Firebase
+        // callable client encodes a present `undefined` property as `null` on the wire, and
+        // the backend's tariffRate field (unlike its optionalString fields) has no null-
+        // tolerant preprocessing, so a key present with value undefined round-trips as null
+        // and fails "Expected number, received null". Omitting the key avoids that entirely.
         const payload = {
             name: formData.name.trim(),
             type: formData.type as ChargingLocationType,
@@ -309,8 +314,8 @@ const ChargingLocationModal: React.FC<ChargingLocationModalProps> = ({ location,
             provider: formData.provider.trim() || undefined,
             chargerType: formData.chargerType.trim() || undefined,
             tariffMethod: formData.tariffMethod as ChargingLocationTariffMethod,
-            tariffRate,
             costOwner: formData.costOwner as ChargingLocationCostOwner,
+            ...(requiresTariffRate ? { tariffRate: tariffRate as number } : {}),
         };
 
         setSaving(true);
