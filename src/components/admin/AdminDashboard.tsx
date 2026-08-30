@@ -3,7 +3,7 @@ import Header from '../shared/Header';
 import Card from '../shared/Card';
 import { DefectReport, DefectUrgency, UserRole, ScheduledService, Vehicle, ServiceProvider, User } from '../../types';
 import api from '../../services/firebaseApi';
-import { AlertTriangle, Users, Truck, Settings as SettingsIcon, Wrench, MessageCircle, FileText, IdCard } from 'lucide-react';
+import { AlertTriangle, Users, Truck, Settings as SettingsIcon, Wrench, MessageCircle, FileText, IdCard, Bolt } from 'lucide-react';
 import ManageDrivers from './ManageDrivers';
 import ManageVehicles from './ManageVehicles';
 import Reports from './Reports';
@@ -12,6 +12,7 @@ import ManageServiceProviders from './ManageServiceProviders';
 import ManageDefects from './ManageDefects';
 import TelegramDrivers from './TelegramDrivers';
 import VehicleLicenseRenewal from './VehicleLicenseRenewal';
+import ManageChargingLocations from './ManageChargingLocations';
 
 
 const AdminDashboard: React.FC = () => {
@@ -104,6 +105,10 @@ const AdminDashboard: React.FC = () => {
         return <ManageServiceProviders onBack={() => setView('dashboard')} />;
     }
 
+    if (view === 'charging-locations') {
+        return <ManageChargingLocations onBack={() => setView('dashboard')} />;
+    }
+
     if (view === 'defects') {
         return (
             <ManageDefects
@@ -186,6 +191,10 @@ const AdminDashboard: React.FC = () => {
             <button onClick={() => setView('service-providers')} className="bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600 transition duration-300 shadow-lg">
                 <Wrench className="h-5 w-5 mr-2 inline" />
                 Service Providers
+            </button>
+            <button onClick={() => setView('charging-locations')} className="bg-teal-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-teal-600 transition duration-300 shadow-lg">
+                <Bolt className="h-5 w-5 mr-2 inline" />
+                Charging Locations
             </button>
             <button onClick={() => setView('reports')} className="bg-purple-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-purple-600 transition duration-300 shadow-lg">
                 <AlertTriangle className="h-5 w-5 mr-2 inline" />
