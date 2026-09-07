@@ -9,6 +9,7 @@ import Card from '../shared/Card';
 import { Car, Loader, Search, AlertCircle } from 'lucide-react';
 import VehicleQrScanner from './VehicleQrScanner';
 import OutstandingVehicleDefects from './OutstandingVehicleDefects';
+import ReportDefectForm from './ReportDefectForm';
 
 export type VehiclePick = { id: string; registration: string; alias?: string; vehicleType: 'ICE' | 'EV'; currentOdometer?: number };
 
@@ -45,6 +46,7 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
   const [startPredictedRange, setStartPredictedRange] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [defectsReady, setDefectsReady] = useState(false);
+  const [showReportDefect, setShowReportDefect] = useState(false);
 
   const loadAvailable = async () => {
     setLoading(true);
@@ -145,6 +147,9 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
     return <div className='p-8 text-center'><Loader className='animate-spin h-8 w-8 mx-auto text-blue-500' /></div>;
   }
 
+  if (showReportDefect && selectedVehicle) return <ReportDefectForm currentVehicle={selectedVehicle} pickup
+    onBack={() => { setShowReportDefect(false); setDefectsReady(false); }} />;
+
   return (
     <div className='space-y-4'>
       {error && <div className='p-3 bg-red-100 text-red-700 rounded-lg text-sm font-medium'>{error}</div>}
@@ -155,7 +160,8 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
           {suggestedVehicle && selectedVehicle.id === suggestedVehicle.id && (
             <p className='text-sm text-blue-700 bg-blue-50 p-2 rounded mb-4'>Continuing with your shift vehicle.</p>
           )}
-          <OutstandingVehicleDefects key={selectedVehicle.id} driverId={driverId} vehicleId={selectedVehicle.id} onReadyChange={setDefectsReady} />
+          <OutstandingVehicleDefects key={selectedVehicle.id} driverId={driverId} vehicleId={selectedVehicle.id} onReadyChange={setDefectsReady}
+            disabled={submitting} onReport={() => setShowReportDefect(true)} />
           <div className='space-y-4'>
             <div>
               <div className="flex items-center justify-between mb-1">

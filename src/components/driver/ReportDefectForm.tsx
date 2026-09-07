@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { DefectReport, DefectCategory, DefectUrgency } from '../../types';
 import type { VehiclePick } from './TakeVehicleForm';
-import { outstandingDefects } from '../../lib/driverVehiclePresentation';
+import { outstandingDefects, defectSeverityClasses } from '../../lib/driverVehiclePresentation';
 
 interface ReportDefectFormProps {
     onBack: () => void;
@@ -36,6 +36,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
     const [photos, setPhotos] = useState<string[]>([]);
     const [submitError, setSubmitError] = useState<string | null>(null);
     const submissionLock = useRef(false);
+    const photoReadLock = useRef(false);
+    const [readingPhotos, setReadingPhotos] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState({
@@ -87,21 +89,26 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
         return () => clearTimeout(timer);
     }, [existingDefects, formData.description, formData.category, currentVehicle?.id]);
 
-    const handlePhotoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const files = event.target.files;
-        if (!files) return;
-
-        Array.from(files).forEach(file => {
-            if (file.type.startsWith('image/')) {
+    const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(event.target.files || []);
+        if (!files.length || submissionLock.current || photoReadLock.current) return;
+        event.target.value = '';
+        photoReadLock.current = true;
+        setReadingPhotos(true); setSubmitError(null);
+        try {
+            const selected = await Promise.all(files.map(file => new Promise<string>((resolve, reject) => {
+                if (!file.type.startsWith('image/')) { reject(new Error('Please select an image file.')); return; }
                 const reader = new FileReader();
-                reader.onload = (e) => {
-                    if (e.target?.result) {
-                        setPhotos(prev => [...prev, e.target!.result as string]);
-                    }
-                };
+                reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Could not read the selected photo. Please select it again.'));
+                reader.onerror = reader.onabort = () => reject(new Error('Could not read the selected photo. Please select it again.'));
                 reader.readAsDataURL(file);
-            }
-        });
+            })));
+            setPhotos(prev => [...prev, ...selected]);
+        } catch (err) {
+            setSubmitError(err instanceof Error ? err.message : 'Could not read photos. Please try again.');
+        } finally {
+            photoReadLock.current = false; setReadingPhotos(false);
+        }
     };
 
     const removePhoto = (index: number) => {
@@ -118,7 +125,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!currentUser || !currentVehicle || loading || submissionLock.current) return;
+        if (!currentUser || !currentVehicle || loading || submissionLock.current || photoReadLock.current) return;
         submissionLock.current = true;
 
         setLoading(true);
@@ -166,16 +173,6 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
         }
     };
 
-    const getUrgencyColor = (urgency: DefectUrgency) => {
-        switch (urgency) {
-            case DefectUrgency.Critical: return 'text-red-600 bg-red-50 border-red-200';
-            case DefectUrgency.High: return 'text-orange-600 bg-orange-50 border-orange-200';
-            case DefectUrgency.Medium: return 'text-yellow-600 bg-yellow-50 border-yellow-200';
-            case DefectUrgency.Low: return 'text-green-600 bg-green-50 border-green-200';
-            default: return 'text-gray-600 bg-gray-50 border-gray-200';
-        }
-    };
-
     if (!currentVehicle) {
         return (
             <div className="min-h-screen bg-gray-100">
@@ -200,8 +197,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
         <div className="min-h-screen bg-gray-100">
             <Header title="Report a Vehicle Fault" />
             <main className="max-w-4xl mx-auto p-6">
-                <button onClick={onBack} className="mb-4 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                    ← Back to Dashboard
+                <button onClick={onBack} disabled={loading || readingPhotos} className="mb-4 min-h-11 bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50">
+                    {pickup ? '← Back to vehicle pickup' : '← Back'}
                 </button>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -209,7 +206,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                     <div className="lg:col-span-2">
                         <Card>
                             <form onSubmit={handleSubmit}>
-                              <fieldset disabled={loading} className="space-y-6">
+                              <fieldset disabled={loading || readingPhotos} className="space-y-6">
                                 <legend className="sr-only">Vehicle defect report</legend>
                                 <div>
                                     <h2 className="text-2xl font-bold text-gray-800 mb-2">Report New Defect</h2>
@@ -221,7 +218,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                     <label className="block text-sm font-medium text-gray-700 mb-2">
                                         Vehicle
                                     </label>
-                                    <div className="p-3 bg-gray-50 border border-gray-300 rounded-md text-gray-800 font-medium flex items-center justify-between">
+                                    <div className="p-3 bg-gray-50 border border-gray-300 rounded-md text-gray-800 font-medium flex flex-wrap gap-2 items-center justify-between break-words">
                                         <div className="flex items-center">
                                             <Car className="h-5 w-5 text-gray-500 mr-2" />
                                             <span>
@@ -269,7 +266,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                 <div>
                                     <label htmlFor="driver-formData-location" className="block text-sm font-medium text-gray-700 mb-2">
                                         <MapPin className="inline w-4 h-4 mr-1" />
-                                        Location on Vehicle
+                                        Vehicle Location
                                     </label>
                                     <input id="driver-formData-location"
                                         type="text"
@@ -309,7 +306,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                                 <div key={defect.id} className="bg-white p-3 rounded border">
                                                     <div className="flex justify-between items-start mb-1">
                                                         <span className="text-xs font-medium text-gray-600">{defect.category}</span>
-                                                        <span className={`text-xs px-2 py-1 rounded border ${getUrgencyColor(defect.urgency)}`}>
+                                                        <span className={`text-xs px-2 py-1 rounded border ${defectSeverityClasses(defect.urgency)}`}>
                                                             {defect.urgency}
                                                         </span>
                                                     </div>
@@ -337,9 +334,9 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
 
                                 {/* Photo Attachment */}
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    <label htmlFor="defect-photos" className="block text-sm font-medium text-gray-700 mb-2">
                                         <Camera className="inline w-4 h-4 mr-1" />
-                                        Photos (Optional)
+                                        Add photos (optional)
                                     </label>
                                     <div className="space-y-3">
                                         {/* Photo Upload Buttons */}
@@ -347,15 +344,15 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                             <button
                                                 type="button"
                                                 onClick={takePhoto}
-                                                className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                                className="flex min-h-11 items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus-visible:ring-2 focus-visible:ring-blue-500"
                                             >
                                                 <Camera className="h-4 w-4 mr-2" />
                                                 Take Photo
                                             </button>
                                             <button
                                                 type="button"
-                                                onClick={() => fileInputRef.current?.click()}
-                                                className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition"
+                                                onClick={() => { fileInputRef.current?.removeAttribute('capture'); fileInputRef.current?.click(); }}
+                                                className="flex min-h-11 items-center px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 focus-visible:ring-2 focus-visible:ring-blue-500"
                                             >
                                                 <Upload className="h-4 w-4 mr-2" />
                                                 Upload Photo
@@ -364,7 +361,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
 
                                         {/* Hidden File Input */}
                                         <input
-                                            ref={fileInputRef}
+                                            id="defect-photos" ref={fileInputRef}
                                             type="file"
                                             multiple
                                             accept="image/*"
@@ -385,7 +382,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                                         <button
                                                             type="button"
                                                             onClick={() => removePhoto(index)}
-                                                            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600 transition opacity-0 group-hover:opacity-100"
+                                                            aria-label={`Remove photo ${index + 1}`}
+                                                            className="absolute top-1 right-1 bg-red-700 text-white rounded-full w-11 h-11 flex items-center justify-center hover:bg-red-800 focus-visible:ring-2 focus-visible:ring-blue-500"
                                                         >
                                                             <X className="h-3 w-3" />
                                                         </button>
@@ -395,14 +393,14 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                         )}
 
                                         <p className="text-xs text-gray-500">
-                                            📸 Tip: Photos help maintenance teams understand the issue better
+                                            Add photographs if they help show the fault or damage. You can submit without photos.
                                         </p>
                                     </div>
                                 </div>
 
                                 {/* Submission Error */}
                                 {submitError && (
-                                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start">
+                                    <div role="alert" className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start">
                                         <AlertTriangle className="h-5 w-5 text-red-600 mr-2 mt-0.5 flex-shrink-0" />
                                         <div>
                                             <h4 className="text-sm font-medium text-red-800">Submission Failed</h4>
@@ -411,6 +409,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                     </div>
                                 )}
 
+                                {readingPhotos && <p role="status">Preparing selected photos...</p>}
                                 {/* Submit */}
                                 <div className="flex justify-end">
                                     <button
