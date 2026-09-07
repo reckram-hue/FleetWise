@@ -36,6 +36,7 @@ const expectedCallables = [
   'listVehiclesForSession',
   'logRefuelWithSession',
   'reportDefectWithSession',
+  'recoverReturnChargingEvent',
   'startChargingSession',
   'startShift',
   'startVehicleAssignment',
@@ -48,12 +49,42 @@ const expectedCallables = [
 ].sort();
 
 describe('Johannesburg production port invariants', () => {
-  test('exports exactly the 39 production callable names through v2 adapters', () => {
+  test('WP2 production handler bodies remain identical across the two backends', () => {
+    const ts = require('typescript');
+    const mirrored = readFileSync(join(__dirname, '..', '..', 'functions', 'src', 'index.ts'), 'utf8');
+    function bodies(text) {
+      const ast = ts.createSourceFile('index.ts', text, ts.ScriptTarget.Latest, true);
+      const result = new Map();
+      for (const statement of ast.statements) {
+        if (!ts.isVariableStatement(statement)) continue;
+        for (const declaration of statement.declarationList.declarations) {
+          if (!declaration.initializer || !ts.isCallExpression(declaration.initializer)) continue;
+          const handler = declaration.initializer.arguments.find(ts.isArrowFunction);
+          if (handler) result.set(declaration.name.getText(ast), handler.body.getText(ast).replace(/\r\n/g, '\n'));
+        }
+      }
+      return result;
+    }
+    const a = bodies(source), b = bodies(mirrored);
+    for (const name of ['startVehicleAssignment', 'endVehicleAssignment', 'endShiftWithSession', 'startChargingSession',
+      'createVehicleInspection', 'uploadInspectionPhoto', 'completeVehicleInspection', 'getDriverStatsWithSession',
+      'getLeaderboard', 'recoverReturnChargingEvent']) {
+      assert.ok(a.has(name), name); assert.equal(a.get(name), b.get(name), name);
+    }
+  });
+
+  test('assignment distance helpers are identical across production backends', () => {
+    const read = path => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+    assert.equal(read(join(__dirname, '..', 'src', 'assignmentDistance.ts')),
+      read(join(__dirname, '..', '..', 'functions', 'src', 'assignmentDistance.ts')));
+  });
+
+  test('exports exactly the 40 production callable names through v2 adapters', () => {
     const exports = [...source.matchAll(/^export const (\w+) = (onProdCall|onMeasuredCall)\(/gm)]
       .map((match) => match[1])
       .sort();
 
-    assert.equal(exports.length, 39);
+    assert.equal(exports.length, 40);
     assert.deepEqual(exports, expectedCallables);
     assert.equal((source.match(/onCallV2\(/g) || []).length, 1);
     assert.doesNotMatch(source, /functions\.https\.onCall|runWith\s*\(/);

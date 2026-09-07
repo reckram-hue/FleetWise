@@ -3,7 +3,7 @@
 // and persisted as Cloud Storage object paths (never public URLs).
 import React, { useState, useEffect } from 'react';
 import api from '../../services/firebaseApi';
-import { ChargingLocationForDriver, VehicleReturnIntent, VehicleInspectionPhotoRole } from '../../types';
+import { ChargingLocationForDriver, VehicleReturnIntent, VehicleInspectionPhotoRole, ReturnFinalizationDraft } from '../../types';
 import { getDriverSession } from '../../store/session';
 import ChargingLocationPicker from './ChargingLocationPicker';
 import Card from '../shared/Card';
@@ -28,7 +28,7 @@ interface VehicleInspectionFormProps {
   vehicle: { registration: string; alias?: string; vehicleType: 'ICE' | 'EV' };
   startOdo?: number;
   returnIntent?: VehicleReturnIntent;
-  onCompleted: (result: VehicleInspectionResult) => void;
+  onCompleted: (result: VehicleInspectionResult) => void | Promise<void>;
   onBack?: () => void;
 }
 
@@ -97,6 +97,11 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
   const [chargingNotes, setChargingNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadVersion, setLoadVersion] = useState(0);
+  const [evidenceCompleted, setEvidenceCompleted] = useState(false);
+  const [savedDraft, setSavedDraft] = useState<ReturnFinalizationDraft | null>(null);
 
   const isReturn = boundaryType === 'RETURN';
   const isEV = vehicle.vehicleType === 'EV';
@@ -107,20 +112,43 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
     let cancelled = false;
     const load = async () => {
       const session = getDriverSession();
-      if (!session) return;
+      setLoading(true);
+      setLoadFailed(false);
       try {
+        if (!session) throw new Error('Your session has expired. Please log in again.');
         const inspections = await api.getAssignmentInspections(driverId, session.sessionToken, assignmentId);
         const insp = inspections.find(i => i.boundaryType === boundaryType);
         if (cancelled) return;
         if (insp && insp.exteriorPhotoPath) setExterior({ status: 'uploaded', preview: null });
         if (insp && insp.interiorPhotoPath) setInterior({ status: 'uploaded', preview: null });
+        setEvidenceCompleted(insp?.status === 'COMPLETED');
+        setHasDamage(insp?.hasDamage === true);
+        setDamageDescription(insp?.damageDescription || '');
+        const draft = insp?.returnFinalization;
+        setSavedDraft(draft || null);
+        if (draft) {
+          setEndOdo(String(draft.endOdometer));
+          setEndCharge(draft.endChargePercent == null ? '' : String(draft.endChargePercent));
+          setEndPredictedRange(draft.endPredictedRangeKm == null ? '' : String(draft.endPredictedRangeKm));
+          setLeftForCharging(draft.leftForCharging ?? null);
+          setPublicChargeReference(draft.publicChargeReference || '');
+          setPublicChargeCost(draft.publicChargeCost == null ? '' : String(draft.publicChargeCost));
+          setChargingNotes(draft.chargingNotes || '');
+          if (draft.chargingLocationId && insp?.status !== 'COMPLETED') {
+            const locations = await api.listChargingLocationsForSession(driverId, session.sessionToken);
+            if (cancelled) return;
+            setChargingLocation(locations.find(l => l.id === draft.chargingLocationId) || null);
+          }
+        }
       } catch {
-        // Ignore — the form will create/upload on submit.
+        if (!cancelled) { setLoadFailed(true); setError('Unable to restore inspection. Retry before continuing.'); }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
     load();
     return () => { cancelled = true; };
-  }, [driverId, assignmentId, boundaryType]);
+  }, [driverId, assignmentId, boundaryType, loadVersion]);
 
   const handleFile = async (role: VehicleInspectionPhotoRole, file: File) => {
     try {
@@ -155,6 +183,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
   };
 
   const handleSubmit = async () => {
+    if (loading || loadFailed || submitting) return;
     if (hasDamage && !damageDescription.trim()) { setError('Please describe the damage.'); return; }
 
     let endOdometer: number | undefined;
@@ -203,8 +232,17 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
       const session = getDriverSession();
       if (!session) throw new Error('Your session has expired. Please log in again.');
 
-      // Idempotent create (deterministic doc ID).
-      const created = await api.createVehicleInspection(driverId, session.sessionToken, assignmentId, boundaryType, returnIntent);
+      const draft: ReturnFinalizationDraft | undefined = isReturn && returnIntent ? {
+        endOdometer: endOdometer!, endChargePercent, endPredictedRangeKm,
+        leftForCharging: isEV ? leftForCharging === true : undefined,
+        chargingLocationId: leftForCharging ? chargingLocation?.id : undefined,
+        publicChargeReference: leftForCharging && chargingLocation?.type === 'PUBLIC_THIRD_PARTY' ? publicChargeReference.trim() || undefined : undefined,
+        publicChargeCost: parsedPublicChargeCost,
+        chargingNotes: leftForCharging ? chargingNotes.trim() || undefined : undefined,
+        transitionReason: returnIntent,
+      } : undefined;
+      // Persist readings before uploads/completion. The server freezes this draft on completion.
+      const created = await api.createVehicleInspection(driverId, session.sessionToken, assignmentId, boundaryType, returnIntent, draft);
 
       // Upload any photo not already stored (resume keeps previously uploaded photos).
       if (exterior.status !== 'uploaded') {
@@ -226,21 +264,11 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         hasDamage,
         damageDescription: hasDamage ? damageDescription.trim() : undefined,
       });
-      onCompleted({
-        endOdometer,
-        endChargePercent,
-        endPredictedRangeKm,
-        leftForCharging: isEV ? leftForCharging === true : undefined,
-        chargingLocationId: leftForCharging ? chargingLocation?.id : undefined,
-        publicChargeReference: leftForCharging && chargingLocation?.type === 'PUBLIC_THIRD_PARTY'
-          ? publicChargeReference.trim() || undefined
-          : undefined,
-        publicChargeCost: leftForCharging && chargingLocation?.type === 'PUBLIC_THIRD_PARTY'
-          ? parsedPublicChargeCost
-          : undefined,
-        chargingNotes: leftForCharging ? chargingNotes.trim() || undefined : undefined,
-        returnIntent: completed.returnIntent ?? undefined,
-      });
+      const authoritativeDraft = completed.returnFinalization || draft;
+      await onCompleted(authoritativeDraft
+        ? { ...authoritativeDraft, returnIntent: completed.returnIntent ?? undefined }
+        : { returnIntent: completed.returnIntent ?? undefined });
+      setSubmitting(false);
     } catch (e: any) {
       const code = String(e?.code || '');
       let msg = e?.message || 'Failed to complete inspection.';
@@ -278,6 +306,23 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
       </label>
       <p className='text-xs text-gray-500 mt-1'>Photo is stored as chain-of-custody evidence after upload.</p>
     </div>
+  );
+
+  if (loading) return <Card><p role="status">Restoring inspection...</p></Card>;
+  if (loadFailed) return <Card><p role="alert">{error}</p><button onClick={() => setLoadVersion(v => v + 1)}>Retry inspection lookup</button></Card>;
+  if (isReturn && evidenceCompleted && savedDraft) return (
+    <Card>
+      <h3 className="text-xl font-bold">Finalize saved return</h3>
+      <p>Photos and damage declaration are complete. Saved return odometer: {savedDraft.endOdometer} km.</p>
+      {error && <p role="alert">{error}</p>}
+      <button disabled={submitting} className="mt-4 rounded-lg bg-green-600 px-4 py-3 text-white disabled:opacity-50"
+        onClick={async () => {
+          setSubmitting(true); setError(null);
+          try { await onCompleted({ ...savedDraft, returnIntent: savedDraft.transitionReason }); }
+          catch { setError('Finalization failed. Your saved return is unchanged; retry safely.'); }
+          finally { setSubmitting(false); }
+        }}>Finalize saved return</button>
+    </Card>
   );
 
   return (
@@ -342,12 +387,13 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         </div>
       )}
 
-      <div className='space-y-4'>
+      {evidenceCompleted && <p role="status">Inspection evidence is complete and read-only. Enter the missing legacy return readings to finalize.</p>}
+      <fieldset disabled={evidenceCompleted || submitting} className='space-y-4'>
         <PhotoField label='Exterior condition photo' slot={exterior} role='EXTERIOR' />
         <PhotoField label='Interior / dashboard photo' slot={interior} role='INTERIOR' />
-      </div>
+      </fieldset>
 
-      <div className='mt-4'>
+      <fieldset disabled={evidenceCompleted || submitting} className='mt-4'>
         <label className='block text-sm font-semibold text-gray-700 mb-2'>Any new damage? <span className='text-red-500'>*</span></label>
         <div className='flex gap-3'>
           <button onClick={() => setHasDamage(false)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${!hasDamage ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500'}`}>No</button>
@@ -356,7 +402,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         {hasDamage && (
           <textarea value={damageDescription} onChange={e => setDamageDescription(e.target.value)} rows={3} placeholder='Describe the damage...' className='w-full px-4 py-3 border border-gray-300 rounded-lg mt-3' />
         )}
-      </div>
+      </fieldset>
 
       <div className='mt-6 space-y-3'>
         <button onClick={handleSubmit} disabled={submitting} className='w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center'>

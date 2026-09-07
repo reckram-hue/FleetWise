@@ -61,8 +61,8 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       const pickupDone = inspections.some(i => i.boundaryType === 'PICKUP' && i.status === 'COMPLETED');
       if (!pickupDone) {
         setInspecting('PICKUP');
-      } else if (inspections.some(i => i.boundaryType === 'RETURN' && i.status === 'PENDING')) {
-        const ret = inspections.find(i => i.boundaryType === 'RETURN' && i.status === 'PENDING');
+      } else if (inspections.some(i => i.boundaryType === 'RETURN' && (i.status === 'PENDING' || i.status === 'COMPLETED'))) {
+        const ret = inspections.find(i => i.boundaryType === 'RETURN' && (i.status === 'PENDING' || i.status === 'COMPLETED'));
         const intent = ret?.returnIntent;
         if (intent === 'VEHICLE_SWAP' || intent === 'SHIFT_END') {
           setReturnReason(intent);
@@ -136,6 +136,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
   // ---- Begin a return (create the PENDING RETURN inspection with the chosen intent) ----
   const startReturn = async (intent: 'VEHICLE_SWAP' | 'SHIFT_END') => {
     if (!activeShift || !activeShift.assignmentId) return;
+    if (activeShift.vehicle?.activeChargingSessionId) { setError('End Charge before returning the vehicle.'); return; }
     const session = getDriverSession();
     if (!session) { setError('Your session has expired. Please log in again.'); return; }
     setSubmitting(true);
@@ -221,8 +222,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
         await api.endShiftWithSession(activeShift.shiftId, {
           driverId: activeShift.driverId,
           sessionToken: session.sessionToken,
-          endOdometer: result.endOdometer,
-          endChargePercent: result.endChargePercent,
+          // Vehicle readings belong to the assignment, not a multi-vehicle shift.
           notes: notes.trim() || undefined,
           deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
         });
@@ -388,8 +388,9 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
           </div>
         </Card>
 
-        {inspecting && hasAssignment && currentVehicle ? (
+        {inspecting && hasAssignment && currentVehicle && !currentVehicle.activeChargingSessionId ? (
           <VehicleInspectionForm
+            key={`${activeShift.assignmentId}-${inspecting}`}
             boundaryType={inspecting}
             assignmentId={activeShift.assignmentId || ''}
             driverId={activeShift.driverId}
@@ -411,6 +412,11 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
           />
         ) : (
           <>
+            {currentVehicle?.activeChargingSessionId && (
+              <p role="status" className="mb-4 rounded-lg bg-orange-50 p-4 text-orange-900">
+                Charging is open. End Charge before returning or changing this vehicle.
+              </p>
+            )}
             {/* Vehicle status card */}
             <Card className="mb-6">
               {hasAssignment && currentVehicle ? (
@@ -471,11 +477,11 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
 
               {hasAssignment ? (
                 <>
-                  <button onClick={() => startReturn('VEHICLE_SWAP')} className="flex flex-col items-center justify-center p-4 bg-white border border-blue-200 rounded-xl shadow-sm hover:shadow-md hover:bg-blue-50 transition-all active:scale-95">
+                  <button disabled={submitting || !!currentVehicle?.activeChargingSessionId} onClick={() => startReturn('VEHICLE_SWAP')} className="flex flex-col items-center justify-center p-4 bg-white border border-blue-200 rounded-xl shadow-sm hover:shadow-md hover:bg-blue-50 transition-all active:scale-95 disabled:opacity-50">
                     <div className="bg-blue-50 p-3 rounded-full mb-2"><Car className="h-6 w-6 text-blue-600" /></div>
                     <span className="font-semibold text-blue-700">Return / Change Vehicle</span>
                   </button>
-                  <button onClick={() => startReturn('SHIFT_END')} className="flex flex-col items-center justify-center p-4 bg-white border border-red-200 rounded-xl shadow-sm hover:shadow-md hover:bg-red-50 transition-all active:scale-95 col-span-2">
+                  <button disabled={submitting || !!currentVehicle?.activeChargingSessionId} onClick={() => startReturn('SHIFT_END')} className="flex flex-col items-center justify-center p-4 bg-white border border-red-200 rounded-xl shadow-sm hover:shadow-md hover:bg-red-50 transition-all active:scale-95 col-span-2 disabled:opacity-50">
                     <div className="bg-red-100 p-3 rounded-full mb-2"><Flag className="h-6 w-6 text-red-600" /></div>
                     <span className="font-bold text-red-700">Return Vehicle & End Shift</span>
                   </button>

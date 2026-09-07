@@ -284,6 +284,18 @@ export type VehicleReturnIntent = 'VEHICLE_SWAP' | 'SHIFT_END';
 // The two required routine inspection photo roles.
 export type VehicleInspectionPhotoRole = 'EXTERIOR' | 'INTERIOR';
 
+export interface ReturnFinalizationDraft {
+    endOdometer: number;
+    endChargePercent?: number;
+    endPredictedRangeKm?: number;
+    leftForCharging?: boolean;
+    chargingLocationId?: string;
+    publicChargeReference?: string;
+    publicChargeCost?: number;
+    chargingNotes?: string;
+    transitionReason: VehicleReturnIntent;
+}
+
 export interface VehicleInspection {
     id: string;
     orgId: string;
@@ -295,6 +307,8 @@ export interface VehicleInspection {
     status: VehicleInspectionStatus;
     // PICKUP -> null. RETURN -> 'VEHICLE_SWAP' or 'SHIFT_END' (server-authoritative).
     returnIntent?: VehicleReturnIntent | null;
+    returnFinalization?: ReturnFinalizationDraft | null;
+    returnFinalizationStatus?: 'PENDING' | 'COMPLETED' | null;
     capturedAt?: Date | null;
     completedAt?: Date | null;
     // Storage OBJECT PATHS (not public URLs). Written server-side only.
@@ -325,6 +339,8 @@ export interface DriverOperationalInspection {
     boundaryType: VehicleInspectionBoundary;
     status: VehicleInspectionStatus;
     returnIntent?: VehicleReturnIntent | null;
+    returnFinalization?: ReturnFinalizationDraft | null;
+    returnFinalizationStatus?: 'PENDING' | 'COMPLETED' | null;
 }
 
 export interface DriverOperationalAssignment {
@@ -582,8 +598,7 @@ export interface ChargingLocationSnapshot {
     tariffRate?: number | null;
 }
 
-// A handover-to-charging record. WP D creates only OPEN events; close and reconciliation
-// fields remain nullable until a later pickup-side work package owns those transitions.
+// Handover-to-charging record. Pickup closes custody; financial reconciliation stays independent.
 export interface ChargingEvent {
     id: string;
     vehicleId: string;
@@ -606,6 +621,10 @@ export interface ChargingEvent {
     pickupDriverId?: string | null;
     pickupShiftId?: string | null;
     pickupAssignmentId?: string | null;
+    pickupOdometer?: number | null;
+    pickupChargePercent?: number | null;
+    pickupPredictedRangeKm?: number | null;
+    isTestData?: boolean;
     closedAt?: Date | null;
     reconciledAt?: Date | null;
     createdAt: Date;

@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:contracts": "node --test test/convertTimestamps.test.cjs",
+    "test:lifecycle:emulator": "npm --prefix functions run build && npm --prefix functions-prod-jhb run build && node --test test/driverLifecycle.emulator.test.cjs",
     "test:pin-attempts:emulator": "npm --prefix functions run build && npm --prefix functions-prod-jhb run build && node --test test/pinAttempts.emulator.test.cjs"
   },
   "dependencies": {

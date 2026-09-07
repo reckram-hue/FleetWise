@@ -4,6 +4,7 @@ import * as admin from 'firebase-admin';
 import * as bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import * as crypto from 'crypto';
+import { driverDistance, intervalDistance } from './assignmentDistance';
 import { createActiveAdminProfile, requireActiveAdmin } from './adminAuthorization';
 import { reservePinAttempt, assertActivePinDriver, pinAttemptDocumentId } from './pinAttempts';
 import {
@@ -321,7 +322,12 @@ const GetActiveVehicleAssignmentSchema = z.object({
 // VEHICLE INSPECTION CALLABLE SCHEMAS (WP7D1)
 // =============================================================================
 
+const ReturnFinalizationSchema = EndVehicleAssignmentSchema.omit({
+  driverId: true, sessionToken: true, assignmentId: true, deviceId: true,
+});
+
 const CreateVehicleInspectionSchema = z.object({
+  returnFinalization: ReturnFinalizationSchema.optional(),
   driverId: z.string().min(1, 'Driver ID is required'),
   sessionToken: z.string().min(1, 'Session token is required'),
   assignmentId: z.string().min(1, 'Assignment ID is required'),
@@ -807,6 +813,8 @@ function stripToDriverOperationalInspection(inspectionData: FirebaseFirestore.Do
     boundaryType: inspectionData.boundaryType,
     status: inspectionData.status,
     returnIntent: inspectionData.returnIntent || null,
+    returnFinalization: inspectionData.returnFinalization || null,
+    returnFinalizationStatus: inspectionData.returnFinalizationStatus || null,
   };
 }
 
@@ -2104,61 +2112,44 @@ export const endShiftWithSession = onMeasuredCall('endShiftWithSession', async (
       throw new functions.https.HttpsError('permission-denied', 'You can only end your own shift.');
     }
 
-    if (shiftData.status !== 'Active') {
-      throw new functions.https.HttpsError('failed-precondition', 'This shift has already been ended');
-    }
-
-    // WP7B: prevent ending the shift while a vehicle assignment is still active.
-    if (shiftData.activeAssignmentId) {
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        'You still have a vehicle assigned. Please return the vehicle before ending your shift.'
-      );
-    }
-
-    if (endOdometer !== undefined && shiftData.startOdometer && endOdometer < shiftData.startOdometer) {
-      throw new functions.https.HttpsError(
-        'invalid-argument',
-        `End odometer (${endOdometer}) must be greater than or equal to start odometer (${shiftData.startOdometer})`
-      );
-    }
-
-    const vehicleId = shiftData.vehicleId;
-
-    await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
+    await perf.phase('transaction', () => db.runTransaction(async transaction => {
       const driverRef = db.collection('users').doc(driverId);
-
-      // Re-check the active-assignment pointer inside the transaction (race protection).
-      const txShift = await transaction.get(shiftRef);
-      if (txShift.data()?.activeAssignmentId) {
-        throw new functions.https.HttpsError(
-          'failed-precondition',
-          'You still have a vehicle assigned. Please return the vehicle before ending your shift.'
-        );
+      const [txShift, txDriver, assignmentDocs] = await Promise.all([
+        transaction.get(shiftRef), transaction.get(driverRef),
+        transaction.get(db.collection('vehicleAssignments').where('shiftId', '==', shiftId)),
+      ]);
+      const shift = txShift.data()!;
+      if (shift.driverId !== driverId) throw new functions.https.HttpsError('permission-denied', 'Shift ownership changed.');
+      if (shift.status === 'Completed') return; // lost-response retry
+      if (shift.status !== 'Active') throw new functions.https.HttpsError('failed-precondition', 'The shift is not active.');
+      if (shift.activeAssignmentId || assignmentDocs.docs.some(d => d.data().status === 'ACTIVE')) {
+        throw new functions.https.HttpsError('failed-precondition', 'You still have a vehicle assigned. Please return the vehicle before ending your shift.');
       }
-
-      // Legacy-compatible shift update; endChargePercent is EV-only.
-      const shiftUpdate: any = {
-        endTime: admin.firestore.FieldValue.serverTimestamp(),
-        status: 'Completed',
+      const vehicleRef = shift.vehicleId ? db.collection('vehicles').doc(shift.vehicleId) : null;
+      const vehicle = vehicleRef ? await transaction.get(vehicleRef) : null;
+      const update: any = {
+        endTime: admin.firestore.FieldValue.serverTimestamp(), status: 'Completed',
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
-      if (typeof endOdometer === 'number') {
-        shiftUpdate.endOdometer = endOdometer;
+      // No cross-vehicle odometers. Only an exact single-vehicle interval retains compatibility fields.
+      if (assignmentDocs.empty) {
+        if (endOdometer !== undefined && typeof shift.startOdometer === 'number' && endOdometer < shift.startOdometer) {
+          throw new functions.https.HttpsError('invalid-argument', 'End odometer must be greater than or equal to start odometer');
+        }
+        if (endOdometer !== undefined) update.endOdometer = endOdometer;
+        if (endChargePercent !== undefined) update.endChargePercent = endChargePercent;
+      } else {
+        const only = assignmentDocs.size === 1 ? assignmentDocs.docs[0].data() : null;
+        const compatible = only && only.status === 'COMPLETED' && only.vehicleId === shift.vehicleId
+          && only.driverId === driverId && only.startOdometer === shift.startOdometer && intervalDistance(only) !== null;
+        update.endOdometer = compatible ? only.endOdometer : null;
+        update.endChargePercent = compatible ? only.endChargePercent ?? null : null;
       }
-      if (typeof notes === 'string' && notes.trim()) {
-        shiftUpdate.notes = notes.trim();
-      }
-      if (typeof endChargePercent === 'number') {
-        shiftUpdate.endChargePercent = endChargePercent;
-      }
-      transaction.update(shiftRef, shiftUpdate);
-
-      // Clear additive pointer fields (no-op on legacy docs that never had them).
-      transaction.update(driverRef, { activeShiftId: admin.firestore.FieldValue.delete() });
-      if (vehicleId) {
-        const vehicleRef = db.collection('vehicles').doc(vehicleId);
-        transaction.update(vehicleRef, { activeShiftId: admin.firestore.FieldValue.delete() });
+      if (notes?.trim()) update.notes = notes.trim();
+      transaction.update(shiftRef, update);
+      if (txDriver.data()?.activeShiftId === shiftId) transaction.update(driverRef, { activeShiftId: admin.firestore.FieldValue.delete() });
+      if (vehicle?.data()?.activeShiftId === shiftId && !vehicle.data()?.activeAssignmentId) {
+        transaction.update(vehicleRef!, { activeShiftId: admin.firestore.FieldValue.delete() });
       }
     }));
 
@@ -2269,26 +2260,21 @@ export const getDriverStatsWithSession = onMeasuredCall('getDriverStatsWithSessi
     const validated = RequireSessionSchema.parse(data);
     const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession(validated, perf));
 
-    const [finesSnapshot, damagesSnapshot, shiftsSnapshot] = await perf.phase('driverStatsReads', () => Promise.all([
+    const [finesSnapshot, damagesSnapshot, shiftsSnapshot, assignmentsSnapshot] = await perf.phase('driverStatsReads', () => Promise.all([
       db.collection('driverFines').where('driverId', '==', driverId).get(),
       db.collection('vehicleDamages').where('driverId', '==', driverId).get(),
       db.collection('shifts').where('driverId', '==', driverId).get(),
+      db.collection('vehicleAssignments').where('driverId', '==', driverId).get(),
     ]));
 
     const stats = perf.phaseSync('driverStatsAggregation', () => {
       const fines = finesSnapshot.docs.map(d => d.data());
       const damages = damagesSnapshot.docs.map(d => d.data());
 
-      let totalKmDriven = 0;
-      shiftsSnapshot.docs.forEach(doc => {
-        const shift = doc.data();
-        if (shift.status !== 'Completed') return;
-        const start = shift.startOdometer;
-        const end = shift.endOdometer;
-        if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end)) return;
-        const distance = end - start;
-        if (distance > 0) totalKmDriven += distance;
-      });
+      const { totalKmDriven, unknownDistanceIntervals } = driverDistance(
+        shiftsSnapshot.docs.map(d => ({ ...d.data(), id: d.id })),
+        assignmentsSnapshot.docs.map(d => d.data()),
+      );
 
       const totalFines = fines.length;
       const totalFineAmount = fines.reduce((sum, f) => sum + (Number.isFinite(f.amount) ? f.amount : 0), 0);
@@ -2323,6 +2309,7 @@ export const getDriverStatsWithSession = onMeasuredCall('getDriverStatsWithSessi
 
       return {
         totalKmDriven,
+        unknownDistanceIntervals,
         totalFines,
         totalFineAmount,
         unpaidFines,
@@ -2380,36 +2367,20 @@ export const getLeaderboard = onMeasuredCall('getLeaderboard', async (data, cont
       await perf.phase('adminValidation', () => requireAdmin(context));
     }
 
-    const [usersSnapshot, shiftsSnapshot] = await perf.phase('leaderboardReads', () => Promise.all([
+    const [usersSnapshot, shiftsSnapshot, assignmentsSnapshot] = await perf.phase('leaderboardReads', () => Promise.all([
       db.collection('users').where('role', '==', 'driver').get(),
       db.collection('shifts').where('status', '==', 'Completed').get(),
+      db.collection('vehicleAssignments').get(),
     ]));
 
     const leaderboard = perf.phaseSync('leaderboardAggregation', () => {
-      // Test-data isolation: build the set of test driverIds first (covers both drivers
-      // explicitly marked isTestData and, via the shift-level check below, any historical
-      // shift that predates isTestData stamping but still references a test driver).
-      const testDriverIds = new Set(
-        usersSnapshot.docs.filter((doc) => doc.data().isTestData === true).map((doc) => doc.id),
-      );
-
-      const totalKmByDriver = new Map<string, number>();
-      shiftsSnapshot.docs.forEach((doc) => {
-        const shift = doc.data();
-        if (shift.isTestData === true || testDriverIds.has(shift.driverId)) return;
-        const start = shift.startOdometer;
-        const end = shift.endOdometer;
-        if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end)) return;
-        const km = end - start;
-        if (km <= 0) return;
-        totalKmByDriver.set(shift.driverId, (totalKmByDriver.get(shift.driverId) || 0) + km);
-      });
-
+      const shifts = shiftsSnapshot.docs.map(d => ({ ...d.data(), id: d.id }));
+      const assignments = assignmentsSnapshot.docs.map(d => d.data());
       return usersSnapshot.docs
-        .filter((doc) => doc.data().isTestData !== true)
-        .map((doc) => ({
+        .filter(doc => doc.data().isTestData !== true)
+        .map(doc => ({
           driver: stripToDriverSafe(doc.data(), doc.id),
-          totalKmDriven: totalKmByDriver.get(doc.id) || 0,
+          ...driverDistance(shifts.filter((shift: any) => shift.driverId === doc.id), assignments, true),
         }))
         .sort((a, b) => b.totalKmDriven - a.totalKmDriven);
     });
@@ -2428,6 +2399,47 @@ export const getLeaderboard = onMeasuredCall('getLeaderboard', async (data, cont
 // =============================================================================
 // VEHICLE ASSIGNMENT CALLABLES (WP7B)
 // =============================================================================
+
+/**
+ * Exceptional recovery only: compare an exact pointer and preserve an immutable audit record.
+ * No event is deleted, no billing outcome is guessed, and ordinary driver sessions cannot call this.
+ */
+export const recoverReturnChargingEvent = functions.https.onCall(async (data, context) => {
+  const authorized = await requireAdmin(context);
+  const schema = z.object({ vehicleId: z.string().min(1), expectedEventId: z.string().min(1),
+    reason: z.string().trim().min(10).max(500) });
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) throw new functions.https.HttpsError('invalid-argument', 'Vehicle, exact event ID and a recovery reason (10-500 characters) are required.');
+  const { vehicleId, expectedEventId, reason } = parsed.data;
+  if (vehicleId.includes('/') || expectedEventId.includes('/')) throw new functions.https.HttpsError('invalid-argument', 'Invalid document ID.');
+  const vehicleRef = db.collection('vehicles').doc(vehicleId);
+  const eventRef = db.collection('chargingEvents').doc(expectedEventId);
+  const auditRef = db.collection('chargingEventRecoveries').doc();
+  const repaired = await db.runTransaction(async tx => {
+    const [v, e, sessions] = await Promise.all([tx.get(vehicleRef), tx.get(eventRef),
+      tx.get(db.collection('chargingSessions').where('vehicleId', '==', vehicleId))]);
+    const vehicle = v.data(), event = e.data();
+    if (!vehicle) throw new functions.https.HttpsError('not-found', 'Vehicle not found.');
+    if (!vehicle.openChargingEventId) return false; // repeat after successful recovery
+    if (vehicle.openChargingEventId !== expectedEventId) throw new functions.https.HttpsError('failed-precondition', 'Charging event pointer changed. Reload before recovery.');
+    if (vehicle.activeAssignmentId || vehicle.activeChargingSessionId || sessions.docs.some(d => d.data().status === 'OPEN')) throw new functions.https.HttpsError('failed-precondition', 'Recovery requires an unassigned vehicle with no active charge.');
+    // A wrong-vehicle event is never modified; only the selected vehicle's invalid pointer is repaired.
+    const ownsEvent = !!event && event.vehicleId === vehicleId;
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    if (ownsEvent && event.lifecycleStatus === 'OPEN') tx.update(eventRef, {
+      lifecycleStatus: 'CLOSED', chargingOutcome: 'UNKNOWN', closedAt: now, updatedAt: now,
+      recoveryId: auditRef.id,
+    });
+    tx.create(auditRef, {
+      vehicleId, eventId: expectedEventId, reason, adminUid: authorized.uid, createdAt: now,
+      previousLifecycleStatus: event?.lifecycleStatus ?? null, eventMatchedVehicle: ownsEvent,
+      eventExisted: e.exists, isTestData: vehicle.isTestData === true || event?.isTestData === true,
+    });
+    tx.update(vehicleRef, { openChargingEventId: admin.firestore.FieldValue.delete(), updatedAt: now });
+    return true;
+  });
+  return { success: true, repaired };
+});
 
 /**
  * Start a VehicleAssignment under an existing Active shift. Session-authenticated;
@@ -2487,9 +2499,10 @@ export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', a
     }
 
     const assignmentRef = db.collection('vehicleAssignments').doc();
-    const assignmentId = assignmentRef.id;
+    let assignmentId = assignmentRef.id;
 
     await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
+      assignmentId = assignmentRef.id; // reset per transaction retry before resolving an existing assignment
       const [txShiftDoc, txVehicleDoc, txDriverDoc] = await Promise.all([
         transaction.get(shiftDoc.ref),
         transaction.get(vehicleDoc.ref),
@@ -2506,6 +2519,15 @@ export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', a
       }
       // C. Shift has no other ACTIVE assignment.
       if (txShiftDoc.data()?.activeAssignmentId) {
+        const existing = await transaction.get(db.collection('vehicleAssignments').doc(txShiftDoc.data()!.activeAssignmentId));
+        const a = existing.data();
+        if (a && a.status === 'ACTIVE' && a.driverId === driverId && a.shiftId === shiftId && a.vehicleId === vehicleId
+          && txVehicleDoc.data()?.activeAssignmentId === existing.id && txVehicleDoc.data()?.activeShiftId === shiftId
+          && a.startOdometer === (startOdometer ?? null) && a.startChargePercent === (startChargePercent ?? null)
+          && a.startPredictedRangeKm === (startPredictedRangeKm ?? null)) {
+          assignmentId = existing.id; // lost-response retry, never repeat event closure
+          return;
+        }
         throw new functions.https.HttpsError('failed-precondition', 'The shift already has an active vehicle assignment.');
       }
       // D. Vehicle has no other ACTIVE assignment.
@@ -2527,6 +2549,24 @@ export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', a
       if (txDriverData?.allowedVehicles && Array.isArray(txDriverData.allowedVehicles)) {
         if (!txDriverData.allowedVehicles.includes(vehicleId)) {
           throw new functions.https.HttpsError('permission-denied', 'You are not authorized to use this vehicle.');
+        }
+      }
+
+      if (txVehicleDoc.data()?.status !== 'Active' || txVehicleDoc.data()?.activeChargingSessionId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Vehicle is unavailable or has an active charging session.');
+      }
+      const openSessions = await transaction.get(db.collection('chargingSessions').where('vehicleId', '==', vehicleId));
+      if (openSessions.docs.some(d => d.data().status === 'OPEN')) {
+        throw new functions.https.HttpsError('failed-precondition', 'Vehicle has an open charging session.');
+      }
+      const openEventId = txVehicleDoc.data()?.openChargingEventId;
+      const openEventRef = openEventId ? db.collection('chargingEvents').doc(openEventId) : null;
+      const openEventDoc = openEventRef ? await transaction.get(openEventRef) : null;
+      if (openEventRef) {
+        const event = openEventDoc?.data();
+        if (!event || event.vehicleId !== vehicleId || event.lifecycleStatus !== 'OPEN'
+          || (event.orgId && event.orgId !== DEFAULT_ORG_ID)) {
+          throw new functions.https.HttpsError('failed-precondition', 'The return-charging pointer needs administrator recovery.');
         }
       }
 
@@ -2597,6 +2637,18 @@ export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', a
       if (typeof startOdometer === 'number') {
         vehicleUpdate.currentOdometer = startOdometer;
       }
+      if (openEventRef && openEventDoc) {
+        // Pickup ends custody at charging. SOC alone does not prove charging or settle a bill.
+        transaction.update(openEventRef, {
+          lifecycleStatus: 'CLOSED', chargingOutcome: 'UNKNOWN',
+          pickupDriverId: driverId, pickupShiftId: shiftId, pickupAssignmentId: assignmentId,
+          pickupOdometer: startOdometer ?? null, pickupChargePercent: startChargePercent ?? null,
+          pickupPredictedRangeKm: startPredictedRangeKm ?? null,
+          closedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        vehicleUpdate.openChargingEventId = admin.firestore.FieldValue.delete();
+      }
       transaction.update(vehicleDoc.ref, vehicleUpdate);
     }));
 
@@ -2618,243 +2670,111 @@ export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', a
 export const endVehicleAssignment = onMeasuredCall('endVehicleAssignment', async (data, context, perf) => {
   try {
     const validated = EndVehicleAssignmentSchema.parse(data);
-    const {
-      driverId: reqDriverId,
-      sessionToken,
-      assignmentId,
-      endOdometer,
-      endChargePercent,
-      endPredictedRangeKm,
-      leftForCharging,
-      chargingLocationId,
-      publicChargeReference,
-      publicChargeCost,
-      chargingNotes,
-      transitionReason,
-    } = validated;
-
-    const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
-
+    const { driverId, isTestData } = await perf.phase('sessionValidation', () => requireDriverSession(validated));
+    const { assignmentId } = validated;
     const assignmentRef = db.collection('vehicleAssignments').doc(assignmentId);
-    const assignmentDoc = await perf.phase('assignmentRead', () => assignmentRef.get());
-    if (!assignmentDoc.exists) {
-      throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
-    }
-    const assignmentData = assignmentDoc.data()!;
-
-    if (assignmentData.driverId !== driverId) {
-      throw new functions.https.HttpsError('permission-denied', 'You can only end your own vehicle assignment.');
-    }
-
-    const shiftId = assignmentData.shiftId;
-    const vehicleId = assignmentData.vehicleId;
-
-    const [shiftDoc, vehicleDoc] = await perf.phase('shiftAndVehicleReads', () => Promise.all([
-      db.collection('shifts').doc(shiftId).get(),
-      db.collection('vehicles').doc(vehicleId).get(),
-    ]));
-
-    if (!shiftDoc.exists) throw new functions.https.HttpsError('not-found', 'Shift not found');
-    if (shiftDoc.data()!.driverId !== driverId) {
-      throw new functions.https.HttpsError('permission-denied', 'Shift does not belong to this driver.');
-    }
-    if (!vehicleDoc.exists) throw new functions.https.HttpsError('not-found', 'Vehicle not found');
-    assertPredictedRangeMatchesVehicle(
-      vehicleDoc.data()!.vehicleType,
-      endPredictedRangeKm,
-      'endPredictedRangeKm'
-    );
-    assertChargingReturnIntent(
-      vehicleDoc.data()!.vehicleType,
-      leftForCharging,
-      chargingLocationId,
-      publicChargeReference,
-      publicChargeCost,
-      chargingNotes
-    );
-    if (leftForCharging && (endOdometer === undefined || endChargePercent === undefined || endPredictedRangeKm === undefined)) {
-      throw new functions.https.HttpsError(
-        'invalid-argument',
-        'An EV returned for charging requires return odometer, charge percent, and predicted range.'
-      );
-    }
-    const chargingLocationRef = leftForCharging && chargingLocationId
-      ? db.collection('chargingLocations').doc(chargingLocationId)
-      : null;
-    const chargingEventRef = leftForCharging ? db.collection('chargingEvents').doc() : null;
-
-    // WP7D2A: BOTH the PICKUP and RETURN inspections must be COMPLETED before the assignment
-    // may be closed. CANCELLED has been removed from the driver-session schema, so ordinary
-    // drivers cannot bypass this guard; future admin cancellation is a separate recovery callable.
-    // Deterministic IDs (${assignmentId}_PICKUP / _RETURN) guarantee the inspection's
-    // assignmentId + boundaryType by construction; we additionally verify the server-written
-    // driverId/shiftId/vehicleId match the assignment being closed.
-    const pickupInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'PICKUP'));
-    const pickupInspectionDoc = await perf.phase('inspectionValidationReads', () => pickupInspectionRef.get());
-    if (!pickupInspectionDoc.exists || pickupInspectionDoc.data()!.status !== 'COMPLETED') {
-      throw new functions.https.HttpsError('failed-precondition', 'A completed pickup inspection is required before returning the vehicle.');
-    }
-    const pickupData = pickupInspectionDoc.data()!;
-    if (pickupData.driverId !== driverId || pickupData.shiftId !== assignmentData.shiftId || pickupData.vehicleId !== assignmentData.vehicleId) {
-      throw new functions.https.HttpsError('failed-precondition', 'The pickup inspection does not match this assignment.');
-    }
-
-    const returnInspectionRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN'));
-    const returnInspectionDoc = await perf.phase('inspectionValidationReads', () => returnInspectionRef.get());
-    if (!returnInspectionDoc.exists || returnInspectionDoc.data()!.status !== 'COMPLETED') {
-      throw new functions.https.HttpsError('failed-precondition', 'A completed return inspection is required before returning the vehicle.');
-    }
-    const returnData = returnInspectionDoc.data()!;
-    if (returnData.driverId !== driverId || returnData.shiftId !== assignmentData.shiftId || returnData.vehicleId !== assignmentData.vehicleId) {
-      throw new functions.https.HttpsError('failed-precondition', 'The return inspection does not match this assignment.');
-    }
-
-    if (assignmentData.startOdometer != null && endOdometer !== undefined && endOdometer < assignmentData.startOdometer) {
-      throw new functions.https.HttpsError('invalid-argument', 'End odometer must be greater than or equal to start odometer');
-    }
-
-    await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
-      // Every conditional read is included before the transaction issues any write.
-      const [txAssignmentDoc, txShiftDoc, txVehicleDoc, txChargingLocationDoc] = await Promise.all([
-        transaction.get(assignmentRef),
-        transaction.get(shiftDoc.ref),
-        transaction.get(vehicleDoc.ref),
-        chargingLocationRef ? transaction.get(chargingLocationRef) : Promise.resolve(null),
+    // Allocated once per invocation, written only by the transaction that closes ACTIVE.
+    const eventRef = db.collection('chargingEvents').doc();
+    await perf.phase('transaction', () => db.runTransaction(async tx => {
+      const assignmentDoc = await tx.get(assignmentRef);
+      if (!assignmentDoc.exists) throw new functions.https.HttpsError('not-found', 'Vehicle assignment not found');
+      const assignment = assignmentDoc.data()!;
+      if (assignment.driverId !== driverId) throw new functions.https.HttpsError('permission-denied', 'You can only end your own vehicle assignment.');
+      if (assignment.status === 'COMPLETED') return;
+      if (assignment.status !== 'ACTIVE') throw new functions.https.HttpsError('failed-precondition', 'The assignment is no longer active.');
+      const shiftRef = db.collection('shifts').doc(assignment.shiftId);
+      const vehicleRef = db.collection('vehicles').doc(assignment.vehicleId);
+      const returnRef = db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'RETURN'));
+      const [shiftDoc, vehicleDoc, pickupDoc, returnDoc, sessions] = await Promise.all([
+        tx.get(shiftRef), tx.get(vehicleRef),
+        tx.get(db.collection('vehicleInspections').doc(inspectionDocId(assignmentId, 'PICKUP'))),
+        tx.get(returnRef),
+        tx.get(db.collection('chargingSessions').where('vehicleId', '==', assignment.vehicleId)),
       ]);
-
-      const txAssignment = txAssignmentDoc.data()!;
-
-      // Idempotency: already completed -> no-op (no duplicate pointer mutations).
-      if (txAssignment.status === 'COMPLETED') {
-        return;
+      const shift = shiftDoc.data();
+      const vehicle = vehicleDoc.data();
+      if (!vehicle || !shift || shift.driverId !== driverId || shift.status !== 'Active'
+        || shift.activeAssignmentId !== assignmentId || vehicle.activeAssignmentId !== assignmentId
+        || vehicle.activeShiftId !== assignment.shiftId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Assignment workflow pointers are inconsistent.');
       }
-      if (txAssignment.status === 'CANCELLED') {
-        throw new functions.https.HttpsError('failed-precondition', 'This assignment was already cancelled.');
+      if (vehicle.activeChargingSessionId || sessions.docs.some(d => d.data().status === 'OPEN')) {
+        throw new functions.https.HttpsError('failed-precondition', 'End the active charging session before returning the vehicle.');
       }
-      assertPredictedRangeMatchesVehicle(
-        txVehicleDoc.data()?.vehicleType,
-        endPredictedRangeKm,
-        'endPredictedRangeKm'
-      );
-      assertChargingReturnIntent(
-        txVehicleDoc.data()?.vehicleType,
-        leftForCharging,
-        chargingLocationId,
-        publicChargeReference,
-        publicChargeCost,
-        chargingNotes
-      );
-
+      for (const [inspection, boundary] of [[pickupDoc, 'PICKUP'], [returnDoc, 'RETURN']] as const) {
+        const i = inspection.data();
+        if (!i || i.status !== 'COMPLETED' || i.assignmentId !== assignmentId || i.boundaryType !== boundary
+          || i.driverId !== driverId || i.shiftId !== assignment.shiftId || i.vehicleId !== assignment.vehicleId) {
+          throw new functions.https.HttpsError('failed-precondition', 'A matching completed pickup and return inspection is required before returning the vehicle.');
+        }
+      }
+      const ret = returnDoc.data()!;
+      // A completed inspection's durable draft is authoritative. Legacy callers may still supply readings.
+      const values = ReturnFinalizationSchema.parse(ret.returnFinalization || validated);
+      const { endOdometer, endChargePercent, endPredictedRangeKm, leftForCharging,
+        chargingLocationId, publicChargeReference, publicChargeCost, chargingNotes, transitionReason } = values;
+      if (ret.returnIntent && ret.returnIntent !== transitionReason) {
+        throw new functions.https.HttpsError('failed-precondition', 'Return intent does not match the completed inspection.');
+      }
+      assertPredictedRangeMatchesVehicle(vehicle.vehicleType, endPredictedRangeKm, 'endPredictedRangeKm');
+      assertChargingReturnIntent(vehicle.vehicleType, leftForCharging, chargingLocationId, publicChargeReference, publicChargeCost, chargingNotes);
+      if (leftForCharging && (endOdometer === undefined || endChargePercent === undefined || endPredictedRangeKm === undefined)) {
+        throw new functions.https.HttpsError('invalid-argument', 'An EV returned for charging requires return odometer, charge percent, and predicted range.');
+      }
+      if (endOdometer !== undefined && ((typeof assignment.startOdometer === 'number' && endOdometer < assignment.startOdometer)
+        || (typeof vehicle.currentOdometer === 'number' && endOdometer < vehicle.currentOdometer))) {
+        throw new functions.https.HttpsError('invalid-argument', 'End odometer must not be lower than the assignment or vehicle odometer.');
+      }
       let locationSnapshot: Record<string, any> | null = null;
       if (leftForCharging) {
-        if (!txChargingLocationDoc?.exists) {
-          throw new functions.https.HttpsError('not-found', 'Charging location not found.');
-        }
-        const locationData = txChargingLocationDoc.data()!;
-        if (locationData.active !== true) {
-          throw new functions.https.HttpsError('failed-precondition', 'Charging location is inactive.');
-        }
-        const assignmentOrgId = txAssignment.orgId || DEFAULT_ORG_ID;
-        if (locationData.orgId && locationData.orgId !== assignmentOrgId) {
-          throw new functions.https.HttpsError('permission-denied', 'Charging location does not belong to this organisation.');
-        }
-        locationSnapshot = chargingLocationSnapshot(locationData);
-        if (locationSnapshot.type !== 'PUBLIC_THIRD_PARTY'
-          && (publicChargeReference !== undefined || publicChargeCost !== undefined)) {
+        if (vehicle.openChargingEventId) throw new functions.https.HttpsError('failed-precondition', 'This vehicle already has an open charging event.');
+        const location = await tx.get(db.collection('chargingLocations').doc(chargingLocationId!));
+        const l = location.data();
+        if (!l) throw new functions.https.HttpsError('not-found', 'Charging location not found.');
+        if (l.active !== true) throw new functions.https.HttpsError('failed-precondition', 'Charging location is inactive.');
+        if (l.orgId && l.orgId !== (assignment.orgId || DEFAULT_ORG_ID)) throw new functions.https.HttpsError('permission-denied', 'Charging location does not belong to this organisation.');
+        locationSnapshot = chargingLocationSnapshot(l);
+        if (locationSnapshot.type !== 'PUBLIC_THIRD_PARTY' && (publicChargeReference !== undefined || publicChargeCost !== undefined)) {
           throw new functions.https.HttpsError('invalid-argument', 'Public charge details require a public charging location.');
         }
-        if (txVehicleDoc.data()?.openChargingEventId) {
-          throw new functions.https.HttpsError('failed-precondition', 'This vehicle already has an open charging event.');
-        }
       }
-
-      // Ensure return odometer does not regress canonical vehicle odometer
-      const currentVehicleOdo = txVehicleDoc.data()?.currentOdometer;
-      if (typeof endOdometer === 'number' && typeof currentVehicleOdo === 'number' && endOdometer < currentVehicleOdo) {
-        throw new functions.https.HttpsError(
-          'invalid-argument',
-          `End odometer (${endOdometer} km) cannot be lower than the vehicle's current recorded odometer (${currentVehicleOdo} km)`
-        );
-      }
-
-      const assignmentUpdate: any = {
-        status: 'COMPLETED',
-        endedAt: admin.firestore.FieldValue.serverTimestamp(),
-        transitionReason,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-      if (endOdometer !== undefined) assignmentUpdate.endOdometer = endOdometer;
-      if (endChargePercent !== undefined) assignmentUpdate.endChargePercent = endChargePercent;
-      if (endPredictedRangeKm !== undefined) assignmentUpdate.endPredictedRangeKm = endPredictedRangeKm;
-      transaction.update(assignmentRef, assignmentUpdate);
-
-      if (leftForCharging && chargingEventRef && locationSnapshot) {
-        // The existing location document may change later; this preserves the handover facts.
-        const financialStatus = locationSnapshot.type === 'PUBLIC_THIRD_PARTY' && publicChargeCost !== undefined
-          ? 'KNOWN'
-          : 'PENDING';
-        transaction.set(chargingEventRef, {
-          id: chargingEventRef.id,
-          orgId: txAssignment.orgId || DEFAULT_ORG_ID,
-          vehicleId: txAssignment.vehicleId,
-          returnDriverId: txAssignment.driverId,
-          returnShiftId: txAssignment.shiftId,
-          returnAssignmentId: assignmentId,
-          returnedAt: admin.firestore.FieldValue.serverTimestamp(),
-          returnOdometer: endOdometer,
-          returnChargePercent: endChargePercent,
-          returnPredictedRangeKm: endPredictedRangeKm,
-          chargingLocationId,
-          locationSnapshot,
-          lifecycleStatus: 'OPEN',
-          chargingOutcome: null,
-          financialStatus,
-          publicChargeReference: publicChargeReference ?? null,
-          publicChargeCost: publicChargeCost ?? null,
-          finalCost: publicChargeCost ?? null,
-          notes: chargingNotes ?? null,
-          pickupDriverId: null,
-          pickupShiftId: null,
-          pickupAssignmentId: null,
-          closedAt: null,
-          reconciledAt: null,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      }
-
-      // Clear shift pointer only if it still points to this assignment.
-      if (txShiftDoc.data()?.activeAssignmentId === assignmentId) {
-        transaction.update(shiftDoc.ref, { activeAssignmentId: admin.firestore.FieldValue.delete() });
-      }
-
-      // Update vehicle: update currentOdometer and clear assignment/shift pointers
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      const update: any = { status: 'COMPLETED', endedAt: now, transitionReason, updatedAt: now };
+      if (endOdometer !== undefined) update.endOdometer = endOdometer;
+      if (endChargePercent !== undefined) update.endChargePercent = endChargePercent;
+      if (endPredictedRangeKm !== undefined) update.endPredictedRangeKm = endPredictedRangeKm;
+      tx.update(assignmentRef, update);
+      tx.update(returnRef, { returnFinalizationStatus: 'COMPLETED', returnFinalizedAt: now });
+      tx.update(shiftRef, { activeAssignmentId: admin.firestore.FieldValue.delete(), updatedAt: now });
       const vehicleUpdate: any = {
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        activeAssignmentId: admin.firestore.FieldValue.delete(),
+        activeShiftId: admin.firestore.FieldValue.delete(), updatedAt: now,
       };
-      if (typeof endOdometer === 'number') {
-        vehicleUpdate.currentOdometer = endOdometer;
+      if (endOdometer !== undefined) vehicleUpdate.currentOdometer = endOdometer;
+      if (leftForCharging && locationSnapshot) {
+        tx.create(eventRef, {
+          id: eventRef.id, orgId: assignment.orgId || DEFAULT_ORG_ID, vehicleId: assignment.vehicleId,
+          returnDriverId: driverId, returnShiftId: assignment.shiftId, returnAssignmentId: assignmentId,
+          returnedAt: now, returnOdometer: endOdometer, returnChargePercent: endChargePercent,
+          returnPredictedRangeKm: endPredictedRangeKm, chargingLocationId, locationSnapshot,
+          lifecycleStatus: 'OPEN', chargingOutcome: null,
+          financialStatus: locationSnapshot.type === 'PUBLIC_THIRD_PARTY' && publicChargeCost !== undefined ? 'KNOWN' : 'PENDING',
+          publicChargeReference: publicChargeReference ?? null, publicChargeCost: publicChargeCost ?? null,
+          finalCost: publicChargeCost ?? null, notes: chargingNotes ?? null,
+          pickupDriverId: null, pickupShiftId: null, pickupAssignmentId: null, closedAt: null, reconciledAt: null,
+          isTestData: isTestData || assignment.isTestData === true || vehicle.isTestData === true,
+          createdAt: now, updatedAt: now,
+        });
+        vehicleUpdate.openChargingEventId = eventRef.id;
       }
-      if (txVehicleDoc.data()?.activeAssignmentId === assignmentId) {
-        vehicleUpdate.activeAssignmentId = admin.firestore.FieldValue.delete();
-      }
-      if (txVehicleDoc.data()?.activeShiftId === shiftId) {
-        vehicleUpdate.activeShiftId = admin.firestore.FieldValue.delete();
-      }
-      if (leftForCharging && chargingEventRef) {
-        vehicleUpdate.openChargingEventId = chargingEventRef.id;
-      }
-      transaction.update(vehicleDoc.ref, vehicleUpdate);
+      tx.update(vehicleRef, vehicleUpdate);
     }));
-
     return { success: true, message: 'Vehicle assignment ended' };
   } catch (error: any) {
     if (error instanceof functions.https.HttpsError) throw error;
-    if (error instanceof z.ZodError) {
-      throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => e.path.join('.') + ': ' + e.message).join(', '));
-    }
+    if (error instanceof z.ZodError) throw new functions.https.HttpsError('invalid-argument', error.errors.map(e => e.path.join('.') + ': ' + e.message).join(', '));
     console.error('Error in endVehicleAssignment:', error);
-    throw new functions.https.HttpsError('internal', 'Failed to end vehicle assignment: ' + error.message);
+    throw new functions.https.HttpsError('internal', 'Failed to end vehicle assignment.');
   }
 });
 
@@ -2888,7 +2808,7 @@ export const startChargingSession = onMeasuredCall('startChargingSession', async
     // Validates: assignment belongs to this driver, assignment is ACTIVE, vehicle exists.
     // The vehicle is derived entirely from the assignment — there is no vehicleId input, so
     // the driver has no way to select or assert a different vehicle (business rule 1).
-    const { assignmentData, vehicleRef, vehicleData } = await perf.phase(
+    const { assignmentData, vehicleRef } = await perf.phase(
       'assignmentValidation',
       () => getActiveAssignmentForDriverAction(driverId, assignmentId),
     );
@@ -2898,20 +2818,33 @@ export const startChargingSession = onMeasuredCall('startChargingSession', async
     const chargingSessionRef = db.collection('chargingSessions').doc();
 
     await perf.phase('transaction', () => db.runTransaction(async (transaction) => {
-      const [txVehicleDoc, txLocationDoc] = await Promise.all([
-        transaction.get(vehicleRef),
-        transaction.get(chargingLocationRef),
+      const [txVehicleDoc, txLocationDoc, txAssignmentDoc, txShiftDoc, txSessions] = await Promise.all([
+        transaction.get(vehicleRef), transaction.get(chargingLocationRef),
+        transaction.get(db.collection('vehicleAssignments').doc(assignmentId)),
+        transaction.get(db.collection('shifts').doc(assignmentData.shiftId)),
+        transaction.get(db.collection('chargingSessions').where('vehicleId', '==', assignmentData.vehicleId)),
       ]);
+      const currentAssignment = txAssignmentDoc.data();
+      if (!currentAssignment || currentAssignment.vehicleId !== assignmentData.vehicleId
+        || currentAssignment.shiftId !== assignmentData.shiftId
+        || txShiftDoc.data()?.driverId !== driverId || txShiftDoc.data()?.status !== 'Active'
+        || txShiftDoc.data()?.activeAssignmentId !== assignmentId
+        || txVehicleDoc.data()?.activeAssignmentId !== assignmentId
+        || txVehicleDoc.data()?.activeShiftId !== currentAssignment.shiftId
+        || txVehicleDoc.data()?.openChargingEventId
+        || txSessions.docs.some(d => d.data().status === 'OPEN')) {
+        throw new functions.https.HttpsError('failed-precondition', 'The assignment is no longer current or charging is already open.');
+      }
 
       // Single authoritative validation pass, re-run against transactionally-fresh reads to
       // close the race window (in particular: a second OPEN session, or the location being
       // deactivated, between the earlier reads and this transaction).
       assertCanStartChargingSession(
         driverId,
-        assignmentData as { driverId: string; status: string },
+        currentAssignment as { driverId: string; status: string },
         txVehicleDoc.data() as { vehicleType: string; activeChargingSessionId?: string | null },
         txLocationDoc.exists ? (txLocationDoc.data() as { active: boolean; orgId?: string | null }) : null,
-        orgId,
+        currentAssignment.orgId || DEFAULT_ORG_ID,
       );
 
       // Preserves the handover facts even if the location document changes later.
@@ -2941,7 +2874,7 @@ export const startChargingSession = onMeasuredCall('startChargingSession', async
         notes: null,
         // Test-data isolation: inherited from either party, matching every other
         // driver-session-authenticated write in this file.
-        isTestData: resolveChargingSessionIsTestData(driverIsTestData, vehicleData.isTestData === true),
+        isTestData: resolveChargingSessionIsTestData(driverIsTestData || currentAssignment.isTestData === true, txVehicleDoc.data()?.isTestData === true),
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
@@ -3196,7 +3129,7 @@ const INSPECTION_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 export const createVehicleInspection = onMeasuredCall('createVehicleInspection', async (data, context, perf) => {
   try {
     const validated = CreateVehicleInspectionSchema.parse(data);
-    const { driverId: reqDriverId, sessionToken, assignmentId, boundaryType, returnIntent } = validated;
+    const { driverId: reqDriverId, sessionToken, assignmentId, boundaryType, returnIntent, returnFinalization } = validated;
     const { driverId } = await perf.phase('sessionValidation', () => requireDriverSession({ driverId: reqDriverId, sessionToken }));
 
     // RETURN inspections require an explicit, server-validated return intent.
@@ -3219,12 +3152,6 @@ export const createVehicleInspection = onMeasuredCall('createVehicleInspection',
 
     const inspectionId = inspectionDocId(assignmentId, boundaryType);
     const inspectionRef = db.collection('vehicleInspections').doc(inspectionId);
-    const existing = await perf.phase('inspectionRead', () => inspectionRef.get());
-    if (existing.exists) {
-      // Idempotent — never create a duplicate boundary inspection.
-      return { success: true, inspection: { id: inspectionId, ...existing.data() } };
-    }
-
     const inspectionData = {
       orgId: assignmentData.orgId || DEFAULT_ORG_ID,
       assignmentId,
@@ -3251,9 +3178,48 @@ export const createVehicleInspection = onMeasuredCall('createVehicleInspection',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
-    await perf.phase('inspectionWrite', () => inspectionRef.set(inspectionData));
+    await perf.phase('inspectionWrite', () => db.runTransaction(async tx => {
+      const [currentAssignment, existing, vehicleDoc] = await Promise.all([
+        tx.get(assignmentRef), tx.get(inspectionRef),
+        tx.get(db.collection('vehicles').doc(assignmentData.vehicleId)),
+      ]);
+      const a = currentAssignment.data();
+      if (!a || a.driverId !== driverId || a.status !== 'ACTIVE' || a.shiftId !== assignmentData.shiftId || a.vehicleId !== assignmentData.vehicleId) {
+        throw new functions.https.HttpsError('failed-precondition', 'The assignment is no longer active or changed.');
+      }
+      const old = existing.data();
+      if (old && (old.driverId !== driverId || old.assignmentId !== assignmentId || old.boundaryType !== boundaryType
+        || old.vehicleId !== a.vehicleId || old.shiftId !== a.shiftId)) {
+        throw new functions.https.HttpsError('failed-precondition', 'Inspection does not match the assignment.');
+      }
+      if (returnFinalization) {
+        if (boundaryType !== 'RETURN' || returnFinalization.transitionReason !== (old?.returnIntent || returnIntent)) {
+          throw new functions.https.HttpsError('invalid-argument', 'Return draft must match the inspection return intent.');
+        }
+        const v = vehicleDoc.data();
+        assertPredictedRangeMatchesVehicle(v?.vehicleType, returnFinalization.endPredictedRangeKm, 'endPredictedRangeKm');
+        assertChargingReturnIntent(v?.vehicleType, returnFinalization.leftForCharging, returnFinalization.chargingLocationId,
+          returnFinalization.publicChargeReference, returnFinalization.publicChargeCost, returnFinalization.chargingNotes);
+        if (returnFinalization.endOdometer === undefined || (typeof a.startOdometer === 'number' && returnFinalization.endOdometer < a.startOdometer)) {
+          throw new functions.https.HttpsError('invalid-argument', 'A valid assignment return odometer is required.');
+        }
+        if (v?.vehicleType === 'EV' && returnFinalization.endChargePercent === undefined) {
+          throw new functions.https.HttpsError('invalid-argument', 'An EV return requires a charge percent.');
+        }
+      }
+      if (old && old.status !== 'PENDING' && old.status !== 'COMPLETED') {
+        throw new functions.https.HttpsError('failed-precondition', 'Invalid inspection state.');
+      }
+      // The operational draft is separate from evidence. Legacy completed returns can attach
+      // their FIRST draft; completed evidence and an already-frozen draft never change.
+      const draft = returnFinalization && (!old || old.status === 'PENDING' || !old.returnFinalization)
+        ? { returnFinalization: JSON.parse(JSON.stringify(returnFinalization)), returnFinalizationStatus: 'PENDING' } : {};
+      if (!existing.exists) tx.create(inspectionRef, { ...inspectionData, ...draft });
+      else if (Object.keys(draft).length) tx.update(inspectionRef, draft);
+    }));
+    const persisted = await inspectionRef.get();
 
-    return { success: true, inspection: { id: inspectionId, ...inspectionData } };
+    return { success: true, inspection: { id: inspectionId, ...persisted.data() } };
   } catch (error: any) {
     if (error instanceof functions.https.HttpsError) throw error;
     if (error instanceof z.ZodError) {
@@ -3337,23 +3303,8 @@ export const uploadInspectionPhoto = onMeasuredCall('uploadInspectionPhoto', asy
     // Save bytes directly to the unique permanent path.
     await perf.phase('storageUpload', () => bucket.file(objectPath).save(buffer, { contentType: mimeType, resumable: false }));
 
-    // Re-read the inspection before touching Firestore metadata. The unique path guarantees
-    // the object write could not have clobbered completed evidence even if completion raced it.
-    const recheckDoc = await perf.phase('inspectionRecheck', () => inspectionRef.get());
-    if (!recheckDoc.exists) {
-      await bucket.file(objectPath).delete().catch(() => {});
-      throw new functions.https.HttpsError('not-found', 'Vehicle inspection not found');
-    }
-    const recheck = recheckDoc.data()!;
-    if (recheck.driverId !== driverId || recheck.boundaryType !== boundaryType) {
-      await bucket.file(objectPath).delete().catch(() => {});
-      throw new functions.https.HttpsError('failed-precondition', 'The inspection changed while the photo was uploading.');
-    }
-    if (recheck.status !== 'PENDING') {
-      await bucket.file(objectPath).delete().catch(() => {});
-      throw new functions.https.HttpsError('failed-precondition', 'This inspection was completed while the photo was uploading.');
-    }
-
+    // Keep unselected unique objects on uncertain failure. Never delete evidence after a
+    // possibly committed metadata write; a separate retention audit can find orphan uploads.
     // Persist authoritative metadata (only while still PENDING).
     const update: any = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     if (photoRole === 'EXTERIOR') {
@@ -3365,7 +3316,17 @@ export const uploadInspectionPhoto = onMeasuredCall('uploadInspectionPhoto', asy
       update.interiorPhotoSize = buffer.length;
       update.interiorPhotoContentType = mimeType;
     }
-    await perf.phase('inspectionMetadataWrite', () => inspectionRef.update(update));
+    await perf.phase('inspectionMetadataWrite', () => db.runTransaction(async tx => {
+      const [current, assignment] = await Promise.all([tx.get(inspectionRef), tx.get(assignmentRef)]);
+      const i = current.data();
+      const a = assignment.data();
+      if (!i || i.status !== 'PENDING' || i.driverId !== driverId || i.boundaryType !== boundaryType
+        || i.assignmentId !== assignmentId || !a || a.driverId !== driverId || a.status !== 'ACTIVE'
+        || i.vehicleId !== a.vehicleId || i.shiftId !== a.shiftId) {
+        throw new functions.https.HttpsError('failed-precondition', 'The inspection completed or changed while the photo was uploading.');
+      }
+      tx.update(inspectionRef, update);
+    }));
 
     return { success: true, photoRole, photoPath: objectPath };
   } catch (error: any) {
@@ -3511,22 +3472,36 @@ export const completeVehicleInspection = onMeasuredCall('completeVehicleInspecti
       ? null
       : admin.firestore.Timestamp.fromMillis(Date.now() + ROUTINE_INSPECTION_RETENTION_MS);
 
-    await perf.phase('inspectionCompletionWrite', () => inspectionRef.update({
-      status: 'COMPLETED',
-      capturedAt: admin.firestore.FieldValue.serverTimestamp(),
-      completedAt: admin.firestore.FieldValue.serverTimestamp(),
-      hasDamage,
-      damageDescription: hasDamage ? damageDescription!.trim() : null,
-      // Explicitly freeze the EXACT verified object paths (WP7D2B). A concurrent replacement
-      // upload writes a distinct unique object, so these frozen bytes can never be overwritten.
-      exteriorPhotoPath: extPath,
-      interiorPhotoPath: intPath,
-      // Derived convenience fields — true only because the objects were verified above.
-      exteriorPhotoCaptured: true,
-      interiorPhotoCaptured: true,
-      retentionClass,
-      expiresAt,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    await perf.phase('inspectionCompletionWrite', () => db.runTransaction(async tx => {
+      const [current, assignment] = await Promise.all([tx.get(inspectionRef), tx.get(assignmentRef)]);
+      const i = current.data();
+      const a = assignment.data();
+      if (!i || i.driverId !== driverId) throw new functions.https.HttpsError('permission-denied', 'Inspection ownership changed.');
+      if (i.status === 'COMPLETED') return; // first completion wins, including damage/retention
+      if (i.status !== 'PENDING' || !a || a.status !== 'ACTIVE' || a.driverId !== driverId
+        || i.assignmentId !== assignmentRef.id || i.vehicleId !== a.vehicleId || i.shiftId !== a.shiftId
+        || i.boundaryType !== inspectionData.boundaryType || i.returnIntent !== inspectionData.returnIntent
+        || JSON.stringify(i.returnFinalization) !== JSON.stringify(inspectionData.returnFinalization)
+        || i.exteriorPhotoPath !== extPath || i.interiorPhotoPath !== intPath) {
+        throw new functions.https.HttpsError('failed-precondition', 'Inspection evidence or return draft changed; reload and retry completion.');
+      }
+      tx.update(inspectionRef, {
+        status: 'COMPLETED',
+        capturedAt: admin.firestore.FieldValue.serverTimestamp(),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        hasDamage,
+        damageDescription: hasDamage ? damageDescription!.trim() : null,
+        // Explicitly freeze the EXACT verified object paths (WP7D2B). A concurrent replacement
+        // upload writes a distinct unique object, so these frozen bytes can never be overwritten.
+        exteriorPhotoPath: extPath,
+        interiorPhotoPath: intPath,
+        // Derived convenience fields — true only because the objects were verified above.
+        exteriorPhotoCaptured: true,
+        interiorPhotoCaptured: true,
+        retentionClass,
+        expiresAt,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
     }));
 
     const updated = await perf.phase('inspectionReadback', () => inspectionRef.get());
