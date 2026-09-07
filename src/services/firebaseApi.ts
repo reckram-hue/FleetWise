@@ -18,6 +18,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { db, callFunction } from '../lib/firebase';
+import { convertTimestamps } from '../lib/convertTimestamps';
 import {
   User,
   UserRole,
@@ -76,27 +77,6 @@ const COLLECTIONS = {
   fuelEconomyAlerts: 'fuelEconomyAlerts'
   ,
   chargingLocations: 'chargingLocations'
-};
-
-// Helper to convert Firestore timestamps to Date objects
-const convertTimestamps = (data: any): any => {
-  if (!data) return data;
-  const result = { ...data };
-  Object.keys(result).forEach(key => {
-    const value = result[key];
-    if (value && typeof value.toDate === 'function') {
-      result[key] = value.toDate();
-    } else if (value && typeof value === 'object') {
-      if ('seconds' in value && 'nanoseconds' in value) {
-        result[key] = new Date(value.seconds * 1000 + value.nanoseconds / 1000000);
-      } else if ('_seconds' in value && '_nanoseconds' in value) {
-        result[key] = new Date(value._seconds * 1000 + value._nanoseconds / 1000000);
-      } else {
-        result[key] = convertTimestamps(value);
-      }
-    }
-  });
-  return result;
 };
 
 // Test-data isolation helper for records that reference a driverId. The `users` collection

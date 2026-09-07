@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:contracts": "node --test test/convertTimestamps.test.cjs",
+    "test:pin-attempts:emulator": "npm --prefix functions run build && npm --prefix functions-prod-jhb run build && node --test test/pinAttempts.emulator.test.cjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

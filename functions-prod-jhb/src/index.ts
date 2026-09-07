@@ -5,6 +5,7 @@ import * as bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import * as crypto from 'crypto';
 import { createActiveAdminProfile, requireActiveAdmin } from './adminAuthorization';
+import { reservePinAttempt, assertActivePinDriver, pinAttemptDocumentId } from './pinAttempts';
 import { onCall as onCallV2 } from 'firebase-functions/v2/https';
 import {
   assertCanStartChargingSession,
@@ -122,70 +123,7 @@ function onMeasuredCall(
 // RATE LIMITING HELPERS
 // =============================================================================
 
-// Derives a safe Firestore document ID for rate-limit records.
-// The driverId prefix is kept plain so per-driver range queries remain functional.
-// The deviceId is hashed to strip `/` and other path-separator characters.
-function getRateLimitKey(driverId: string, deviceId: string): string {
-  const deviceHash = crypto.createHash('sha256').update(deviceId || 'unknown').digest('hex');
-  return `${driverId}_${deviceHash}`;
-}
-
-/**
- * Check and update rate limiting for PIN attempts
- * Allows max 6 failed attempts in 10 minutes per driver/device
- */
-async function checkRateLimit(driverId: string, deviceId: string = 'unknown'): Promise<void> {
-  const rateLimitRef = db.collection('rateLimits').doc(getRateLimitKey(driverId, deviceId));
-  const now = admin.firestore.Timestamp.now();
-  const tenMinutesAgo = admin.firestore.Timestamp.fromMillis(now.toMillis() - 10 * 60 * 1000);
-
-  const doc = await rateLimitRef.get();
-
-  if (!doc.exists) {
-    // First attempt, create the document
-    await rateLimitRef.set({
-      attempts: 1,
-      firstAttempt: now,
-      lastAttempt: now,
-    });
-    return;
-  }
-
-  const data = doc.data()!;
-  const firstAttempt = data.firstAttempt as admin.firestore.Timestamp;
-
-  // Reset if outside 10-minute window
-  if (firstAttempt.toMillis() < tenMinutesAgo.toMillis()) {
-    await rateLimitRef.set({
-      attempts: 1,
-      firstAttempt: now,
-      lastAttempt: now,
-    });
-    return;
-  }
-
-  // Check if exceeded limit
-  if (data.attempts >= 6) {
-    throw new functions.https.HttpsError(
-      'resource-exhausted',
-      'Too many failed PIN attempts. Please wait 10 minutes before trying again.'
-    );
-  }
-
-  // Increment attempt counter
-  await rateLimitRef.update({
-    attempts: admin.firestore.FieldValue.increment(1),
-    lastAttempt: now,
-  });
-}
-
-/**
- * Clear rate limit after successful authentication
- */
-async function clearRateLimit(driverId: string, deviceId: string = 'unknown'): Promise<void> {
-  const rateLimitRef = db.collection('rateLimits').doc(getRateLimitKey(driverId, deviceId));
-  await rateLimitRef.delete();
-}
+// Account-wide PIN reservations are implemented in pinAttempts.ts.
 
 // =============================================================================
 // VALIDATION SCHEMAS
@@ -527,6 +465,7 @@ export const adminSetDriverPin = onProdCall(async (data, context) => {
 
     // Revoke all active sessions for this driver — an admin PIN reset invalidates existing sessions.
     await revokeActiveDriverSessions(driverId, 'pin_reset');
+    await db.collection('rateLimits').doc(pinAttemptDocumentId(driverId)).delete();
 
     return {
       success: true,
@@ -574,6 +513,8 @@ export const driverChangePin = onProdCall(async (data, context) => {
       );
     }
 
+    const releaseSuccessfulAttempt = await reservePinAttempt(db, driverId);
+
     // Get driver document
     const driverRef = db.collection('users').doc(driverId);
     const driverDoc = await driverRef.get();
@@ -583,6 +524,7 @@ export const driverChangePin = onProdCall(async (data, context) => {
     }
 
     const driverData = driverDoc.data()!;
+    assertActivePinDriver(driverData);
     const storedHash = driverData.pinHash;
 
     if (!storedHash) {
@@ -601,6 +543,8 @@ export const driverChangePin = onProdCall(async (data, context) => {
       );
     }
 
+    await releaseSuccessfulAttempt();
+
     // Hash new PIN
     const newPinHash = await bcrypt.hash(newPin, 10);
 
@@ -611,17 +555,7 @@ export const driverChangePin = onProdCall(async (data, context) => {
       pinLastUpdatedBy: driverId, // Driver changed their own PIN
     });
 
-    // Clear any existing rate limits for this driver
-    const rateLimitQuery = await db.collection('rateLimits')
-      .where('__name__', '>=', `${driverId}_`)
-      .where('__name__', '<', `${driverId}_\uf8ff`)
-      .get();
-
-    const batch = db.batch();
-    rateLimitQuery.docs.forEach((doc) => {
-      batch.delete(doc.ref);
-    });
-    await batch.commit();
+    // Ordinary self-service changes intentionally keep existing sessions valid.
 
     return {
       success: true,
@@ -668,8 +602,8 @@ export const driverLogin = onMeasuredCall('driverLogin', async (data, context, p
     const validated = DriverLoginSchema.parse(data);
     const { driverId, pin, deviceId = 'unknown' } = validated;
 
-    // Apply rate limiting before touching driver data (same policy as validateDriverPin)
-    await perf.phase('rateLimitCheck', () => checkRateLimit(driverId, deviceId));
+    // Reserve the shared account budget before touching driver data or comparing a PIN.
+    const releaseSuccessfulAttempt = await perf.phase('rateLimitCheck', () => reservePinAttempt(db, driverId));
 
     const driverDoc = await perf.phase('driverRead', () => db.collection('users').doc(driverId).get());
     if (!driverDoc.exists) {
@@ -678,16 +612,7 @@ export const driverLogin = onMeasuredCall('driverLogin', async (data, context, p
 
     const driverData = driverDoc.data()!;
 
-    if (driverData.employmentStatus !== 'Active') {
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        'Your account is not active. Please contact your administrator.'
-      );
-    }
-
-    if (driverData.role && driverData.role !== 'driver') {
-      throw new functions.https.HttpsError('failed-precondition', 'This account is not a driver account.');
-    }
+    assertActivePinDriver(driverData);
 
     const storedHash = driverData.pinHash;
     if (!storedHash) {
@@ -703,8 +628,8 @@ export const driverLogin = onMeasuredCall('driverLogin', async (data, context, p
       throw new functions.https.HttpsError('permission-denied', 'Invalid PIN.');
     }
 
-    // PIN is correct. Clear rate limit; the PIN reference is discarded after this point.
-    await perf.phase('rateLimitClear', () => clearRateLimit(driverId, deviceId));
+    // Refund only this successful verification, preserving all other attempts.
+    await perf.phase('rateLimitClear', releaseSuccessfulAttempt);
 
     // Generate session token.
     // SECURITY: The raw token is a bearer credential — it must NOT be logged or stored server-side.
