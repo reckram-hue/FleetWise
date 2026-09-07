@@ -76,6 +76,29 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
     startChargePercent: 30, startPredictedRangeKm: 100, chargingLocationId: f.locationId, chargingType: 'COMPANY_AC' });
   const endCharge = (f, chargingSessionId) => f.call('endChargingSession', { chargingSessionId, endChargePercent: 80, endPredictedRangeKm: 300 });
 
+  for (const boundaryType of ['PICKUP', 'RETURN']) for (const hasDamage of [false, true]) {
+    test(`${backend}: ${boundaryType} damage=${hasDamage} retains correct evidence policy without creating defects`, async () => {
+      const f = await fixture();
+      const inspectionId = await prepare(f, boundaryType, boundaryType === 'RETURN' ? draft(f) : undefined);
+      const before = Date.now();
+      await f.call('completeVehicleInspection', { inspectionId, hasDamage, ...(hasDamage ? { damageDescription: 'Synthetic damage' } : {}) });
+      const stored = await read('vehicleInspections', inspectionId);
+      assert.equal(stored.status, 'COMPLETED');
+      assert.equal(stored.hasDamage, hasDamage);
+      assert.equal(stored.damageDescription, hasDamage ? 'Synthetic damage' : null);
+      if (boundaryType === 'PICKUP' || hasDamage) {
+        assert.equal(stored.retentionClass, 'EVIDENCE'); assert.equal(stored.expiresAt, null);
+      } else {
+        assert.equal(stored.retentionClass, 'ROUTINE');
+        const expiry = stored.expiresAt.toMillis(), sevenDays = 7 * 24 * 60 * 60 * 1000;
+        assert.ok(expiry >= before + sevenDays && expiry <= Date.now() + sevenDays);
+      }
+      assert.equal((await db.collection('defects').where('driverId', '==', f.driverId).get()).size, 0);
+      await f.call('completeVehicleInspection', { inspectionId, hasDamage: !hasDamage, damageDescription: 'Retry must not rewrite' });
+      assert.deepEqual(await read('vehicleInspections', inspectionId), stored);
+    });
+  }
+
   for (const [first, second] of [[80000, 11900], [11900, 80000]]) {
     test(`${backend}: multi-vehicle ${first} -> ${second} yields 200 km in stats and leaderboard`, async () => {
       // Explicit non-test provenance exercises production exclusion logic in the DEMO database only.

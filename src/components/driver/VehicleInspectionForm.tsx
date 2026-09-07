@@ -216,7 +216,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
 
   const handleSubmit = async () => {
     if (loading || loadFailed || submitting) return;
-    if (hasDamage && !damageDescription.trim()) { setError('Please describe the damage.'); return; }
+    if (isReturn && hasDamage && !damageDescription.trim()) { setError('Please describe the damage.'); return; }
 
     let endOdometer: number | undefined;
     let endChargePercent: number | undefined;
@@ -293,8 +293,10 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         driverId,
         sessionToken: session.sessionToken,
         inspectionId: created.id,
-        hasDamage,
-        damageDescription: hasDamage ? damageDescription.trim() : undefined,
+        // PICKUP records photographic custody evidence, not a second defect declaration.
+        // The backend retains PICKUP evidence independently of this compatibility value.
+        hasDamage: isReturn ? hasDamage : false,
+        damageDescription: isReturn && hasDamage ? damageDescription.trim() : undefined,
       });
       const authoritativeDraft = completed.returnFinalization || draft;
       await onCompleted(authoritativeDraft
@@ -382,7 +384,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         <PhotoField label='Interior / dashboard photo' slot={interior} role='INTERIOR' onFile={handleFile} />
       </fieldset>
 
-      <fieldset disabled={evidenceCompleted || submitting} className='mt-4'>
+      {isReturn && <fieldset disabled={evidenceCompleted || submitting} className='mt-4'>
         <legend className='block text-sm font-semibold text-gray-700 mb-2'>Any new damage? <span className='text-red-500'>*</span></legend>
         <div className='flex gap-3'>
           <button aria-pressed={!hasDamage} onClick={() => setHasDamage(false)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${!hasDamage ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500'}`}>No</button>
@@ -391,7 +393,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         {hasDamage && (
           <textarea aria-label='Damage description' value={damageDescription} onChange={e => setDamageDescription(e.target.value)} rows={3} placeholder='Describe the damage...' className='w-full px-4 py-3 border border-gray-300 rounded-lg mt-3' />
         )}
-      </fieldset>
+      </fieldset>}
 
       <div className='mt-6 space-y-3'>
         <button onClick={handleSubmit} disabled={submitting} className='w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center'>

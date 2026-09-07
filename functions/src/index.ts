@@ -3395,7 +3395,8 @@ export const uploadDefectPhoto = onMeasuredCall('uploadDefectPhoto', async (data
 
 /**
  * Complete a PENDING inspection with damage + photo capture markers.
- * retentionClass is determined SERVER-SIDE from hasDamage (never trusted from the client).
+ * PICKUP photos are chain-of-custody evidence; RETURN retention depends on damage.
+ * The inspection boundary is read server-side, never supplied by the completion caller.
  * A COMPLETED inspection cannot be rewritten.
  */
 export const completeVehicleInspection = onMeasuredCall('completeVehicleInspection', async (data, context, perf) => {
@@ -3467,8 +3468,9 @@ export const completeVehicleInspection = onMeasuredCall('completeVehicleInspecti
       throw new functions.https.HttpsError('failed-precondition', 'The interior inspection photo is missing.');
     }
 
-    const retentionClass = hasDamage ? 'EVIDENCE' : 'ROUTINE';
-    const expiresAt = hasDamage
+    const retainAsEvidence = inspectionData.boundaryType === 'PICKUP' || hasDamage;
+    const retentionClass = retainAsEvidence ? 'EVIDENCE' : 'ROUTINE';
+    const expiresAt = retainAsEvidence
       ? null
       : admin.firestore.Timestamp.fromMillis(Date.now() + ROUTINE_INSPECTION_RETENTION_MS);
 
