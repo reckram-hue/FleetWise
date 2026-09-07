@@ -15,8 +15,9 @@ import VehicleInspectionForm, { VehicleInspectionResult } from '../components/dr
 import ReportDefectForm from '../components/driver/ReportDefectForm';
 import LogChargeForm from '../components/driver/LogChargeForm';
 import LogRefuelForm from '../components/driver/LogRefuelForm';
+import { VehicleStartReadings } from '../components/driver/VehicleReadings';
 import {
-  Clock, Car, User, Gauge, Battery, Loader, AlertCircle,
+  Clock, Car, User, Loader, AlertCircle,
   Bolt, Fuel, AlertTriangle, Flag,
 } from 'lucide-react';
 
@@ -253,6 +254,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
       vehicle: result.vehicle,
       startOdo: result.startOdometer,
       startChargePercent: result.startChargePercent,
+      startPredictedRangeKm: result.startPredictedRangeKm,
     });
     setTakingVehicle(false);
     setInspecting('PICKUP'); // a new assignment always requires a PICKUP inspection
@@ -432,14 +434,8 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
                       <span className={`inline-block mt-1 px-2 py-0.5 text-xs rounded-full ${currentVehicle.vehicleType === 'EV' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>{currentVehicle.vehicleType}</span>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    {displayStartOdo != null && (
-                      <div className="flex items-start space-x-2"><Gauge className="h-5 w-5 text-gray-500 mt-0.5" /><div><p className="text-sm text-gray-600">Start Odometer</p><p className="font-semibold text-gray-900">{displayStartOdo.toLocaleString()} km</p></div></div>
-                    )}
-                    {currentVehicle.vehicleType === 'EV' && displayStartCharge != null && (
-                      <div className="flex items-start space-x-2"><Battery className="h-5 w-5 text-green-600 mt-0.5" /><div><p className="text-sm text-gray-600">Start Charge</p><p className="font-semibold text-gray-900">{displayStartCharge}%</p></div></div>
-                    )}
-                  </div>
+                  <VehicleStartReadings isEV={currentVehicle.vehicleType === 'EV'} odometer={displayStartOdo}
+                    stateOfCharge={displayStartCharge} predictedRange={activeShift.assignmentStartPredictedRangeKm} />
                 </div>
               ) : (
                 <div className="text-center py-4">

@@ -15,6 +15,7 @@ export interface ActiveShiftState {
   assignmentId?: string;
   assignmentStartOdo?: number;
   assignmentStartChargePercent?: number;
+  assignmentStartPredictedRangeKm?: number;
   // Current/assigned vehicle. May also hold the legacy shift's vehicle as a "continue with"
   // suggestion when the shift has no assignment yet.
   vehicleId?: string;
@@ -164,6 +165,7 @@ class ShiftStore {
     vehicle: NonNullable<ActiveShiftState['vehicle']>;
     startOdo?: number;
     startChargePercent?: number;
+    startPredictedRangeKm?: number;
   }): void {
     if (!this.currentState) return;
     this.currentState = {
@@ -173,6 +175,7 @@ class ShiftStore {
       vehicle: assignment.vehicle,
       assignmentStartOdo: assignment.startOdo,
       assignmentStartChargePercent: assignment.startChargePercent,
+      assignmentStartPredictedRangeKm: assignment.startPredictedRangeKm,
     };
     this.saveToStorage();
     this.notifyListeners();
@@ -214,6 +217,7 @@ export function useShiftStore(): {
     vehicle: NonNullable<ActiveShiftState['vehicle']>;
     startOdo?: number;
     startChargePercent?: number;
+    startPredictedRangeKm?: number;
   }) => void;
   clearVehicleAssignment: () => void;
 } {

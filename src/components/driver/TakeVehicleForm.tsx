@@ -7,6 +7,8 @@ import api from '../../services/firebaseApi';
 import { getDriverSession } from '../../store/session';
 import Card from '../shared/Card';
 import { Car, Loader, Search, AlertCircle } from 'lucide-react';
+import VehicleQrScanner from './VehicleQrScanner';
+import OutstandingVehicleDefects from './OutstandingVehicleDefects';
 
 export type VehiclePick = { id: string; registration: string; alias?: string; vehicleType: 'ICE' | 'EV'; currentOdometer?: number };
 
@@ -15,6 +17,7 @@ export interface TakeVehicleResult {
   vehicle: VehiclePick;
   startOdometer?: number;
   startChargePercent?: number;
+  startPredictedRangeKm?: number;
 }
 
 interface TakeVehicleFormProps {
@@ -41,6 +44,7 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
   const [startCharge, setStartCharge] = useState(suggestedStartChargePercent != null ? String(suggestedStartChargePercent) : '');
   const [startPredictedRange, setStartPredictedRange] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [defectsReady, setDefectsReady] = useState(false);
 
   const loadAvailable = async () => {
     setLoading(true);
@@ -50,7 +54,8 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
         throw new Error('Your session has expired. Please log in again.');
       }
       const all = await api.listVehiclesForSession(driverId, session.sessionToken);
-      setVehicles(all.filter(v => v.status === 'Active' && !v.activeAssignmentId));
+      setVehicles(all.filter(v => v.status === 'Active' && !v.activeAssignmentId && !v.activeChargingSessionId
+        && (!v.activeShiftId || v.activeShiftId === shiftId)));
     } catch {
       setError('Failed to load vehicles. Please try again.');
     } finally {
@@ -64,8 +69,14 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
     ? vehicles.filter(v => (v.registration || '').toLowerCase().includes(search.toLowerCase()) || (v.alias || '').toLowerCase().includes(search.toLowerCase()) || (v.make || '').toLowerCase().includes(search.toLowerCase()) || (v.model || '').toLowerCase().includes(search.toLowerCase()))
     : vehicles;
 
+  const selectVehicle = (vehicle: VehiclePick) => {
+    setDefectsReady(false); setSelectedVehicle(vehicle); setError(null);
+    setStartOdo(vehicle.currentOdometer != null ? String(vehicle.currentOdometer) : '');
+    setStartCharge(''); setStartPredictedRange('');
+  };
+
   const handleSubmit = async () => {
-    if (!selectedVehicle) return;
+    if (!selectedVehicle || submitting || !defectsReady) return;
     const isEV = selectedVehicle.vehicleType === 'EV';
     const odometer = parseFloat(startOdo);
     if (!startOdo || isNaN(odometer) || odometer < 0) { setError('Please enter a valid starting odometer reading.'); return; }
@@ -77,7 +88,7 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
     let predictedRange: number | undefined;
     if (isEV) {
       const c = parseFloat(startCharge);
-      if (!startCharge || isNaN(c) || c < 0 || c > 100) { setError('Please enter a valid charge % (0-100).'); return; }
+      if (!startCharge || isNaN(c) || c < 0 || c > 100) { setError('Please enter a valid State of Charge (%) (0-100).'); return; }
       charge = c;
       const range = Number(startPredictedRange);
       if (!startPredictedRange || !Number.isFinite(range) || range < 0 || range > 2000) {
@@ -103,7 +114,7 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
         transitionReason: 'VEHICLE_SWAP',
         deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
       });
-      onAssigned({ assignmentId, vehicle: selectedVehicle, startOdometer: odometer, startChargePercent: charge });
+      onAssigned({ assignmentId, vehicle: selectedVehicle, startOdometer: odometer, startChargePercent: charge, startPredictedRangeKm: predictedRange });
     } catch (e: any) {
       const code = String(e?.code || '');
       let msg = e?.message || 'Failed to take vehicle.';
@@ -112,7 +123,7 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
           const session = getDriverSession();
           const existing = session ? await api.getActiveVehicleAssignment(session.driverId, session.sessionToken, shiftId) : null;
           if (existing && existing.vehicleId === selectedVehicle.id) {
-            onAssigned({ assignmentId: existing.id, vehicle: selectedVehicle, startOdometer: existing.startOdometer ?? odometer, startChargePercent: existing.startChargePercent ?? charge });
+            onAssigned({ assignmentId: existing.id, vehicle: selectedVehicle, startOdometer: existing.startOdometer ?? odometer, startChargePercent: existing.startChargePercent ?? charge, startPredictedRangeKm: existing.startPredictedRangeKm ?? predictedRange });
             return;
           }
         } catch { /* fall through to the error path below */ }
@@ -144,17 +155,18 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
           {suggestedVehicle && selectedVehicle.id === suggestedVehicle.id && (
             <p className='text-sm text-blue-700 bg-blue-50 p-2 rounded mb-4'>Continuing with your shift vehicle.</p>
           )}
+          <OutstandingVehicleDefects key={selectedVehicle.id} driverId={driverId} vehicleId={selectedVehicle.id} onReadyChange={setDefectsReady} />
           <div className='space-y-4'>
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className='block text-sm font-semibold text-gray-700'>Actual Odometer (km) *</label>
+                <label htmlFor='pickup-odometer' className='block text-sm font-semibold text-gray-700'>Actual Odometer (km) *</label>
                 {selectedVehicle.currentOdometer != null && (
                   <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
                     Last recorded: {selectedVehicle.currentOdometer.toLocaleString()} km
                   </span>
                 )}
               </div>
-              <input type='number' value={startOdo} onChange={e => setStartOdo(e.target.value)} placeholder='e.g. 10500' className='w-full px-4 py-2 border border-gray-300 rounded-lg' />
+              <input id='pickup-odometer' type='number' value={startOdo} onChange={e => setStartOdo(e.target.value)} placeholder='e.g. 10500' className='w-full px-4 py-2 border border-gray-300 rounded-lg' />
               {selectedVehicle.currentOdometer != null && startOdo && !isNaN(parseFloat(startOdo)) && (
                 <>
                   {parseFloat(startOdo) < selectedVehicle.currentOdometer && (
@@ -175,19 +187,20 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
             {selectedVehicle.vehicleType === 'EV' && (
               <>
                 <div>
-                  <label className='block text-sm font-semibold text-gray-700 mb-1'>Starting Charge (%) *</label>
-                  <input type='number' min='0' max='100' value={startCharge} onChange={e => setStartCharge(e.target.value)} placeholder='e.g. 85' className='w-full px-4 py-2 border border-gray-300 rounded-lg' />
+                  <label htmlFor="driver-startCharge" className='block text-sm font-semibold text-gray-700 mb-1'>Start State of Charge (%) *</label>
+                  <input id="driver-startCharge" type='number' min='0' max='100' value={startCharge} onChange={e => setStartCharge(e.target.value)} placeholder='e.g. 85' className='w-full px-4 py-2 border border-gray-300 rounded-lg' />
                 </div>
                 <div>
-                  <label className='block text-sm font-semibold text-gray-700 mb-1'>Predicted Range (km) *</label>
-                  <input type='number' min='0' max='2000' step='1' value={startPredictedRange} onChange={e => setStartPredictedRange(e.target.value)} placeholder='e.g. 320' className='w-full px-4 py-2 border border-gray-300 rounded-lg' />
+                  <label htmlFor="driver-startPredictedRange" className='block text-sm font-semibold text-gray-700 mb-1'>Start Predicted Range (km) *</label>
+                  <input id="driver-startPredictedRange" type='number' min='0' max='2000' step='1' value={startPredictedRange} onChange={e => setStartPredictedRange(e.target.value)} placeholder='e.g. 320' className='w-full px-4 py-2 border border-gray-300 rounded-lg' />
                 </div>
               </>
             )}
           </div>
+          {!defectsReady && <p role='status' className='mt-3 text-sm text-gray-600'>Check the outstanding defects before taking this vehicle.</p>}
           <div className='grid grid-cols-2 gap-4 mt-6'>
-            <button onClick={() => { setSelectedVehicle(null); setError(null); setStartPredictedRange(''); }} className='py-3 bg-gray-200 text-gray-800 rounded-lg font-bold hover:bg-gray-300'>Back</button>
-            <button onClick={handleSubmit} disabled={submitting} className='py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 disabled:opacity-50 flex items-center justify-center'>
+            <button disabled={submitting} onClick={() => { setDefectsReady(false); setSelectedVehicle(null); setError(null); setStartPredictedRange(''); }} className='py-3 bg-gray-200 text-gray-800 rounded-lg font-bold hover:bg-gray-300'>Back</button>
+            <button onClick={handleSubmit} disabled={submitting || !defectsReady} className='py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 disabled:opacity-50 flex items-center justify-center'>
               {submitting ? <Loader className='animate-spin h-5 w-5' /> : 'Take Vehicle'}
             </button>
           </div>
@@ -195,8 +208,9 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
       ) : (
         <Card>
           <h3 className='text-lg font-bold text-gray-800 mb-4'>Choose a Vehicle</h3>
+          <VehicleQrScanner vehicles={vehicles} onSelected={vehicle => selectVehicle(toPick(vehicle))} disabled={submitting} />
           {suggestedVehicle && (
-            <button onClick={() => { setSelectedVehicle(suggestedVehicle); setStartOdo(suggestedStartOdo != null ? String(suggestedStartOdo) : (suggestedVehicle.currentOdometer != null ? String(suggestedVehicle.currentOdometer) : '')); setStartCharge(suggestedStartChargePercent != null ? String(suggestedStartChargePercent) : ''); }} className='w-full mb-3 p-3 bg-blue-50 border border-blue-300 rounded-lg text-left hover:bg-blue-100'>
+            <button onClick={() => { selectVehicle(suggestedVehicle); setStartOdo(suggestedStartOdo != null ? String(suggestedStartOdo) : (suggestedVehicle.currentOdometer != null ? String(suggestedVehicle.currentOdometer) : '')); setStartCharge(suggestedStartChargePercent != null ? String(suggestedStartChargePercent) : ''); }} className='w-full mb-3 p-3 bg-blue-50 border border-blue-300 rounded-lg text-left hover:bg-blue-100'>
               <span className='font-semibold text-blue-800'>Continue with {suggestedVehicle.registration}</span>
               {suggestedVehicle.alias && <span className='text-blue-700 ml-2'>({suggestedVehicle.alias})</span>}
               <span className='block text-xs text-blue-600 mt-1'>Your shift started with this vehicle.</span>
@@ -204,13 +218,13 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
           )}
           <div className='mb-3 relative'>
             <Search className='absolute left-3 top-3 h-5 w-5 text-gray-400' />
-            <input type='text' placeholder='Search vehicle...' value={search} onChange={e => setSearch(e.target.value)} className='w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg' />
+            <input type='text' aria-label='Search available vehicles' placeholder='Search vehicle...' value={search} onChange={e => setSearch(e.target.value)} className='w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg' />
           </div>
           <div className='space-y-2 max-h-72 overflow-y-auto'>
             {filtered.length === 0 ? (
               <p className='text-center text-gray-500 py-4'>No vehicles available.</p>
             ) : filtered.map(v => (
-              <button key={v.id} onClick={() => { setSelectedVehicle(toPick(v)); setStartOdo(v.currentOdometer != null ? String(v.currentOdometer) : ''); setStartCharge(''); }} className='w-full text-left p-3 border rounded-lg hover:border-blue-500 hover:bg-blue-50 flex justify-between items-center'>
+              <button key={v.id} onClick={() => selectVehicle(toPick(v))} className='w-full text-left p-3 border rounded-lg hover:border-blue-500 hover:bg-blue-50 flex justify-between items-center'>
                 <span>
                   <span className='font-bold text-gray-900'>{v.registration}</span>
                   {v.alias && <span className='text-gray-500 ml-2'>({v.alias})</span>}
@@ -222,7 +236,7 @@ const TakeVehicleForm: React.FC<TakeVehicleFormProps> = ({
         </Card>
       )}
 
-      <button onClick={onBack} className='w-full py-3 text-gray-600 font-semibold'>Back to Shift</button>
+      <button disabled={submitting} onClick={onBack} className='w-full py-3 text-gray-600 font-semibold'>Back to Shift</button>
     </div>
   );
 };

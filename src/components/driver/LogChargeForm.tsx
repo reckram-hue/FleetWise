@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../../services/firebaseApi';
 import Card from '../shared/Card';
 import Header from '../shared/Header';
@@ -19,7 +19,7 @@ interface LogChargeFormProps {
 const NEUTRAL_CHARGING_GUIDANCE = "Charge according to your fleet's charging guidance and how much of your shift remains. There's no fixed target — charge only as much as you need.";
 
 const CHECKLIST_LABELS: Record<string, string> = {
-    charge_level: 'Verified charge level and connected charging cable properly',
+    charge_level: 'Verified State of Charge and connected charging cable properly',
     tyre_pressure: 'Checked tyre pressure and condition',
     washer_fluid: 'Checked washer fluid level',
 };
@@ -51,6 +51,7 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
     const [endSummary, setEndSummary] = useState<{ estimatedBatteryEnergyAddedKWh: number | null } | null>(null);
 
     const [submitting, setSubmitting] = useState(false);
+    const submissionLock = useRef(false);
     const [submitError, setSubmitError] = useState<string | null>(null);
 
     const session = getDriverSession();
@@ -101,6 +102,7 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
     };
 
     const handleStartCharging = async () => {
+        if (submissionLock.current) return;
         if (!session) {
             setSubmitError('Your session has expired. Please log in again.');
             return;
@@ -117,10 +119,11 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
         const percent = parseFloat(startChargePercent);
         const predictedRange = parseFloat(startPredictedRangeKm);
         if (!Number.isFinite(odometer) || !Number.isFinite(percent) || !Number.isFinite(predictedRange)) {
-            setSubmitError('Enter valid odometer, charge percent, and predicted range values.');
+            setSubmitError('Enter valid odometer, State of Charge, and predicted range values.');
             return;
         }
 
+        submissionLock.current = true;
         setSubmitting(true);
         setSubmitError(null);
         try {
@@ -146,11 +149,13 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
             console.error('Failed to start charging session:', err);
             setSubmitError(err instanceof Error && err.message ? err.message : 'Failed to start charging session. Please try again.');
         } finally {
+            submissionLock.current = false;
             setSubmitting(false);
         }
     };
 
     const handleEndCharging = async () => {
+        if (submissionLock.current) return;
         if (!session) {
             setSubmitError('Your session has expired. Please log in again.');
             return;
@@ -162,10 +167,11 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
         const percent = parseFloat(endChargePercent);
         const predictedRange = parseFloat(endPredictedRangeKm);
         if (!Number.isFinite(percent) || !Number.isFinite(predictedRange)) {
-            setSubmitError('Enter valid end charge percent and predicted range values.');
+            setSubmitError('Enter valid End State of Charge and predicted range values.');
             return;
         }
 
+        submissionLock.current = true;
         setSubmitting(true);
         setSubmitError(null);
         try {
@@ -191,6 +197,7 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
             console.error('Failed to end charging session:', err);
             setSubmitError(err instanceof Error && err.message ? err.message : 'Failed to end charging session. Please try again.');
         } finally {
+            submissionLock.current = false;
             setSubmitting(false);
         }
     };
@@ -301,8 +308,8 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Start Odometer (km) *</label>
-                                    <input
+                                    <label htmlFor="driver-startOdometer" className="block text-sm font-medium text-gray-700">Start Odometer (km) *</label>
+                                    <input id="driver-startOdometer"
                                         type="number"
                                         value={startOdometer}
                                         onChange={(e) => setStartOdometer(e.target.value)}
@@ -313,8 +320,8 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Start State of Charge (%) *</label>
-                                    <input
+                                    <label htmlFor="driver-startChargePercent" className="block text-sm font-medium text-gray-700">Start State of Charge (%) *</label>
+                                    <input id="driver-startChargePercent"
                                         type="number"
                                         min={0}
                                         max={100}
@@ -326,8 +333,8 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Start Predicted Range (km) *</label>
-                                    <input
+                                    <label htmlFor="driver-startPredictedRangeKm" className="block text-sm font-medium text-gray-700">Start Predicted Range (km) *</label>
+                                    <input id="driver-startPredictedRangeKm"
                                         type="number"
                                         min={0}
                                         value={startPredictedRangeKm}
@@ -338,8 +345,8 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Charging Type *</label>
-                                    <select
+                                    <label htmlFor="driver-chargingType" className="block text-sm font-medium text-gray-700">Charging Type *</label>
+                                    <select id="driver-chargingType"
                                         value={chargingType}
                                         onChange={(e) => setChargingType(e.target.value as ChargingType)}
                                         className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-teal-500 focus:border-teal-500"
@@ -442,8 +449,8 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">End State of Charge (%) *</label>
-                                    <input
+                                    <label htmlFor="driver-endChargePercent" className="block text-sm font-medium text-gray-700">End State of Charge (%) *</label>
+                                    <input id="driver-endChargePercent"
                                         type="number"
                                         min={0}
                                         max={100}
@@ -455,8 +462,8 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">End Predicted Range (km) *</label>
-                                    <input
+                                    <label htmlFor="driver-endPredictedRangeKm" className="block text-sm font-medium text-gray-700">End Predicted Range (km) *</label>
+                                    <input id="driver-endPredictedRangeKm"
                                         type="number"
                                         min={0}
                                         value={endPredictedRangeKm}
@@ -467,8 +474,8 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Charger Energy Delivered (kWh)</label>
-                                    <input
+                                    <label htmlFor="driver-chargerEnergyDeliveredKWh" className="block text-sm font-medium text-gray-700">Charger Energy Delivered (kWh)</label>
+                                    <input id="driver-chargerEnergyDeliveredKWh"
                                         type="number"
                                         min={0}
                                         step="0.1"
@@ -480,8 +487,8 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Charge Cost (R)</label>
-                                    <input
+                                    <label htmlFor="driver-chargeCost" className="block text-sm font-medium text-gray-700">Charge Cost (R)</label>
+                                    <input id="driver-chargeCost"
                                         type="number"
                                         min={0}
                                         step="0.01"
@@ -494,8 +501,8 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-gray-700">Notes (Optional)</label>
-                                <textarea
+                                <label htmlFor="driver-endNotes" className="block text-sm font-medium text-gray-700">Notes (Optional)</label>
+                                <textarea id="driver-endNotes"
                                     value={endNotes}
                                     onChange={(e) => setEndNotes(e.target.value)}
                                     rows={2}
@@ -505,7 +512,7 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
                             </div>
 
                             <p className="text-xs text-gray-500">
-                                Battery energy added will be estimated automatically from this vehicle's battery capacity and your reported charge levels — you don't need to calculate it yourself.
+                                Battery energy added will be estimated automatically from this vehicle's battery capacity and your reported State of Charge readings — you don't need to calculate it yourself.
                             </p>
 
                             <ErrorBanner />

@@ -15,17 +15,19 @@ import {
 } from 'lucide-react';
 import { DefectReport, DefectCategory, DefectUrgency } from '../../types';
 import type { VehiclePick } from './TakeVehicleForm';
+import { outstandingDefects } from '../../lib/driverVehiclePresentation';
 
 interface ReportDefectFormProps {
     onBack: () => void;
+    pickup?: boolean;
     /**
-     * The driver's CURRENT active vehicle from the active VehicleAssignment.
-     * Authoritative and required — defect reporting is locked to this vehicle only.
+     * The selected pickup vehicle or CURRENT assigned vehicle.
+     * Required — reporting is locked to this vehicle; the existing server validates it.
      */
     currentVehicle: VehiclePick;
 }
 
-const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehicle }) => {
+const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehicle, pickup = false }) => {
     const { currentUser } = useContext(UserContext);
     const [existingDefects, setExistingDefects] = useState<DefectReport[]>([]);
     const [similarDefects, setSimilarDefects] = useState<DefectReport[]>([]);
@@ -33,6 +35,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
     const [showSimilar, setShowSimilar] = useState(false);
     const [photos, setPhotos] = useState<string[]>([]);
     const [submitError, setSubmitError] = useState<string | null>(null);
+    const submissionLock = useRef(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState({
@@ -50,7 +53,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                 if (!currentUser || !session) return;
                 try {
                     const defects = await api.getVehicleDefectsForSession(currentUser.id, session.sessionToken, currentVehicle.id);
-                    setExistingDefects(defects);
+                    setExistingDefects(outstandingDefects(defects));
                 } catch (err) {
                     console.error('Failed to fetch existing vehicle defects:', err);
                 }
@@ -115,7 +118,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!currentUser || !currentVehicle) return;
+        if (!currentUser || !currentVehicle || loading || submissionLock.current) return;
+        submissionLock.current = true;
 
         setLoading(true);
         setSubmitError(null);
@@ -157,6 +161,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
             // formData and photos are intentionally left untouched so the driver can retry
             // without re-entering anything.
         } finally {
+            submissionLock.current = false;
             setLoading(false);
         }
     };
@@ -181,8 +186,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                             <AlertTriangle className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
                             <h2 className="text-xl font-bold text-gray-800 mb-2">No Active Vehicle Assignment</h2>
                             <p className="text-gray-600 mb-6">You must have an active vehicle assignment to report a vehicle fault.</p>
-                            <button onClick={onBack} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg transition duration-300">
-                                ← Back to Dashboard
+                            <button onClick={onBack} disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg transition duration-300">
+                                {pickup ? '← Back to vehicle pickup' : '← Back to Dashboard'}
                             </button>
                         </div>
                     </Card>
@@ -203,10 +208,12 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                     {/* Main Form */}
                     <div className="lg:col-span-2">
                         <Card>
-                            <form onSubmit={handleSubmit} className="space-y-6">
+                            <form onSubmit={handleSubmit}>
+                              <fieldset disabled={loading} className="space-y-6">
+                                <legend className="sr-only">Vehicle defect report</legend>
                                 <div>
                                     <h2 className="text-2xl font-bold text-gray-800 mb-2">Report New Defect</h2>
-                                    <p className="text-gray-600">Describe any vehicle faults or issues you've discovered during your shift.</p>
+                                    <p className="text-gray-600">{pickup ? 'Describe any faults you noticed before accepting this vehicle.' : "Describe any vehicle faults or issues you've discovered during your shift."}</p>
                                 </div>
 
                                 {/* Vehicle (Read-Only / Locked to Active Vehicle) */}
@@ -223,7 +230,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                         </div>
                                         <span className="text-xs bg-green-100 text-green-800 px-2.5 py-1 rounded-full font-semibold flex items-center">
                                             <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                                            Active Vehicle
+                                            {pickup ? 'Selected Vehicle' : 'Active Vehicle'}
                                         </span>
                                     </div>
                                 </div>
@@ -231,8 +238,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {/* Category */}
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Category *</label>
-                                        <select
+                                        <label htmlFor="driver-formData-category" className="block text-sm font-medium text-gray-700 mb-2">Category *</label>
+                                        <select id="driver-formData-category"
                                             value={formData.category}
                                             onChange={(e) => setFormData({ ...formData, category: e.target.value as DefectCategory })}
                                             className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
@@ -245,8 +252,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
 
                                     {/* Urgency */}
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Urgency *</label>
-                                        <select
+                                        <label htmlFor="driver-formData-urgency" className="block text-sm font-medium text-gray-700 mb-2">Urgency *</label>
+                                        <select id="driver-formData-urgency"
                                             value={formData.urgency}
                                             onChange={(e) => setFormData({ ...formData, urgency: e.target.value as DefectUrgency })}
                                             className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
@@ -260,11 +267,11 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
 
                                 {/* Location */}
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    <label htmlFor="driver-formData-location" className="block text-sm font-medium text-gray-700 mb-2">
                                         <MapPin className="inline w-4 h-4 mr-1" />
                                         Location on Vehicle
                                     </label>
-                                    <input
+                                    <input id="driver-formData-location"
                                         type="text"
                                         value={formData.location}
                                         onChange={(e) => setFormData({ ...formData, location: e.target.value })}
@@ -275,8 +282,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
 
                                 {/* Description */}
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">Description *</label>
-                                    <textarea
+                                    <label htmlFor="driver-formData-description" className="block text-sm font-medium text-gray-700 mb-2">Description *</label>
+                                    <textarea id="driver-formData-description"
                                         value={formData.description}
                                         onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                                         placeholder="Describe the issue in detail. Be specific about when it occurs, sounds, visual indicators, etc."
@@ -318,8 +325,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
 
                                 {/* Notes */}
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">Additional Notes</label>
-                                    <textarea
+                                    <label htmlFor="driver-formData-notes" className="block text-sm font-medium text-gray-700 mb-2">Additional Notes</label>
+                                    <textarea id="driver-formData-notes"
                                         value={formData.notes}
                                         onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                                         placeholder="Any additional context, when it started, etc."
@@ -417,6 +424,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                         {loading ? 'Submitting...' : 'Report Defect'}
                                     </button>
                                 </div>
+                              </fieldset>
                             </form>
                         </Card>
                     </div>

@@ -76,6 +76,7 @@ export function toActiveShiftState(
       activeChargingSessionId: vehicle?.activeChargingSessionId || undefined,
     };
     if (assignment.startOdometer != null) base.assignmentStartOdo = assignment.startOdometer;
+    if (assignment.startPredictedRangeKm != null) base.assignmentStartPredictedRangeKm = assignment.startPredictedRangeKm;
     if (assignment.startChargePercent != null) base.assignmentStartChargePercent = assignment.startChargePercent;
   } else if (shift.vehicleId && vehicle) {
     // Legacy shift: no assignment yet, but the shift still references its original vehicle.

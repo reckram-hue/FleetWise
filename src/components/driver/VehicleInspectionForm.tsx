@@ -6,6 +6,9 @@ import api from '../../services/firebaseApi';
 import { ChargingLocationForDriver, VehicleReturnIntent, VehicleInspectionPhotoRole, ReturnFinalizationDraft } from '../../types';
 import { getDriverSession } from '../../store/session';
 import ChargingLocationPicker from './ChargingLocationPicker';
+import { ReturnReadings } from './VehicleReadings';
+import ReturnChargingChoice from './ReturnChargingChoice';
+import SavedReturnNotice from './SavedReturnNotice';
 import Card from '../shared/Card';
 import { Camera, CheckCircle, AlertCircle, Loader, Car, RefreshCw } from 'lucide-react';
 
@@ -79,6 +82,35 @@ async function compressImage(file: File): Promise<string> {
   ctx.drawImage(img, 0, 0, w, h);
   return canvas.toDataURL('image/jpeg', 0.8);
 }
+
+const PhotoField = ({ label, slot, role, onFile }: { label: string; slot: PhotoSlot; role: VehicleInspectionPhotoRole; onFile: (role: VehicleInspectionPhotoRole, file: File) => void }) => (
+  <div className='border border-gray-200 rounded-lg p-4'>
+    <p className='block text-sm font-semibold text-gray-700 mb-2'>{label} <span className='text-red-500'>*</span></p>
+    {slot.preview ? (
+      <div className='relative'>
+        <img src={slot.preview} alt={label} className='w-full h-40 object-cover rounded-lg' />
+        <span className={`absolute top-2 right-2 text-white text-xs px-2 py-1 rounded-full flex items-center ${slot.status === 'ready' ? 'bg-blue-600' : slot.status === 'uploading' ? 'bg-yellow-600' : 'bg-red-600'}`}>
+          {slot.status === 'ready' ? 'Ready' : slot.status === 'uploading' ? 'Uploading...' : 'Failed — retake'}
+        </span>
+      </div>
+    ) : slot.status === 'uploaded' ? (
+      <div className='flex items-center justify-center w-full h-24 border-2 border-green-300 bg-green-50 rounded-lg'>
+        <span className='text-green-700 font-semibold flex items-center'><CheckCircle className='h-5 w-5 mr-2' /> Uploaded</span>
+      </div>
+    ) : (
+      <label className='flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 focus-within:ring-2 focus-within:ring-blue-500'>
+        <Camera className='h-8 w-8 text-gray-400 mb-1' />
+        <span className='text-sm text-gray-600 font-medium'>Take Photo</span>
+        <input type='file' aria-label={label} accept='image/*' capture='environment' onChange={e => { const f = e.target.files && e.target.files[0]; if (f) onFile(role, f); }} className='sr-only' />
+      </label>
+    )}
+    <label className='mt-2 inline-flex min-h-11 items-center text-sm text-blue-600 font-medium cursor-pointer focus-within:ring-2 focus-within:ring-blue-500'>
+      <RefreshCw className='h-4 w-4 mr-1' /> {slot.preview || slot.status === 'uploaded' ? 'Replace' : 'Retake'}
+      <input type='file' aria-label={`Replace ${label}`} accept='image/*' capture='environment' onChange={e => { const f = e.target.files && e.target.files[0]; if (f) onFile(role, f); }} className='sr-only' />
+    </label>
+    <p className='text-xs text-gray-500 mt-1'>Photo is stored as chain-of-custody evidence after upload.</p>
+  </div>
+);
 
 const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
   boundaryType, assignmentId, driverId, vehicle, startOdo, returnIntent, onCompleted, onBack,
@@ -197,7 +229,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
       endOdometer = odo;
       if (isEV) {
         const c = parseFloat(endCharge);
-        if (!endCharge || isNaN(c) || c < 0 || c > 100) { setError('Please enter a valid end charge % (0-100).'); return; }
+        if (!endCharge || isNaN(c) || c < 0 || c > 100) { setError('Please enter a valid End State of Charge (0-100%).'); return; }
         endChargePercent = c;
         const range = Number(endPredictedRange);
         if (!endPredictedRange || !Number.isFinite(range) || range < 0 || range > 2000) {
@@ -279,49 +311,18 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
     }
   };
 
-  const PhotoField = ({ label, slot, role }: { label: string; slot: PhotoSlot; role: VehicleInspectionPhotoRole }) => (
-    <div className='border border-gray-200 rounded-lg p-4'>
-      <label className='block text-sm font-semibold text-gray-700 mb-2'>{label} <span className='text-red-500'>*</span></label>
-      {slot.preview ? (
-        <div className='relative'>
-          <img src={slot.preview} alt={label} className='w-full h-40 object-cover rounded-lg' />
-          <span className={`absolute top-2 right-2 text-white text-xs px-2 py-1 rounded-full flex items-center ${slot.status === 'ready' ? 'bg-blue-600' : slot.status === 'uploading' ? 'bg-yellow-600' : 'bg-red-600'}`}>
-            {slot.status === 'ready' ? 'Ready' : slot.status === 'uploading' ? 'Uploading...' : 'Failed — retake'}
-          </span>
-        </div>
-      ) : slot.status === 'uploaded' ? (
-        <div className='flex items-center justify-center w-full h-24 border-2 border-green-300 bg-green-50 rounded-lg'>
-          <span className='text-green-700 font-semibold flex items-center'><CheckCircle className='h-5 w-5 mr-2' /> Uploaded</span>
-        </div>
-      ) : (
-        <label className='flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400'>
-          <Camera className='h-8 w-8 text-gray-400 mb-1' />
-          <span className='text-sm text-gray-600 font-medium'>Take Photo</span>
-          <input type='file' accept='image/*' capture='environment' onChange={e => { const f = e.target.files && e.target.files[0]; if (f) handleFile(role, f); }} className='hidden' />
-        </label>
-      )}
-      <label className='mt-2 inline-flex items-center text-sm text-blue-600 font-medium cursor-pointer'>
-        <RefreshCw className='h-4 w-4 mr-1' /> {slot.preview || slot.status === 'uploaded' ? 'Replace' : 'Retake'}
-        <input type='file' accept='image/*' capture='environment' onChange={e => { const f = e.target.files && e.target.files[0]; if (f) handleFile(role, f); }} className='hidden' />
-      </label>
-      <p className='text-xs text-gray-500 mt-1'>Photo is stored as chain-of-custody evidence after upload.</p>
-    </div>
-  );
-
   if (loading) return <Card><p role="status">Restoring inspection...</p></Card>;
   if (loadFailed) return <Card><p role="alert">{error}</p><button onClick={() => setLoadVersion(v => v + 1)}>Retry inspection lookup</button></Card>;
   if (isReturn && evidenceCompleted && savedDraft) return (
     <Card>
-      <h3 className="text-xl font-bold">Finalize saved return</h3>
-      <p>Photos and damage declaration are complete. Saved return odometer: {savedDraft.endOdometer} km.</p>
-      {error && <p role="alert">{error}</p>}
-      <button disabled={submitting} className="mt-4 rounded-lg bg-green-600 px-4 py-3 text-white disabled:opacity-50"
-        onClick={async () => {
+      <SavedReturnNotice odometer={savedDraft.endOdometer} busy={submitting} error={error}
+        onComplete={async () => {
+          if (submitting) return;
           setSubmitting(true); setError(null);
           try { await onCompleted({ ...savedDraft, returnIntent: savedDraft.transitionReason }); }
-          catch { setError('Finalization failed. Your saved return is unchanged; retry safely.'); }
+          catch { setError('Could not complete the vehicle return. Your inspection is saved; please try again.'); }
           finally { setSubmitting(false); }
-        }}>Finalize saved return</button>
+        }} />
     </Card>
   );
 
@@ -341,23 +342,13 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
 
       {isReturn && (
         <div className='space-y-4 mb-4'>
-          <div>
-            <label className='block text-sm font-semibold text-gray-700 mb-1'>End Odometer (km) <span className='text-red-500'>*</span></label>
-            <input type='number' value={endOdo} onChange={e => setEndOdo(e.target.value)} placeholder='e.g. 10600' className='w-full px-4 py-3 border border-gray-300 rounded-lg text-lg' />
-          </div>
+          <ReturnReadings isEV={isEV} odometer={endOdo} stateOfCharge={endCharge} predictedRange={endPredictedRange}
+            disabled={submitting} onOdometerChange={setEndOdo} onStateOfChargeChange={setEndCharge} onPredictedRangeChange={setEndPredictedRange} />
           {isEV && (
-            <div>
-              <label className='block text-sm font-semibold text-gray-700 mb-1'>End Charge (%) <span className='text-red-500'>*</span></label>
-              <input type='number' min='0' max='100' value={endCharge} onChange={e => setEndCharge(e.target.value)} placeholder='e.g. 75' className='w-full px-4 py-3 border border-gray-300 rounded-lg text-lg' />
-            </div>
-          )}
-          {isEV && (
-            <div className='rounded-lg border border-teal-200 bg-teal-50 p-4'>
-              <p className='text-sm font-semibold text-gray-700 mb-2'>Leaving this vehicle for charging? <span className='text-red-500'>*</span></p>
-              <div className='flex gap-3'>
-                <button type='button' onClick={() => { setLeftForCharging(false); setChargingLocation(null); setPublicChargeReference(''); setPublicChargeCost(''); setChargingNotes(''); }} className={`flex-1 py-3 rounded-lg font-bold border-2 ${leftForCharging === false ? 'bg-white border-teal-600 text-teal-700' : 'border-gray-200 text-gray-500'}`}>No</button>
-                <button type='button' onClick={() => setLeftForCharging(true)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${leftForCharging === true ? 'bg-white border-teal-600 text-teal-700' : 'border-gray-200 text-gray-500'}`}>Yes</button>
-              </div>
+            <ReturnChargingChoice value={leftForCharging} disabled={submitting} onChange={value => {
+              setLeftForCharging(value);
+              if (!value) { setChargingLocation(null); setPublicChargeReference(''); setPublicChargeCost(''); setChargingNotes(''); }
+            }}>
               {leftForCharging && (chargingSession ? (
                 <div className='mt-4 space-y-3'>
                     <ChargingLocationPicker
@@ -369,38 +360,36 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
                     />
                     {chargingLocation?.type === 'PUBLIC_THIRD_PARTY' && (
                       <>
-                        <input type='text' value={publicChargeReference} onChange={e => setPublicChargeReference(e.target.value)} placeholder='Public charge / receipt reference (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
-                        <input type='number' min='0' step='0.01' value={publicChargeCost} onChange={e => setPublicChargeCost(e.target.value)} placeholder='Known public charge cost (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
+                        <label htmlFor='return-receipt' className='block text-sm font-medium'>Receipt reference (optional)</label>
+                        <input id='return-receipt' type='text' value={publicChargeReference} onChange={e => setPublicChargeReference(e.target.value)} placeholder='Public charge / receipt reference (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
+                        <label htmlFor='return-cost' className='block text-sm font-medium'>Known charging cost (optional)</label>
+                        <input id='return-cost' type='number' min='0' step='0.01' value={publicChargeCost} onChange={e => setPublicChargeCost(e.target.value)} placeholder='Known public charge cost (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
                       </>
                     )}
-                    <textarea value={chargingNotes} onChange={e => setChargingNotes(e.target.value)} rows={3} maxLength={500} placeholder='Charging note (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
+                    <label htmlFor='return-charging-notes' className='block text-sm font-medium'>Charging note (optional)</label>
+                    <textarea id='return-charging-notes' value={chargingNotes} onChange={e => setChargingNotes(e.target.value)} rows={3} maxLength={500} placeholder='Charging note (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
                 </div>
               ) : <p className='mt-3 text-sm text-red-700'>Your session has expired. Please log in again.</p>)}
-            </div>
+            </ReturnChargingChoice>
           )}
-          {isEV && (
-            <div>
-              <label className='block text-sm font-semibold text-gray-700 mb-1'>Predicted Range (km) <span className='text-red-500'>*</span></label>
-              <input type='number' min='0' max='2000' step='1' value={endPredictedRange} onChange={e => setEndPredictedRange(e.target.value)} placeholder='e.g. 250' className='w-full px-4 py-3 border border-gray-300 rounded-lg text-lg' />
-            </div>
-          )}
+
         </div>
       )}
 
-      {evidenceCompleted && <p role="status">Inspection evidence is complete and read-only. Enter the missing legacy return readings to finalize.</p>}
+      {evidenceCompleted && <p role="status">Your inspection and photos are already saved. Enter the return readings above; you do not need to repeat the inspection.</p>}
       <fieldset disabled={evidenceCompleted || submitting} className='space-y-4'>
-        <PhotoField label='Exterior condition photo' slot={exterior} role='EXTERIOR' />
-        <PhotoField label='Interior / dashboard photo' slot={interior} role='INTERIOR' />
+        <PhotoField label='Exterior condition photo' slot={exterior} role='EXTERIOR' onFile={handleFile} />
+        <PhotoField label='Interior / dashboard photo' slot={interior} role='INTERIOR' onFile={handleFile} />
       </fieldset>
 
       <fieldset disabled={evidenceCompleted || submitting} className='mt-4'>
-        <label className='block text-sm font-semibold text-gray-700 mb-2'>Any new damage? <span className='text-red-500'>*</span></label>
+        <legend className='block text-sm font-semibold text-gray-700 mb-2'>Any new damage? <span className='text-red-500'>*</span></legend>
         <div className='flex gap-3'>
-          <button onClick={() => setHasDamage(false)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${!hasDamage ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500'}`}>No</button>
-          <button onClick={() => setHasDamage(true)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${hasDamage ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500'}`}>Yes</button>
+          <button aria-pressed={!hasDamage} onClick={() => setHasDamage(false)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${!hasDamage ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500'}`}>No</button>
+          <button aria-pressed={hasDamage} onClick={() => setHasDamage(true)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${hasDamage ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500'}`}>Yes</button>
         </div>
         {hasDamage && (
-          <textarea value={damageDescription} onChange={e => setDamageDescription(e.target.value)} rows={3} placeholder='Describe the damage...' className='w-full px-4 py-3 border border-gray-300 rounded-lg mt-3' />
+          <textarea aria-label='Damage description' value={damageDescription} onChange={e => setDamageDescription(e.target.value)} rows={3} placeholder='Describe the damage...' className='w-full px-4 py-3 border border-gray-300 rounded-lg mt-3' />
         )}
       </fieldset>
 
