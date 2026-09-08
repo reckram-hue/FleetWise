@@ -1,3 +1,4 @@
+import { fuelEconomyCounts } from '../../lib/fuelEconomy';
 import React, { useState, useEffect, useMemo } from 'react';
 import { Vehicle, FuelEconomyAlert } from '../../types';
 import api from '../../services/firebaseApi';
@@ -36,6 +37,7 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
         } else {
             setAlerts([]);
             setEconomyStatuses({});
+            setLoading(false);
         }
     }, [realVehicles]);
 
@@ -93,14 +95,11 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
         return 'text-blue-600 bg-blue-50 border-blue-200';
     };
 
-    const formatConsumption = (consumption: number, vehicleType: string) => {
-        const safeConsumption = (typeof consumption === 'number' && !isNaN(consumption) && isFinite(consumption))
-            ? consumption
-            : 0;
-        return vehicleType === 'ICE'
-            ? `${safeConsumption.toFixed(1)} L/100km`
-            : `${safeConsumption.toFixed(1)} kWh/100km`;
-    };
+    const formatConsumption = (consumption: number | null | undefined, vehicleType: string) =>
+        typeof consumption === 'number' && Number.isFinite(consumption) && consumption > 0
+          ? consumption.toFixed(1) + (vehicleType === 'ICE' ? ' L/100km' : ' kWh/100km') : 'Insufficient Data';
+    const formatVariance = (value: number | null) => value == null ? 'Unknown' : value.toFixed(1) + '%';
+    const counts = fuelEconomyCounts(Object.values(economyStatuses), realVehicles.length);
 
     const activeAlerts = (alerts || []).filter(a => !a.isResolved);
     const criticalVehicles = Object.values(economyStatuses || {}).filter(s => s && s.needsAttention);
@@ -141,13 +140,14 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
                     <div className="flex items-center">
                         <CheckCircle className="h-8 w-8 text-green-500 mr-3" />
                         <div>
-                            <p className="text-2xl font-bold text-gray-900">{realVehicles.length - criticalVehicles.length}</p>
+                            <p className="text-2xl font-bold text-gray-900">{counts.healthy}</p>
                             <p className="text-sm text-gray-500">Performing Well</p>
                         </div>
                     </div>
                 </Card>
             </div>
 
+            <p role="status">Insufficient Data: {counts.insufficient}</p>
             {/* Active Alerts */}
             {activeAlerts.length > 0 && (
                 <Card>
@@ -216,15 +216,9 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
                                 const status = economyStatuses[vehicle.id];
                                 if (!status) return null;
 
-                                const manufacturerConsumption = vehicle.vehicleType === 'ICE'
-                                    ? (vehicle.manufacturerFuelConsumption || 0)
-                                    : (vehicle.manufacturerEnergyConsumption || 0);
-                                const baselineConsumption = vehicle.vehicleType === 'ICE'
-                                    ? (vehicle.baselineFuelConsumption || 0)
-                                    : (vehicle.baselineEnergyConsumption || 0);
-                                const currentConsumption = vehicle.vehicleType === 'ICE'
-                                    ? (vehicle.currentFuelConsumption || 0)
-                                    : (vehicle.currentEnergyConsumption || 0);
+                                const manufacturerConsumption = status.manufacturer;
+                                const baselineConsumption = status.baseline;
+                                const currentConsumption = status.current;
 
                                 return (
                                     <tr key={vehicle.id} className={status.needsAttention ? 'bg-red-50' : ''}>
@@ -246,7 +240,7 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                             {formatConsumption(baselineConsumption, vehicle.vehicleType)}
                                             <div className="text-xs text-gray-500">
-                                                {status.manufacturerVsBaseline > 0 ? '+' : ''}{status.manufacturerVsBaseline.toFixed(1)}% vs manufacturer
+                                                {formatVariance(status.manufacturerVsBaseline)} vs manufacturer
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -259,12 +253,12 @@ const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => 
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                            <div className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full border ${getStatusColor(status.currentVsBaseline)}`}>
-                                                {status.currentVsBaseline > 0 ? '+' : ''}{status.currentVsBaseline.toFixed(1)}%
+                                            <div className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full border ${status.currentVsBaseline == null ? 'text-gray-600 bg-gray-50' : getStatusColor(status.currentVsBaseline)}`}>
+                                                {formatVariance(status.currentVsBaseline)}
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                            {status.needsAttention ? (
+                                            {!status.hasSufficientData ? <span>Insufficient Data</span> : status.needsAttention ? (
                                                 <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800">
                                                     Attention Required
                                                 </span>

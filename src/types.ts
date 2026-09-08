@@ -405,6 +405,8 @@ export enum DefectStatus {
 }
 
 export interface DefectReport {
+    vehicleRegistrationSnapshot?: string | null;
+    vehicleDisplayNameSnapshot?: string | null;
     sourceInspectionId?: string;
     assignmentId?: string;
     shiftId?: string;
@@ -905,6 +907,7 @@ export interface AccidentFields {
 }
 export interface AccidentPhoto { id: string; path: string; caption: string; mimeType: string; size: number; sha256: string }
 export interface AccidentReport {
+    vehicleRegistrationSnapshot?: string | null; vehicleDisplayNameSnapshot?: string | null; vehicleDisplayName?: string | null;
     id: string; orgId: string; driverId: string; vehicleId: string; shiftId: string; assignmentId: string;
     createdByDriverId: string; isTestData: boolean; status: 'DRAFT' | 'SUBMITTED'; revision: number;
     createdAt: Date; updatedAt: Date; submittedAt: Date | null; lastMutationId?: string;

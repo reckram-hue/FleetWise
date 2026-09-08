@@ -1,3 +1,4 @@
+import { formatVehicleIdentity } from '../../lib/vehicleIdentity';
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Edit, AlertTriangle, DollarSign, Calendar, User, Car, X, TrendingUp, Gauge, CheckCircle2 } from 'lucide-react';
 import AccidentReports from './AccidentReports';
@@ -137,7 +138,7 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
 
     const getVehicleInfo = (vehicleId: string) => {
         const vehicle = vehicles.find(v => v.id === vehicleId);
-        return vehicle ? `${vehicle.make} ${vehicle.model} (${vehicle.registration})` : 'Unknown Vehicle';
+        return vehicle ? formatVehicleIdentity(vehicle).primary : 'Unknown Vehicle';
     };
 
     const FineCard = ({ fine, isTest }: { fine: DriverFine; isTest?: boolean }) => (
@@ -482,7 +483,7 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                                                             <tr key={d.id} className={`hover:bg-gray-50 ${isTest ? 'bg-amber-50' : ''}`}>
                                                                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{dateStr}</td>
                                                                 <td className="px-4 py-3 whitespace-nowrap text-sm font-semibold text-gray-900">
-                                                                    {vehicle?.registration || d.vehicleId}
+                                                                    {formatVehicleIdentity(d, vehicle).primary}
                                                                     {vehicle?.alias && <span className="text-gray-500 font-normal ml-1">({vehicle.alias})</span>}
                                                                     {isTest && (
                                                                         <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800">TEST</span>

@@ -1,3 +1,5 @@
+import { signOut } from 'firebase/auth';
+import { auth } from '../../lib/firebase';
 import React, { useContext, useState } from 'react';
 import { UserContext } from '../../contexts/UserContext';
 import { getDriverSession, clearDriverSession, isSessionLocallyExpired } from '../../store/session';
@@ -16,6 +18,12 @@ const Header: React.FC<HeaderProps> = ({ title, onBack }) => {
 
   const handleLogout = async () => {
     if (loggingOut) return;
+    if (currentUser?.role === 'admin') {
+      setLoggingOut(true);
+      try { await signOut(auth); setCurrentUser(null); }
+      catch { alert('Sign out could not complete. Please retry.'); setLoggingOut(false); }
+      return;
+    }
     const session = getDriverSession();
 
     if (session && !isSessionLocallyExpired(session)) {

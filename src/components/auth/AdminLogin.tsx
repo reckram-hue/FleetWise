@@ -3,7 +3,7 @@
 
 import React, { useState } from 'react';
 import { User } from '../../types';
-import { ShieldCheck, Mail, Lock, AlertCircle, Loader, ArrowLeft } from 'lucide-react';
+import { ShieldCheck, Mail, Lock, Eye, EyeOff, AlertCircle, Loader, ArrowLeft } from 'lucide-react';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import api from '../../services/firebaseApi';
 
@@ -15,6 +15,7 @@ interface AdminLoginProps {
 const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onBack }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -92,7 +93,7 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onBack }) => {
               Password
             </label>
             <input
-              type="password"
+              type={showPassword ? 'text' : 'password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
@@ -102,6 +103,9 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onBack }) => {
             />
           </div>
 
+          <button type="button" className="min-h-11 text-gray-200 flex items-center gap-2" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword(v => !v)}>
+            {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />} {showPassword ? 'Hide password' : 'Show password'}
+          </button>
           {error && (
             <div className="p-3 bg-red-900/50 border border-red-500 rounded-lg">
               <div className="flex items-center text-red-200">

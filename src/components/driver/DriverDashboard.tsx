@@ -326,10 +326,10 @@ const MyStats = ({ onBack, currentUser }: { onBack: () => void; currentUser: Use
                                         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                                             <div className="flex items-center">
                                                 <CheckCircle className="h-5 w-5 text-green-400 mr-2" />
-                                                <h4 className="text-lg font-semibold text-green-800">Excellent Safety Record</h4>
+                                                <h4 className="text-lg font-semibold text-green-800">No fines or damage entries in this metric</h4>
                                             </div>
                                             <p className="text-sm text-green-700 mt-1">
-                                                No traffic fines or vehicle damage incidents recorded. Keep up the safe driving!
+                                                This metric covers recorded fines and legacy vehicle damage entries. Dedicated accident reports are reviewed separately.
                                             </p>
                                         </div>
                                     ) : stats.riskScore < 30 ? (

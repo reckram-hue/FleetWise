@@ -22,7 +22,7 @@ function harness(overrides = {}) {
     if (!old || !deps || deps.some((v, j) => !Object.is(v, old[j]))) current.effects.push(callback);
     current.deps[i] = deps;
   } };
-  const realFiles = ['AccidentReportEntry', 'AccidentReportForm', 'AccidentReportDetails', 'AccidentReports', 'accidentDraft', 'accidentFields', 'DriverDashboard'];
+  const realFiles = ['vehicleIdentity', 'EvidencePhoto', 'defectVisibility', 'elapsedTime','AccidentReportEntry', 'AccidentReportForm', 'AccidentReportDetails', 'AccidentReports', 'accidentDraft', 'accidentFields', 'DriverDashboard'];
   function load(filename) {
     filename = path.resolve(filename); if (cache.has(filename)) return cache.get(filename).exports;
     const mod = new Module(filename, module); cache.set(filename, mod); const req = Module.createRequire(filename);
@@ -208,8 +208,8 @@ test('edits arriving during a save flush as a new mutation without dropping the 
 
 
 test('Dashboard exposes historical drafts without an active shift; refresh/later login resumes original report', async () => {
-  const old = fixture({ assignmentId: 'closed-assignment', vehicleId: 'original-vehicle', shiftId: 'ended-shift' });
-  const second = fixture({ id: 'second-draft', vehicleId: 'second-vehicle' });
+  const old = fixture({ assignmentId: 'closed-assignment', vehicleId: 'original-vehicle', vehicleRegistration: 'CA ORIGINAL', shiftId: 'ended-shift' });
+  const second = fixture({ id: 'second-draft', vehicleId: 'second-vehicle', vehicleRegistrationSnapshot: 'CA SECOND' });
   for (let login = 0; login < 2; login++) {
     const h = harness({ drafts: async () => [old, second], get: async id => { assert.equal(id, old.id); return old; }, create: () => assert.fail('Discovery cannot create') });
     const Dashboard = h.load(modulePath('DriverDashboard')).default;
@@ -218,7 +218,7 @@ test('Dashboard exposes historical drafts without an active shift; refresh/later
     const Entry = h.load(modulePath('AccidentReportEntry')).default;
     h.render(Entry, entryNode.props); await h.settle(); let tree = h.render(Entry, entryNode.props);
     assert.equal(button(tree, 'Report Accident / Collision'), undefined);
-    assert.match(text(tree), /original-vehicle/); assert.match(text(tree), /second-vehicle/);
+    assert.match(text(tree), /CA ORIGINAL/); assert.match(text(tree), /CA SECOND/); assert.doesNotMatch(text(tree), /original-vehicle/);
     assert.equal(nodes(tree, n => n.type === 'button' && text(n) === 'Resume Report').length, 2);
     await button(tree, 'Resume Report').props.onClick(); tree = h.render(Entry, entryNode.props);
     const formNode = nodes(tree, n => n.type.name === 'AccidentReportForm')[0];

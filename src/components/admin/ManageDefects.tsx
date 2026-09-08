@@ -1,3 +1,6 @@
+import EvidencePhoto from '../shared/EvidencePhoto';
+import { formatVehicleIdentity } from '../../lib/vehicleIdentity';
+import { visibleDefects, isTestDefect } from '../../lib/defectVisibility';
 import React, { useState, useEffect } from 'react';
 import { DefectReport, DefectUrgency, DefectCategory, DefectStatus, User, Vehicle } from '../../types';
 import api from '../../services/firebaseApi';
@@ -18,6 +21,8 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
     const [statusFilter, setStatusFilter] = useState<DefectStatus | 'all'>('all');
     const [urgencyFilter, setUrgencyFilter] = useState<DefectUrgency | 'all'>('all');
     const [selectedDefect, setSelectedDefect] = useState<DefectReport | null>(null);
+    const [showDetail, setShowDetail] = useState(false);
+    const [includeTest, setIncludeTest] = useState(false);
     const [showStatusModal, setShowStatusModal] = useState(false);
     const [showAssignModal, setShowAssignModal] = useState(false);
 
@@ -38,7 +43,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
                 const defect = defectsData.find(d => d.id === selectedDefectId);
                 if (defect) {
                     setSelectedDefect(defect);
-                    setShowStatusModal(true);
+                    setShowDetail(true);
                 }
             }
         } catch (error) {
@@ -96,7 +101,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
 
     const handleDefectClick = (defect: DefectReport) => {
         setSelectedDefect(defect);
-        setShowStatusModal(true);
+        setShowDetail(true);
     };
 
     const handleStatusUpdate = (defect: DefectReport) => {
@@ -109,11 +114,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
         setShowAssignModal(true);
     };
 
-    const filteredDefects = defects.filter(defect => {
-        if (statusFilter !== 'all' && defect.status !== statusFilter) return false;
-        if (urgencyFilter !== 'all' && defect.urgency !== urgencyFilter) return false;
-        return true;
-    });
+    const filteredDefects = visibleDefects(defects, users, vehicles, includeTest, statusFilter, urgencyFilter);
 
     const criticalAndHighDefects = filteredDefects.filter(d =>
         (d.urgency === DefectUrgency.Critical || d.urgency === DefectUrgency.High) &&
@@ -135,6 +136,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
                         </button>
                     </div>
 
+                    <label className="block mb-4"><input type="checkbox" checked={includeTest} onChange={e => { setIncludeTest(e.target.checked); setShowDetail(false); }} /> Include TEST defects</label>
                     {/* Summary Cards */}
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                         <div className="bg-red-50 p-4 rounded-lg border border-red-200">
@@ -152,7 +154,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
                                 <div>
                                     <p className="text-sm font-medium text-yellow-600">Open</p>
                                     <p className="text-2xl font-bold text-yellow-900">
-                                        {defects.filter(d => d.status === DefectStatus.Open).length}
+                                        {filteredDefects.filter(d => d.status === DefectStatus.Open).length}
                                     </p>
                                 </div>
                             </div>
@@ -163,7 +165,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
                                 <div>
                                     <p className="text-sm font-medium text-blue-600">In Progress</p>
                                     <p className="text-2xl font-bold text-blue-900">
-                                        {defects.filter(d => d.status === DefectStatus.InProgress).length}
+                                        {filteredDefects.filter(d => d.status === DefectStatus.InProgress).length}
                                     </p>
                                 </div>
                             </div>
@@ -174,7 +176,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
                                 <div>
                                     <p className="text-sm font-medium text-green-600">Resolved</p>
                                     <p className="text-2xl font-bold text-green-900">
-                                        {defects.filter(d => d.status === DefectStatus.Resolved).length}
+                                        {filteredDefects.filter(d => d.status === DefectStatus.Resolved).length}
                                     </p>
                                 </div>
                             </div>
@@ -267,7 +269,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                                 <div className="flex items-center text-sm">
                                                     <Car className="h-4 w-4 mr-1" />
-                                                    {getVehicleInfo(defect.vehicleId)}
+                                                    {formatVehicleIdentity(defect, vehicles.find(v => v.id === defect.vehicleId)).primary}{isTestDefect(defect, users, vehicles) && <span className="ml-2 font-bold">TEST</span>}
                                                 </div>
                                                 <div className="flex items-center text-xs text-gray-400 mt-1">
                                                     <UserIcon className="h-3 w-3 mr-1" />
@@ -326,6 +328,19 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
                     )}
                 </Card>
 
+                {showDetail && selectedDefect && <div role="dialog" aria-modal="true" aria-label="Defect details" className="fixed inset-0 z-50 bg-white overflow-y-auto p-6">
+                    <button className="min-h-11 underline" onClick={() => setShowDetail(false)}>Close defect details</button>
+                    <h2 className="text-xl font-bold">{formatVehicleIdentity(selectedDefect, vehicles.find(v => v.id === selectedDefect.vehicleId)).primary}</h2>
+                    <p>{formatVehicleIdentity(selectedDefect, vehicles.find(v => v.id === selectedDefect.vehicleId)).secondary}</p>
+                    {isTestDefect(selectedDefect, users, vehicles) && <p className="font-bold">TEST</p>}
+                    <p>{getDriverName(selectedDefect.driverId)} · {selectedDefect.category} · {selectedDefect.urgency} · {selectedDefect.status}</p>
+                    <p>{selectedDefect.reportedDateTime.toLocaleString()}</p><p>{selectedDefect.description}</p>
+                    <p>{selectedDefect.location}</p><p>{selectedDefect.notes}</p>
+                    <h3 className="font-bold">Evidence / Photos</h3>
+                    {!selectedDefect.photos?.length && <p>No photos provided.</p>}
+                    {selectedDefect.photos?.map((_, index) => <EvidencePhoto key={selectedDefect.id + index} caption={'Defect evidence ' + (index + 1)} load={() => api.getDefectPhotoAdmin(selectedDefect.id, index)} />)}
+                    <details><summary>Internal references</summary><p>Defect: {selectedDefect.id}</p><p>Vehicle: {selectedDefect.vehicleId}</p><p>Driver: {selectedDefect.driverId}</p></details>
+                </div>}
                 {/* Status Update Modal */}
                 {showStatusModal && selectedDefect && (
                     <StatusUpdateModal

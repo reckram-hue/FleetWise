@@ -1,3 +1,4 @@
+import { formatVehicleIdentity } from '../../lib/vehicleIdentity';
 import React, { useState, useEffect, useMemo } from 'react';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { Cost, CostCategory, Vehicle } from '../../types';
@@ -201,7 +202,7 @@ const ManageCosts: React.FC<ManageCostsProps> = ({ onBack, hideBackButton }) => 
                                             <div key={cost.id} className="p-3 bg-gray-50 rounded-lg border flex justify-between items-center">
                                                 <div>
                                                     <p className="font-semibold">{cost.description}</p>
-                                                    <p className="text-sm text-gray-500">{vehicle?.registration || 'N/A'} | {cost.date.toLocaleDateString()} | <span className="font-medium">{cost.category}</span></p>
+                                                    <p className="text-sm text-gray-500">{formatVehicleIdentity(cost, vehicle).primary} | {cost.date.toLocaleDateString()} | <span className="font-medium">{cost.category}</span></p>
                                                 </div>
                                                 <p className="text-lg font-bold text-gray-800">R {cost.cost.toLocaleString()}</p>
                                             </div>

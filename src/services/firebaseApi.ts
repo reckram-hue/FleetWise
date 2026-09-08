@@ -1,3 +1,4 @@
+import { fuelEconomyStatus } from '../lib/fuelEconomy';
 /**
  * Firebase API Service
  * Replaces mockApi with Firestore persistence
@@ -91,6 +92,7 @@ async function resolveDriverIsTestData(driverId?: string): Promise<boolean> {
 }
 
 const api = {
+  getDefectPhotoAdmin: (defectId: string, photoIndex: number) => callFunction<{ imageDataUrl: string }>('getDefectPhotoAdmin', { defectId, photoIndex }),
   // ==================== USERS / DRIVERS (SECURE CALLABLE BRIDGE) ====================
 
   /**
@@ -1292,48 +1294,10 @@ const api = {
     return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as FuelEconomyAlert);
   },
 
-  calculateFuelEconomyStatus: async (vehicleId: string): Promise<{
-    vehicle: Vehicle;
-    manufacturerVsBaseline: number;
-    currentVsBaseline: number;
-    currentVsManufacturer: number;
-    needsAttention: boolean;
-    trend: 'improving' | 'stable' | 'degrading' | 'unknown';
-    recommendations: string[];
-  }> => {
+  calculateFuelEconomyStatus: async (vehicleId: string) => {
     const vehicle = await api.getVehicle(vehicleId);
     if (!vehicle) throw new Error('Vehicle not found');
-
-    const isICE = vehicle.vehicleType === 'ICE';
-    const manufacturerConsumption = isICE ? (vehicle.manufacturerFuelConsumption || 0) : (vehicle.manufacturerEnergyConsumption || 0);
-    const baselineConsumption = isICE ? (vehicle.baselineFuelConsumption || 0) : (vehicle.baselineEnergyConsumption || 0);
-    const currentConsumption = isICE ? (vehicle.currentFuelConsumption || 0) : (vehicle.currentEnergyConsumption || 0);
-
-    const manufacturerVsBaseline = (baselineConsumption > 0 && manufacturerConsumption > 0)
-      ? ((baselineConsumption - manufacturerConsumption) / manufacturerConsumption) * 100 : 0;
-    const currentVsBaseline = (baselineConsumption > 0 && currentConsumption > 0)
-      ? ((currentConsumption - baselineConsumption) / baselineConsumption) * 100 : 0;
-    const currentVsManufacturer = (manufacturerConsumption > 0 && currentConsumption > 0)
-      ? ((currentConsumption - manufacturerConsumption) / manufacturerConsumption) * 100 : 0;
-
-    const threshold = vehicle.economyVarianceThreshold || 15;
-    const needsAttention = Math.abs(currentVsBaseline) > threshold;
-
-    const recommendations: string[] = [];
-    if (currentVsBaseline > 15) recommendations.push('Consider engine service - consumption significantly above baseline');
-    if (currentVsBaseline > 20) recommendations.push('Check air filter, fuel injectors, and tire pressure');
-    if (currentVsBaseline > 25) recommendations.push('URGENT: Major maintenance required - investigate engine performance');
-    if (currentVsManufacturer > 30) recommendations.push('Performance significantly below manufacturer specifications');
-
-    return {
-      vehicle,
-      manufacturerVsBaseline,
-      currentVsBaseline,
-      currentVsManufacturer,
-      needsAttention,
-      trend: vehicle.economyTrendDirection || 'unknown',
-      recommendations,
-    };
+    return fuelEconomyStatus(vehicle);
   },
 
   /**

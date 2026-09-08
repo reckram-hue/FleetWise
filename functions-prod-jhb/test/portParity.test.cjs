@@ -6,6 +6,8 @@ const { describe, test } = require('node:test');
 const source = readFileSync(join(__dirname, '..', 'src', 'index.ts'), 'utf8');
 
 const expectedCallables = [
+  'createAccidentReportDraft', 'updateAccidentReportDraft', 'getAccidentReportForDriver', 'uploadAccidentPhoto',
+  'submitAccidentReport', 'listAccidentReportsAdmin', 'getAccidentReportAdmin', 'getAccidentPhoto', 'getDefectPhotoAdmin',
   'adminSetDriverPin',
   'archiveDriver',
   'completeVehicleInspection',
@@ -79,12 +81,12 @@ describe('Johannesburg production port invariants', () => {
       read(join(__dirname, '..', '..', 'functions', 'src', 'assignmentDistance.ts')));
   });
 
-  test('exports exactly the 40 production callable names through v2 adapters', () => {
+  test('exports exactly the 49 production callable names through v2 adapters', () => {
     const exports = [...source.matchAll(/^export const (\w+) = (onProdCall|onMeasuredCall)\(/gm)]
       .map((match) => match[1])
       .sort();
 
-    assert.equal(exports.length, 40);
+    assert.equal(exports.length, 49);
     assert.deepEqual(exports, expectedCallables);
     assert.equal((source.match(/onCallV2\(/g) || []).length, 1);
     assert.doesNotMatch(source, /functions\.https\.onCall|runWith\s*\(/);

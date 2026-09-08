@@ -22,7 +22,9 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
   const bucket = { name: 'demo-wp2-in-memory', file: path => ({
     save: async (bytes, options) => { objects.set(path, { bytes: Buffer.from(bytes), ...options }); if (saveHook) await saveHook(path); },
     exists: async () => { if (existsHook) await existsHook(path); return [objects.has(path)]; },
-    getSignedUrl: async () => ['https://synthetic.invalid/evidence'],
+    getSignedUrl: async () => { throw new Error('signBlob is unavailable'); },
+    getMetadata: async () => { const o = objects.get(path); if (!o) throw Object.assign(new Error('missing'), { code: 404 }); return [{ size: o.bytes.length, contentType: o.contentType }]; },
+    createReadStream: () => require('node:stream').Readable.from([objects.get(path).bytes]),
     delete: async () => { throw new Error('Evidence must not be deleted'); },
   }) };
   const filename = resolve(backend, 'lib/index.js');
@@ -140,7 +142,7 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
     assert.equal(objects.get(p.path).metadata.metadata.driverId, f.driverId);
     assert.equal(objects.get(p.path).preconditionOpts.ifGenerationMatch, 0);
     assert.equal((await read('accidentReports', r.id)).photos.length, 1);
-    assert.equal((await f.call('getAccidentPhoto', { reportId: r.id, photoId: p.id })).url, 'https://synthetic.invalid/evidence');
+    assert.equal((await f.call('getAccidentPhoto', { reportId: r.id, photoId: p.id })).imageDataUrl, png);
     await expectCode(photo(f, r, { imageDataUrl: 'data:image/gif;base64,R0lG' }), 'invalid-argument');
     await expectCode(photo(f, r, { imageDataUrl: 'data:image/png;base64,YWJj' }), 'invalid-argument');
     await expectCode(photo(f, r, { imageDataUrl: 'data:image/png;base64,' + Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64') }), 'invalid-argument');
@@ -169,7 +171,7 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
       await expectCode(api.listAccidentReportsAdmin({}, denied), denied.auth ? 'permission-denied' : 'unauthenticated');
       await expectCode(api.getAccidentReportAdmin({ reportId: qaReport.id }, denied), denied.auth ? 'permission-denied' : 'unauthenticated');
     }
-    const p = await photo(qa, qaReport); assert.equal((await api.getAccidentPhoto({ reportId: qaReport.id, photoId: p.id }, context)).url, 'https://synthetic.invalid/evidence');
+    const p = await photo(qa, qaReport); assert.equal((await api.getAccidentPhoto({ reportId: qaReport.id, photoId: p.id }, context)).imageDataUrl, png);
   });
   test(`${backend}: other-party, insurance, witness, GPS and damage fields persist without fake defaults`, async () => {
     const f = await fixture(); const fields = { ...reportFields, otherDriverName: 'Synthetic', otherDriverSurname: 'Other', otherDriverPhone: '0123456789',
@@ -237,4 +239,51 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
       assert.equal((await create(f)).isTestData, true);
     }
   });
+  test(backend + ': evidence delivery requires no signer, denies foreign/path requests and handles missing/corrupt objects', async () => {
+    const f = await fixture(), other = await fixture(), r = await create(f), p = await photo(f, r), ctx = await adminContext();
+    await expectCode(other.call('getAccidentPhoto', { reportId: r.id, photoId: p.id }), 'permission-denied');
+    await expectCode(f.call('getAccidentPhoto', { reportId: r.id, photoId: p.id, path: p.path }), 'invalid-argument');
+    for (const denied of [{}, await adminContext(false), await adminContext(true, 'driver')])
+      await expectCode(api.getAccidentPhoto({ reportId: r.id, photoId: p.id }, denied), denied.auth ? 'permission-denied' : 'unauthenticated');
+    const done = await submit(f, await save(f, r)); const before = await read('accidentReports', r.id);
+    assert.equal((await api.getAccidentPhoto({ reportId: r.id, photoId: p.id }, ctx)).imageDataUrl, png);
+    assert.deepEqual(await read('accidentReports', r.id), before);
+    await expectCode(photo(f, done));
+    const original = objects.get(p.path); objects.delete(p.path);
+    await expectCode(f.call('getAccidentPhoto', { reportId: r.id, photoId: p.id }), 'not-found');
+    objects.set(p.path, { ...original, bytes: Buffer.from('bad image') });
+    await expectCode(f.call('getAccidentPhoto', { reportId: r.id, photoId: p.id }), 'failed-precondition');
+  });
+  test(backend + ': new snapshots resist spoofing and survive vehicle changes; old reports resolve live identity', async () => {
+    const f = await fixture();
+    const r = await f.call('createAccidentReportDraft', { assignmentId: f.assignmentId, requestId: id(), vehicleRegistrationSnapshot: 'FORGED' });
+    assert.equal(r.vehicleRegistrationSnapshot, 'SYNTHETIC-WP2');
+    const result = await f.call('reportDefectWithSession', { vehicleId: f.vehicleId, category: 'Other', urgency: 'Low', description: 'Synthetic snapshot', vehicleRegistrationSnapshot: 'FORGED' });
+    assert.equal((await read('defects', result.defectId)).vehicleRegistrationSnapshot, 'SYNTHETIC-WP2');
+    await db.collection('vehicles').doc(f.vehicleId).update({ registration: 'CHANGED' });
+    assert.equal((await f.call('getAccidentReportForDriver', { reportId: r.id })).vehicleRegistration, 'SYNTHETIC-WP2');
+    assert.equal((await api.getAccidentReportAdmin({ reportId: r.id }, await adminContext())).vehicleRegistration, 'SYNTHETIC-WP2');
+    await db.collection('accidentReports').doc(r.id).update({ vehicleRegistrationSnapshot: FieldValue.delete() });
+    assert.equal((await f.call('getAccidentReportForDriver')).find(v => v.id === r.id).vehicleRegistration, 'CHANGED');
+    await expectCode(save(f, r, { vehicleRegistrationSnapshot: 'FORGED' }), 'invalid-argument');
+  });
+  test(backend + ': defect evidence is read-only, active-admin scoped and rejects arbitrary or foreign paths', async () => {
+    const f = await fixture(); const ctx = await adminContext();
+    const uploaded = await f.call('uploadDefectPhoto', { vehicleId: f.vehicleId, imageDataUrl: png });
+    const { defectId } = await f.call('reportDefectWithSession', { vehicleId: f.vehicleId, category: 'Other', urgency: 'Low', description: 'Synthetic evidence', photos: [uploaded.photoPath] });
+    const before = await read('defects', defectId);
+    assert.equal((await api.getDefectPhotoAdmin({ defectId, photoIndex: 0 }, ctx)).imageDataUrl, png);
+    assert.deepEqual(await read('defects', defectId), before);
+    for (const denied of [{}, await adminContext(false), await adminContext(true, 'driver')])
+      await expectCode(api.getDefectPhotoAdmin({ defectId, photoIndex: 0 }, denied), denied.auth ? 'permission-denied' : 'unauthenticated');
+    await expectCode(api.getDefectPhotoAdmin({ defectId, photoIndex: 0, path: uploaded.photoPath }, ctx), 'invalid-argument');
+    await expectCode(api.getDefectPhotoAdmin({ defectId, photoIndex: 1 }, ctx), 'not-found');
+    objects.delete(uploaded.photoPath);
+    await expectCode(api.getDefectPhotoAdmin({ defectId, photoIndex: 0 }, ctx), 'not-found');
+    await db.collection('defects').doc(defectId).update({ photos: ['vehicle-defects/default/foreign/other-photo.jpg'] });
+    await expectCode(api.getDefectPhotoAdmin({ defectId, photoIndex: 0 }, ctx), 'permission-denied');
+    await db.collection('defects').doc(defectId).update({ photos: [png] });
+    assert.equal((await api.getDefectPhotoAdmin({ defectId, photoIndex: 0 }, ctx)).imageDataUrl, png);
+  });
+
 }

@@ -1,3 +1,4 @@
+import { formatVehicleIdentity } from '../../lib/vehicleIdentity';
 import React, { useState, useEffect } from 'react';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
@@ -16,6 +17,7 @@ import VehicleLicenseRenewal from './VehicleLicenseRenewal';
 
 const AdminDashboard: React.FC = () => {
     const [view, setView] = useState('dashboard');
+    const [identityVehicles, setIdentityVehicles] = useState<Vehicle[]>([]);
     const [totalVehicles, setTotalVehicles] = useState(0);
     const [activeVehicles, setActiveVehicles] = useState(0);
     const [vehiclesNeedingLicense, setVehiclesNeedingLicense] = useState(0);
@@ -31,6 +33,7 @@ const AdminDashboard: React.FC = () => {
     useEffect(() => {
         // Fetch vehicle data
         api.getVehicles().then(vehicles => {
+            setIdentityVehicles(vehicles);
             // Test-data isolation: TEST EV/TEST ICE must remain manageable in
             // ManageVehicles, but never count toward these fleet-wide KPI cards.
             const realVehicles = vehicles.filter(v => v.isTestData !== true);
@@ -233,6 +236,7 @@ const AdminDashboard: React.FC = () => {
         {showBookingModal && selectedService && (
           <ServiceBookingModal
             service={selectedService}
+            vehicleLabel={formatVehicleIdentity(selectedService, identityVehicles.find(v => v.id === selectedService.vehicleId)).primary}
             onClose={() => {
               setShowBookingModal(false);
               setSelectedService(null);
@@ -250,6 +254,7 @@ const AdminDashboard: React.FC = () => {
         {showSendModal && selectedService && (
           <SendServiceModal
             service={selectedService}
+            vehicleLabel={formatVehicleIdentity(selectedService, identityVehicles.find(v => v.id === selectedService.vehicleId)).primary}
             onClose={() => {
               setShowSendModal(false);
               setSelectedService(null);
@@ -266,6 +271,7 @@ const AdminDashboard: React.FC = () => {
         {showReturnModal && selectedService && (
           <ReturnServiceModal
             service={selectedService}
+            vehicleLabel={formatVehicleIdentity(selectedService, identityVehicles.find(v => v.id === selectedService.vehicleId)).primary}
             onClose={() => {
               setShowReturnModal(false);
               setSelectedService(null);
@@ -321,10 +327,12 @@ interface CriticalDefectsProps {
 
 const CriticalDefects: React.FC<CriticalDefectsProps> = ({ onDefectClick }) => {
   const [defects, setDefects] = useState<DefectReport[]>([]);
+  const [identityVehicles, setIdentityVehicles] = useState<Vehicle[]>([]);
 
   useEffect(() => {
     const fetchDefects = async () => {
-      const allDefects = await api.getActiveDefects();
+      const [allDefects, vehicles] = await Promise.all([api.getActiveDefects(), api.getVehicles()]);
+      setIdentityVehicles(vehicles);
       const critical = allDefects.filter(d =>
         d.isTestData !== true
         && (d.urgency === DefectUrgency.High || d.urgency === DefectUrgency.Critical)
@@ -380,7 +388,7 @@ const CriticalDefects: React.FC<CriticalDefectsProps> = ({ onDefectClick }) => {
                   </span>
                 </div>
               </div>
-              <p className="text-sm text-gray-500 mt-1">Vehicle: {defect.vehicleId} | Reported: {defect.reportedDateTime.toLocaleDateString()}</p>
+              <p className="text-sm text-gray-500 mt-1">Vehicle: {formatVehicleIdentity(defect, identityVehicles.find(v => v.id === defect.vehicleId)).primary} | Reported: {defect.reportedDateTime.toLocaleDateString()}</p>
             </button>
           );
         }) : <p className="text-gray-500">No high or critical defects reported.</p>}
@@ -424,7 +432,7 @@ const UpcomingServices: React.FC<UpcomingServicesProps> = ({ onBookService, onSe
 
     const getVehicleRegistration = (vehicleId: string) => {
         const vehicle = vehicles.find(v => v.id === vehicleId);
-        return vehicle?.registration || 'Unknown';
+        return formatVehicleIdentity({ vehicleId }, vehicle).primary;
     };
 
     const calculateDaysUntilDue = (dueDate: string): string => {
@@ -564,12 +572,13 @@ const UpcomingServices: React.FC<UpcomingServicesProps> = ({ onBookService, onSe
 
 // Service Booking Modal
 interface ServiceBookingModalProps {
+    vehicleLabel: string;
     service: ScheduledService;
     onClose: () => void;
     onSave: () => void;
 }
 
-const ServiceBookingModal: React.FC<ServiceBookingModalProps> = ({ service, onClose, onSave }) => {
+const ServiceBookingModal: React.FC<ServiceBookingModalProps> = ({ service, vehicleLabel, onClose, onSave }) => {
     const [bookedDate, setBookedDate] = useState(service.bookedDate || '');
     const [bookedTime, setBookedTime] = useState(service.bookedTime || '');
     const [serviceProviderId, setServiceProviderId] = useState('');
@@ -641,6 +650,7 @@ const ServiceBookingModal: React.FC<ServiceBookingModalProps> = ({ service, onCl
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 w-full max-w-md">
                 <h3 className="text-lg font-semibold mb-4">Book Service</h3>
+                <p className="text-sm text-gray-600 mb-4">Vehicle: <strong>{vehicleLabel}</strong></p>
                 <div className="space-y-4">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -731,12 +741,13 @@ const ServiceBookingModal: React.FC<ServiceBookingModalProps> = ({ service, onCl
 
 // Send for Service Modal
 interface SendServiceModalProps {
+    vehicleLabel: string;
     service: ScheduledService;
     onClose: () => void;
     onSave: () => void;
 }
 
-const SendServiceModal: React.FC<SendServiceModalProps> = ({ service, onClose, onSave }) => {
+const SendServiceModal: React.FC<SendServiceModalProps> = ({ service, vehicleLabel, onClose, onSave }) => {
     const [sentDate, setSentDate] = useState(new Date().toISOString().split('T')[0]);
     const [loading, setLoading] = useState(false);
 
@@ -759,7 +770,7 @@ const SendServiceModal: React.FC<SendServiceModalProps> = ({ service, onClose, o
                 <h3 className="text-lg font-semibold mb-4">Send Vehicle for Service</h3>
                 <div className="mb-4">
                     <p className="text-sm text-gray-600 mb-2">
-                        Vehicle: <strong>{service.vehicleId}</strong><br/>
+                        Vehicle: <strong>{vehicleLabel}</strong><br/>
                         Service: <strong>{service.serviceType}</strong><br/>
                         Provider: <strong>{service.serviceProvider}</strong>
                     </p>
@@ -799,12 +810,13 @@ const SendServiceModal: React.FC<SendServiceModalProps> = ({ service, onClose, o
 
 // Return from Service Modal
 interface ReturnServiceModalProps {
+    vehicleLabel: string;
     service: ScheduledService;
     onClose: () => void;
     onSave: () => void;
 }
 
-const ReturnServiceModal: React.FC<ReturnServiceModalProps> = ({ service, onClose, onSave }) => {
+const ReturnServiceModal: React.FC<ReturnServiceModalProps> = ({ service, vehicleLabel, onClose, onSave }) => {
     const [returnDate, setReturnDate] = useState(new Date().toISOString().split('T')[0]);
     const [actualCost, setActualCost] = useState('');
     const [serviceNotes, setServiceNotes] = useState('');
@@ -844,7 +856,7 @@ const ReturnServiceModal: React.FC<ReturnServiceModalProps> = ({ service, onClos
                 <h3 className="text-lg font-semibold mb-4">Return Vehicle from Service</h3>
                 <div className="mb-4">
                     <p className="text-sm text-gray-600 mb-2">
-                        Vehicle: <strong>{service.vehicleId}</strong><br/>
+                        Vehicle: <strong>{vehicleLabel}</strong><br/>
                         Service: <strong>{service.serviceType}</strong><br/>
                         Provider: <strong>{service.serviceProvider}</strong><br/>
                         Sent: <strong>{service.sentDate}</strong>

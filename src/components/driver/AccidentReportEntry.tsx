@@ -1,3 +1,4 @@
+import { formatVehicleIdentity } from '../../lib/vehicleIdentity';
 import React, { useEffect, useRef, useState } from 'react';
 import { AccidentReport } from '../../types';
 import { accidentApi } from '../../services/accidentApi';
@@ -31,7 +32,7 @@ export default function AccidentReportEntry({ assignmentId }: { assignmentId?: s
         {error && <p role="alert">{error} <button className="min-h-11 underline" onClick={() => setVersion(v => v + 1)}>Retry accident lookup</button></p>}
         {assignmentId && <button className="min-h-11 my-2 rounded bg-red-800 text-white px-4 py-2 font-bold disabled:opacity-50" disabled={loading || !!error} onClick={() => open()}>Report Accident / Collision</button>}
         {reports.map(r => <div key={r.id} className="flex flex-wrap gap-2 items-center">
-            <span className="text-sm break-all">{r.fields.accidentAt || r.createdAt?.toLocaleString()} · Vehicle {r.vehicleId} · Report {r.id}</span>
+            <span className="text-sm break-all">{r.fields.accidentAt ? new Date(r.fields.accidentAt).toLocaleString() : r.createdAt?.toLocaleString()} Â· {formatVehicleIdentity(r).primary}</span>
             <span>{r.status === 'DRAFT' ? 'Accident report in progress' : 'Accident report submitted'}</span>
             <button className="min-h-11 underline text-red-900" disabled={loading} onClick={() => open(r)}>{r.status === 'DRAFT' ? 'Resume Report' : 'View Report'}</button>
         </div>)}

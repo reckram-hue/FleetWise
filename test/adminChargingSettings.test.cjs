@@ -20,7 +20,7 @@ function harness(overrides = {}) {
     if (!old || !deps || deps.some((v, j) => !Object.is(v, old[j]))) current.effects.push(callback);
     current.deps[i] = deps;
   } };
-  const realFiles = ['AdminDashboard', 'Settings', 'ManageChargingLocations'];
+  const realFiles = ['vehicleIdentity', 'EvidencePhoto', 'defectVisibility', 'elapsedTime','AdminDashboard', 'Settings', 'ManageChargingLocations'];
   function load(filename) {
     filename = path.resolve(filename); if (cache.has(filename)) return cache.get(filename).exports;
     const mod = new Module(filename, module); cache.set(filename, mod); const req = Module.createRequire(filename);
@@ -32,7 +32,7 @@ function harness(overrides = {}) {
       if (name.startsWith('.')) {
         const base = path.resolve(path.dirname(filename), name);
         if (name.endsWith('/types')) return load(base + '.ts');
-        if (realFiles.includes(path.basename(name))) return load(base + '.tsx');
+        if (realFiles.includes(path.basename(name))) return load(base + (fs.existsSync(base + '.tsx') ? '.tsx' : '.ts'));
         return function OtherAdminView() { return null; };
       }
       return req(name);

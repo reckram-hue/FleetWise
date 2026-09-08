@@ -1,26 +1,23 @@
-import React, { useState } from 'react';
+import React from 'react';
+import EvidencePhoto from './EvidencePhoto';
+import { formatVehicleIdentity } from '../../lib/vehicleIdentity';
 import { AccidentReport } from '../../types';
 import { accidentSteps } from '../../lib/accidentFields';
 import { accidentApi } from '../../services/accidentApi';
 
 export function AccidentEvidence({ report, admin = false }: { report: AccidentReport; admin?: boolean }) {
-    const [urls, setUrls] = useState<Record<string, string>>({});
-    const [error, setError] = useState('');
     return <section><h3 className="font-bold">Photos ({report.photos.length})</h3>
         {!report.photos.length && <p>No photos provided.</p>}
-        {report.photos.map(p => <div key={p.id} className="my-3">
-            <button className="min-h-11 text-blue-700 underline" onClick={async () => {
-                try { setError(''); const result = await (admin ? accidentApi.photoAdmin : accidentApi.photo)(report.id, p.id); setUrls(v => ({ ...v, [p.id]: result.url })); }
-                catch { setError('Could not load photo. Retry viewing it.'); }
-            }}>View photo: {p.caption || 'Evidence'}</button>
-            {urls[p.id] && <img src={urls[p.id]} alt={p.caption || 'Accident evidence'} className="max-h-96 max-w-full rounded" />}
-        </div>)}
-        {error && <p role="alert">{error}</p>}
+        {report.photos.map(p => <EvidencePhoto key={report.id + p.id} caption={p.caption || 'Accident evidence'}
+            load={() => (admin ? accidentApi.photoAdmin : accidentApi.photo)(report.id, p.id)} />)}
     </section>;
 }
+
 export default function AccidentReportDetails({ report, admin = false }: { report: AccidentReport; admin?: boolean }) {
     const f = report.fields;
+    const identity = formatVehicleIdentity(report);
     return <div className="space-y-5 break-words">
+        <p className="font-bold">{identity.primary}</p><p>{identity.secondary}</p>
         <p className="font-bold">{report.status} {report.isTestData ? '— TEST' : ''}</p>
         {f.vehicleDriveable === 'NO' && <p role="status" className="bg-red-50 p-3 text-red-900 font-bold">Vehicle reported not driveable.</p>}
         {accidentSteps.slice(0, 4).map(step => <section key={step.title}>
@@ -34,12 +31,12 @@ export default function AccidentReportDetails({ report, admin = false }: { repor
         </section>
         <p>Incomplete details acknowledged: {f.incompleteDetailsAcknowledged ? 'Yes' : 'Not yet'}</p>
         <AccidentEvidence report={report} admin={admin} />
-        <dl className="text-sm space-y-2">
+        <details><summary className="min-h-11 cursor-pointer">Internal references and timestamps</summary><dl className="text-sm space-y-2">
             {Object.entries({ 'Report ID': report.id, Organisation: report.orgId, Driver: report.driverName || report.driverId,
-                'Driver ID': report.driverId, Vehicle: report.vehicleRegistration || report.vehicleId, 'Vehicle ID': report.vehicleId,
+                'Driver ID': report.driverId, Vehicle: identity.primary, 'Vehicle ID': report.vehicleId,
                 Shift: report.shiftId, Assignment: report.assignmentId, 'Created by': report.createdByDriverId,
                 Created: report.createdAt?.toLocaleString(), Updated: report.updatedAt?.toLocaleString(), Submitted: report.submittedAt?.toLocaleString() || 'Not submitted' }).map(([k, v]) =>
                 <div key={k}><dt className="font-semibold">{k}</dt><dd>{v}</dd></div>)}
-        </dl>
+        </dl></details>
     </div>;
 }

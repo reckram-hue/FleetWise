@@ -1,3 +1,5 @@
+import { auth } from './lib/firebase';
+import { restoreAdminProfile } from './lib/adminSession';
 
 import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -84,7 +86,15 @@ function App() {
       if (!session || isSessionLocallyExpired(session)) {
         clearDriverSession();
         shiftStore.clearActiveShift();
-        if (!cancelled) setHydratingDriverSession(false);
+        try {
+          const profile = await restoreAdminProfile(auth, api.getAdminProfile);
+          if (!cancelled && profile) setAppState({ screen: 'app', user: profile });
+          else if (!cancelled && auth.currentUser) setAppState({ screen: 'admin-login' });
+        } catch {
+          if (!cancelled) setAppState({ screen: 'admin-login' });
+        } finally {
+          if (!cancelled) setHydratingDriverSession(false);
+        }
         return;
       }
       try {

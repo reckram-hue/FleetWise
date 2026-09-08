@@ -1,3 +1,5 @@
+import { createDefectEvidenceHandler } from './defectEvidence';
+import { vehicleIdentitySnapshot } from './vehicleIdentity';
 import { createAccidentHandlers } from './accidentReports';
 // functions/src/index.ts — FULL DROP-IN Cloud Functions for FleetWise Shift Management
 import * as functions from 'firebase-functions';
@@ -2072,6 +2074,7 @@ export const reportDefectWithSession = onProdCall(async (data, context) => {
     // Build defect document using the same schema as reportDefect.
     const defectData: Record<string, any> = {
       vehicleId,
+      ...vehicleIdentitySnapshot(vehicleData),
       driverId,   // authoritative: from session, not raw client input
       category,
       description,
@@ -3860,3 +3863,5 @@ export const submitAccidentReport = onProdCall(accidentHandlers.submitAccidentRe
 export const listAccidentReportsAdmin = onProdCall(accidentHandlers.listAccidentReportsAdmin);
 export const getAccidentReportAdmin = onProdCall(accidentHandlers.getAccidentReportAdmin);
 export const getAccidentPhoto = onProdCall(accidentHandlers.getAccidentPhoto);
+
+export const getDefectPhotoAdmin = onProdCall(createDefectEvidenceHandler({ db, requireAdmin, bucket: inspectionStorageBucket }));

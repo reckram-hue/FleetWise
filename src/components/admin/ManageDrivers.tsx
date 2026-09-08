@@ -113,7 +113,7 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
                 await fetchDrivers();
                 // Show Telegram link modal for newly created driver
                 setNewlyCreatedDriver(newDriver);
-                setShowTelegramLinkModal(true);
+                setShowTelegramLinkModal(false);
             }
         } catch (error) {
             console.error("Failed to save driver:", error);
@@ -156,32 +156,8 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
         }
     };
 
-    const handleTelegramLink = async (driver: User) => {
-        try {
-            // First, ensure driver is registered with backend
-            await fetch('http://localhost:3001/api/drivers', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    id: driver.id,
-                    firstName: driver.firstName,
-                    surname: driver.surname,
-                    isActive: true
-                })
-            });
-
-            // Then get the Telegram link
-            const response = await fetch(`http://localhost:3001/api/drivers/${driver.id}/telegram-link`);
-            if (!response.ok) throw new Error('Failed to get Telegram link');
-            const data = await response.json();
-
-            // Copy to clipboard
-            navigator.clipboard.writeText(data.url);
-            alert(`Telegram registration link copied to clipboard!\n\nSend this link to ${driver.firstName} ${driver.surname}:\n${data.url}`);
-        } catch (error) {
-            console.error('Failed to get Telegram link:', error);
-            alert('Failed to generate Telegram link. Make sure the backend server is running on port 3001.');
-        }
+    const handleTelegramLink = async (_driver: User) => {
+        alert('Telegram integration is deferred for this release.');
     };
 
     const handleSetPinClick = (driver: User) => {
@@ -421,7 +397,7 @@ const ManageDrivers: React.FC<ManageDriversProps> = ({ onBack }) => {
                                                     <button
                                                         onClick={() => handleTelegramLink(driver)}
                                                         className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors"
-                                                        title="Get Telegram registration link"
+                                                        disabled title="Telegram integration is deferred"
                                                     >
                                                         <MessageCircle className="h-3 w-3 mr-1" />
                                                         Get Link
@@ -774,32 +750,7 @@ const TelegramLinkModal = ({
     const [copied, setCopied] = useState(false);
 
     useEffect(() => {
-        const fetchTelegramLink = async () => {
-            try {
-                // First, ensure driver is registered with backend
-                await fetch('http://localhost:3001/api/drivers', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        id: driver.id,
-                        firstName: driver.firstName,
-                        surname: driver.surname,
-                        isActive: true
-                    })
-                });
-
-                // Then get the Telegram link
-                const response = await fetch(`http://localhost:3001/api/drivers/${driver.id}/telegram-link`);
-                if (!response.ok) throw new Error('Failed to get Telegram link');
-                const data = await response.json();
-                setTelegramLink(data.url);
-            } catch (error) {
-                console.error('Failed to get Telegram link:', error);
-                alert('Failed to generate Telegram link. Make sure the backend server is running on port 3001.');
-            } finally {
-                setLoading(false);
-            }
-        };
+        const fetchTelegramLink = async () => { setLoading(false); };
         fetchTelegramLink();
     }, [driver.id, driver.firstName, driver.surname]);
 

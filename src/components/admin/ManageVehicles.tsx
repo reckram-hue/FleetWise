@@ -1356,9 +1356,9 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                 <Plus size={16} />
                                 Add Vehicle
                             </button>
-                            <button onClick={syncVehiclesWithBackend} className="bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600 transition flex items-center gap-2 whitespace-nowrap">
+                            <button disabled title="Telegram integration is deferred" className="bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600 transition flex items-center gap-2 whitespace-nowrap">
                                 <RefreshCw size={16} />
-                                Sync with Telegram
+                                Telegram (deferred)
                             </button>
                         </div>
                         <div className="flex items-center gap-3">

@@ -16,8 +16,8 @@ export const accidentApi = {
     save: (reportId: string, revision: number, mutationId: string, fields: AccidentFields) => driverCall<AccidentReport>('updateAccidentReportDraft', { reportId, revision, mutationId, fields }),
     submit: (reportId: string, revision: number) => driverCall<AccidentReport>('submitAccidentReport', { reportId, revision }),
     upload: (reportId: string, uploadId: string, imageDataUrl: string, caption: string) => driverCall<AccidentPhoto>('uploadAccidentPhoto', { reportId, uploadId, imageDataUrl, caption }),
-    photo: (reportId: string, photoId: string) => driverCall<{ url: string }>('getAccidentPhoto', { reportId, photoId }),
+    photo: (reportId: string, photoId: string) => driverCall<{ imageDataUrl: string }>('getAccidentPhoto', { reportId, photoId }),
     listAdmin: async (includeTest: boolean, cursor?: string) => convertTimestamps(await callFunction('listAccidentReportsAdmin', { includeTest, ...(cursor ? { cursor } : {}) })) as { reports: AccidentReport[]; nextCursor: string | null },
     getAdmin: async (reportId: string) => convertTimestamps(await callFunction('getAccidentReportAdmin', { reportId })) as AccidentReport,
-    photoAdmin: (reportId: string, photoId: string) => callFunction<{ url: string }>('getAccidentPhoto', { reportId, photoId }),
+    photoAdmin: (reportId: string, photoId: string) => callFunction<{ imageDataUrl: string }>('getAccidentPhoto', { reportId, photoId }),
 };

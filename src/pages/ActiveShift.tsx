@@ -1,3 +1,4 @@
+import { elapsedTime } from '../lib/elapsedTime';
 // src/pages/ActiveShift.tsx — Active shift with WP7C vehicle-assignment workflow.
 // Distinguishes: active Shift + active VehicleAssignment (assigned vehicle) vs
 // active Shift with no assignment (take vehicle / end shift). Server remains authoritative.
@@ -123,12 +124,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
   useEffect(() => {
     if (!activeShift) return;
     const updateDuration = () => {
-      const startTime = new Date(activeShift.startAt);
-      const now = new Date();
-      const diffMs = now.getTime() - startTime.getTime();
-      const hours = Math.floor(diffMs / (1000 * 60 * 60));
-      const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-      setShiftDuration(`${hours}h ${minutes}m`);
+      setShiftDuration(elapsedTime(activeShift.startAt));
     };
     updateDuration();
     const interval = setInterval(updateDuration, 60000);

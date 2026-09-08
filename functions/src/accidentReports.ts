@@ -1,3 +1,5 @@
+import { readPrivateEvidence } from './privateEvidence';
+import { vehicleIdentitySnapshot } from './vehicleIdentity';
 import * as admin from 'firebase-admin';
 import * as functions from 'firebase-functions';
 import { z } from 'zod';
@@ -67,7 +69,12 @@ export function createAccidentHandlers(deps: {
   const { db } = deps;
   const reports = db.collection('accidentReports');
   const stamp = () => admin.firestore.FieldValue.serverTimestamp();
-  const record = (doc: FirebaseFirestore.DocumentSnapshot) => ({ id: doc.id, ...doc.data() });
+  const record = async (doc: FirebaseFirestore.DocumentSnapshot) => {
+    const r = doc.data()!;
+    const vehicle = r.vehicleRegistrationSnapshot ? null : (await db.collection('vehicles').doc(r.vehicleId).get()).data();
+    return { id: doc.id, ...r, vehicleRegistration: r.vehicleRegistrationSnapshot || vehicle?.registration || null,
+      vehicleDisplayName: r.vehicleDisplayNameSnapshot || (vehicle ? vehicleIdentitySnapshot(vehicle).vehicleDisplayNameSnapshot : null) };
+  };
   function owned(report: FirebaseFirestore.DocumentData | undefined, driverId: string) {
     if (!report || report.driverId !== driverId) error('permission-denied', 'This accident report is not available to this driver.');
     return report!;
@@ -117,6 +124,7 @@ export function createAccidentHandlers(deps: {
       if (!/^[A-Za-z0-9_-]+$/.test(orgId)) error('failed-precondition', 'Invalid organisation context.');
       tx.create(ref, { orgId, driverId: session.driverId, createdByDriverId: session.driverId,
         assignmentId: v.assignmentId, shiftId: assignment.shiftId, vehicleId: assignment.vehicleId,
+        ...vehicleIdentitySnapshot(vehicle),
         isTestData: session.isTestData || assignment.isTestData === true || vehicle.isTestData === true,
         status: 'DRAFT', createdAt: stamp(), updatedAt: stamp(), submittedAt: null, revision: 0,
         fields: { accidentAt: new Date().toISOString(), witnesses: [] }, photos: [] });
@@ -145,12 +153,12 @@ export function createAccidentHandlers(deps: {
       // One draft per assignment; a driver may have unfinished reports from several shifts.
       // A single-field owner query needs no new composite index.
       const docs = await reports.where('driverId', '==', driverId).get();
-      return docs.docs.filter(d => d.data().status === 'DRAFT').map(record);
+      return Promise.all(docs.docs.filter(d => d.data().status === 'DRAFT').map(record));
     }
     const a = (await db.collection('vehicleAssignments').doc(v.assignmentId!).get()).data();
     if (a?.driverId !== driverId) error('permission-denied', 'Assignment is not yours.');
     const docs = await reports.where('assignmentId', '==', v.assignmentId).get();
-    return docs.docs.filter(d => d.data().driverId === driverId).map(record);
+    return Promise.all(docs.docs.filter(d => d.data().driverId === driverId).map(record));
   });
   const uploadAccidentPhoto = wrap(async data => {
     const v = ReportRequest.extend({ uploadId: id, imageDataUrl: z.string().max(7100000), caption: z.string().trim().max(300).optional() }).parse(data);
@@ -209,7 +217,7 @@ export function createAccidentHandlers(deps: {
     if (v.cursor) query = query.startAfter(v.cursor);
     // Page all IDs first so filtering never silently prevents access to older reports.
     const page = await query.limit(v.limit).get();
-    return { reports: page.docs.filter(d => (v.includeTest || d.data().isTestData !== true) && (!v.status || d.data().status === v.status)).map(record),
+    return { reports: await Promise.all(page.docs.filter(d => (v.includeTest || d.data().isTestData !== true) && (!v.status || d.data().status === v.status)).map(record)),
       nextCursor: page.size === v.limit ? page.docs[page.docs.length - 1].id : null };
   });
   const getAccidentReportAdmin = wrap(async (data, context) => {
@@ -217,11 +225,11 @@ export function createAccidentHandlers(deps: {
     const doc = await reports.doc(v.reportId).get(); if (!doc.exists) error('not-found', 'Accident report not found.');
     const r = doc.data()!;
     const [driver, vehicle] = await Promise.all([db.collection('users').doc(r.driverId).get(), db.collection('vehicles').doc(r.vehicleId).get()]);
-    return { ...record(doc), driverName: [driver.data()?.firstName, driver.data()?.surname].filter(Boolean).join(' ') || null,
-      vehicleRegistration: vehicle.data()?.registration || null };
+    return { ...await record(doc), driverName: [driver.data()?.firstName, driver.data()?.surname].filter(Boolean).join(' ') || null,
+      vehicleRegistration: r.vehicleRegistrationSnapshot || vehicle.data()?.registration || null };
   });
   const getAccidentPhoto = wrap(async (data, context) => {
-    const v = z.object({ reportId: id, photoId: id, driverId: id.optional(), sessionToken: z.string().optional() }).parse(data);
+    const v = z.object({ reportId: id, photoId: id, driverId: id.optional(), sessionToken: z.string().optional() }).strict().parse(data);
     const session = v.driverId && v.sessionToken
       ? await deps.requireDriverSession({ driverId: v.driverId, sessionToken: v.sessionToken }) : null;
     if (!session) await deps.requireAdmin(context);
@@ -229,10 +237,8 @@ export function createAccidentHandlers(deps: {
     if (session) owned(doc.data(), session.driverId);
     if (!doc.exists) error('not-found', 'Report not found.');
     const r = doc.data()!, p = r.photos.find((p: any) => p.id === v.photoId);
-    if (!p || !p.path.startsWith(`accident-reports/${r.orgId}/${doc.id}/`) || p.path.includes('..')) error('permission-denied', 'Photo is not linked to this report.');
-    // Short-lived, authorized view only. No public download token or direct Storage grants.
-    const [url] = await deps.bucket().file(p.path).getSignedUrl({ action: 'read', expires: Date.now() + 5 * 60 * 1000 });
-    return { url };
+    if (!p || typeof p.path !== 'string' || !p.path.startsWith(`accident-reports/${r.orgId}/${doc.id}/`) || p.path.split('/').length !== 4 || p.path.includes('..')) error('permission-denied', 'Photo is not linked to this report.');
+    return readPrivateEvidence(deps.bucket(), p.path, p.sha256);
   });
   return { createAccidentReportDraft, updateAccidentReportDraft, getAccidentReportForDriver, uploadAccidentPhoto,
     submitAccidentReport, listAccidentReportsAdmin, getAccidentReportAdmin, getAccidentPhoto };
