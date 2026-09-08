@@ -35,11 +35,11 @@ function formatTariff(location: ChargingLocation): string {
         : `R${location.tariffRate.toFixed(2)} / session`;
 }
 
-interface ManageChargingLocationsProps {
-    onBack: () => void;
-}
+type ManageChargingLocationsProps =
+    | { embedded: true; onBack?: never }
+    | { embedded?: false; onBack: () => void };
 
-const ManageChargingLocations: React.FC<ManageChargingLocationsProps> = ({ onBack }) => {
+const ManageChargingLocations: React.FC<ManageChargingLocationsProps> = ({ onBack, embedded = false }) => {
     const [locations, setLocations] = useState<ChargingLocation[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -87,21 +87,22 @@ const ManageChargingLocations: React.FC<ManageChargingLocationsProps> = ({ onBac
         }
     };
 
+    const Content = embedded ? 'div' : 'main';
     const visibleLocations = showInactive ? locations : locations.filter((l) => l.active);
 
     return (
-        <div className="min-h-screen bg-gray-100">
-            <Header title="Manage Charging Locations" />
-            <main className="max-w-7xl mx-auto p-6">
-                <div className="mb-6 flex items-center justify-between">
-                    <button
+        <div className={embedded ? "min-w-0" : "min-h-screen bg-gray-100"}>
+            {!embedded && <Header title="Manage Charging Locations" />}
+            <Content className={embedded ? "min-w-0" : "max-w-7xl mx-auto p-6"}>
+                <div className="mb-6 flex flex-wrap gap-4 items-center justify-between">
+                    {!embedded && <button
                         onClick={onBack}
                         className="flex items-center text-gray-600 hover:text-gray-800"
                     >
                         <ArrowLeft className="h-5 w-5 mr-2" />
                         Back to Dashboard
-                    </button>
-                    <div className="flex items-center space-x-4">
+                    </button>}
+                    <div className="flex flex-wrap items-center gap-4">
                         <label className="flex items-center">
                             <input
                                 type="checkbox"
@@ -240,7 +241,7 @@ const ManageChargingLocations: React.FC<ManageChargingLocationsProps> = ({ onBac
                         }}
                     />
                 )}
-            </main>
+            </Content>
         </div>
     );
 };

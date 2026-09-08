@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
-import { Plus, X, Trash2, Settings as SettingsIcon, Users, UserPlus, Shield } from 'lucide-react';
+import { Plus, X, Trash2, Settings as SettingsIcon, Users, UserPlus, Shield, Bolt } from 'lucide-react';
 import { AppSettings, User } from '../../types';
 import api from '../../services/firebaseApi';
+import ManageChargingLocations from './ManageChargingLocations';
 
 interface SettingsProps {
     onBack: () => void;
@@ -13,7 +14,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [activeTab, setActiveTab] = useState<'areas' | 'departments' | 'service-booking' | 'users'>('areas');
+    const [activeTab, setActiveTab] = useState<'areas' | 'departments' | 'service-booking' | 'users' | 'charging-locations'>('areas');
     const [newAreaInput, setNewAreaInput] = useState('');
     const [newDepartmentInput, setNewDepartmentInput] = useState('');
 
@@ -175,12 +176,12 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
             <Header title="Settings" />
             <main className="max-w-4xl mx-auto p-6">
                 <Card>
-                    <div className="flex justify-between items-center mb-6">
+                    <div className="flex flex-wrap gap-4 justify-between items-center mb-6">
                         <div className="flex items-center">
                             <SettingsIcon className="h-8 w-8 text-gray-600 mr-3" />
                             <div>
                                 <h2 className="text-2xl font-bold text-gray-800">System Settings</h2>
-                                <p className="text-gray-600">Manage dropdown options for driver information</p>
+                                <p className="text-gray-600">Manage driver options, service booking, admin users and charging locations</p>
                             </div>
                         </div>
                         <button
@@ -193,9 +194,10 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
 
                     {/* Tab Navigation */}
                     <div className="border-b border-gray-200 mb-6">
-                        <nav className="flex space-x-8">
+                        <nav aria-label="Settings sections" className="flex flex-wrap gap-x-6 gap-y-2">
                             <button
                                 onClick={() => setActiveTab('areas')}
+                                aria-current={activeTab === 'areas' ? 'page' : undefined}
                                 className={`py-2 px-1 border-b-2 font-medium text-sm ${activeTab === 'areas'
                                     ? 'border-blue-500 text-blue-600'
                                     : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -205,6 +207,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
                             </button>
                             <button
                                 onClick={() => setActiveTab('departments')}
+                                aria-current={activeTab === 'departments' ? 'page' : undefined}
                                 className={`py-2 px-1 border-b-2 font-medium text-sm ${activeTab === 'departments'
                                     ? 'border-blue-500 text-blue-600'
                                     : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -214,6 +217,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
                             </button>
                             <button
                                 onClick={() => setActiveTab('service-booking')}
+                                aria-current={activeTab === 'service-booking' ? 'page' : undefined}
                                 className={`py-2 px-1 border-b-2 font-medium text-sm ${activeTab === 'service-booking'
                                     ? 'border-blue-500 text-blue-600'
                                     : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -223,6 +227,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
                             </button>
                             <button
                                 onClick={() => setActiveTab('users')}
+                                aria-current={activeTab === 'users' ? 'page' : undefined}
                                 className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center ${activeTab === 'users'
                                     ? 'border-blue-500 text-blue-600'
                                     : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -231,8 +236,21 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
                                 <Users className="h-4 w-4 mr-1" />
                                 Admin Users
                             </button>
+                            <button
+                                onClick={() => setActiveTab('charging-locations')}
+                                aria-current={activeTab === 'charging-locations' ? 'page' : undefined}
+                                className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center ${activeTab === 'charging-locations'
+                                    ? 'border-blue-500 text-blue-600'
+                                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                                    }`}
+                            >
+                                <Bolt className="h-4 w-4 mr-1" />
+                                Charging Locations
+                            </button>
                         </nav>
                     </div>
+
+                    {activeTab === 'charging-locations' && <ManageChargingLocations embedded />}
 
                     {/* Areas Tab */}
                     {activeTab === 'areas' && (
