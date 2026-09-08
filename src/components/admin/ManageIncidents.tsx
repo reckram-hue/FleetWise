@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Edit, AlertTriangle, DollarSign, Calendar, User, Car, X, TrendingUp, Gauge, CheckCircle2 } from 'lucide-react';
+import AccidentReports from './AccidentReports';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
 import api from '../../services/firebaseApi';
@@ -22,7 +23,7 @@ interface ManageIncidentsProps {
 }
 
 const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButton }) => {
-    const [activeTab, setActiveTab] = useState<'fines' | 'damages' | 'analytics' | 'odometer'>('fines');
+    const [activeTab, setActiveTab] = useState<'fines' | 'damages' | 'analytics' | 'odometer' | 'accidents'>('fines');
     const [fines, setFines] = useState<DriverFine[]>([]);
     const [damages, setDamages] = useState<VehicleDamage[]>([]);
     const [discrepancies, setDiscrepancies] = useState<OdometerDiscrepancy[]>([]);
@@ -312,8 +313,9 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
 
                     {/* Tab Navigation */}
                     <div className="border-b border-gray-200 mb-6">
-                        <nav className="flex space-x-8">
+                        <nav className="flex flex-wrap gap-4">
                             {[
+                                { key: 'accidents', label: 'Accident Reports', icon: AlertTriangle },
                                 { key: 'fines', label: 'Driver Fines', icon: DollarSign },
                                 { key: 'damages', label: 'Vehicle Damages', icon: AlertTriangle },
                                 { key: 'analytics', label: 'Driver Analytics', icon: User },
@@ -340,7 +342,7 @@ const ManageIncidents: React.FC<ManageIncidentsProps> = ({ onBack, hideBackButto
                         </nav>
                     </div>
 
-                    {loading ? (
+                    {activeTab === 'accidents' ? <AccidentReports /> : loading ? (
                         <div className="text-center py-8">Loading incidents...</div>
                     ) : (
                         <>

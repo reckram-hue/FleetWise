@@ -12,6 +12,7 @@ import Card from '../components/shared/Card';
 import Header from '../components/shared/Header';
 import TakeVehicleForm, { TakeVehicleResult } from '../components/driver/TakeVehicleForm';
 import VehicleInspectionForm, { VehicleInspectionResult } from '../components/driver/VehicleInspectionForm';
+import AccidentReportEntry from '../components/driver/AccidentReportEntry';
 import ReportDefectForm from '../components/driver/ReportDefectForm';
 import LogChargeForm from '../components/driver/LogChargeForm';
 import LogRefuelForm from '../components/driver/LogRefuelForm';
@@ -497,6 +498,8 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
             </div>
           </>
         )}
+
+        {hasAssignment && currentVehicle && <AccidentReportEntry key={activeShift.assignmentId} assignmentId={activeShift.assignmentId!} />}
 
         {/* Overlay modals */}
         {showReportFault && hasAssignment && currentVehicle && (

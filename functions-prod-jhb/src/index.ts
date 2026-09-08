@@ -1,3 +1,4 @@
+import { createAccidentHandlers } from './accidentReports';
 // functions/src/index.ts — FULL DROP-IN Cloud Functions for FleetWise Shift Management
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
@@ -3848,3 +3849,14 @@ export const logRefuelWithSession = onProdCall(async (data, context) => {
     throw new functions.https.HttpsError('internal', 'Failed to log refuel record: ' + error.message);
   }
 });
+
+// WP3: dedicated accident evidence; no vehicle/shift lifecycle side effects.
+const accidentHandlers = createAccidentHandlers({ db, requireDriverSession, requireAdmin, bucket: inspectionStorageBucket });
+export const createAccidentReportDraft = onProdCall(accidentHandlers.createAccidentReportDraft);
+export const updateAccidentReportDraft = onProdCall(accidentHandlers.updateAccidentReportDraft);
+export const getAccidentReportForDriver = onProdCall(accidentHandlers.getAccidentReportForDriver);
+export const uploadAccidentPhoto = onProdCall(accidentHandlers.uploadAccidentPhoto);
+export const submitAccidentReport = onProdCall(accidentHandlers.submitAccidentReport);
+export const listAccidentReportsAdmin = onProdCall(accidentHandlers.listAccidentReportsAdmin);
+export const getAccidentReportAdmin = onProdCall(accidentHandlers.getAccidentReportAdmin);
+export const getAccidentPhoto = onProdCall(accidentHandlers.getAccidentPhoto);

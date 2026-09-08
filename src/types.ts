@@ -863,3 +863,50 @@ export interface OdometerDiscrepancy {
     // Test-data isolation marker — inherited from the driver or vehicle at creation time.
     isTestData?: boolean;
 }
+
+export type AccidentAnswer = "YES" | "NO" | "UNKNOWN";
+export interface AccidentFields {
+    accidentAt?: string | null;
+    locationDescription?: string | null;
+    narrative?: string | null;
+    injuries?: AccidentAnswer | null;
+    emergencyAttended?: AccidentAnswer | null;
+    policeAttended?: AccidentAnswer | null;
+    policeAgency?: string | null;
+    policeReference?: string | null;
+    vehicleMotion?: "MOVING" | "PARKED" | "UNKNOWN" | null;
+    otherDriverName?: string | null;
+    otherDriverSurname?: string | null;
+    otherDriverPhone?: string | null;
+    otherDriverEmail?: string | null;
+    otherDriverLicence?: string | null;
+    otherDriverLicenceExpiry?: string | null;
+    otherDriverJurisdiction?: string | null;
+    otherVehicleRegistration?: string | null;
+    otherVehicleMake?: string | null;
+    otherVehicleModel?: string | null;
+    otherVehicleColour?: string | null;
+    otherVehicleType?: string | null;
+    ownerName?: string | null;
+    ownerContact?: string | null;
+    ownerRelationship?: string | null;
+    insurer?: string | null;
+    policyNumber?: string | null;
+    claimReference?: string | null;
+    insuredParty?: string | null;
+    fleetDamage?: string | null;
+    otherVehicleDamage?: string | null;
+    propertyDamage?: string | null;
+    vehicleDriveable?: AccidentAnswer | null;
+    towingRequired?: AccidentAnswer | null;
+    gps?: { latitude: number; longitude: number } | null;
+    witnesses?: { name?: string | null; phone?: string | null; email?: string | null; notes?: string | null }[];
+    incompleteDetailsAcknowledged?: boolean;
+}
+export interface AccidentPhoto { id: string; path: string; caption: string; mimeType: string; size: number; sha256: string }
+export interface AccidentReport {
+    id: string; orgId: string; driverId: string; vehicleId: string; shiftId: string; assignmentId: string;
+    createdByDriverId: string; isTestData: boolean; status: 'DRAFT' | 'SUBMITTED'; revision: number;
+    createdAt: Date; updatedAt: Date; submittedAt: Date | null; lastMutationId?: string;
+    fields: AccidentFields; photos: AccidentPhoto[]; driverName?: string | null; vehicleRegistration?: string | null;
+}
