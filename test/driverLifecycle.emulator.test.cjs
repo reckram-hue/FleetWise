@@ -76,6 +76,32 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
     startChargePercent: 30, startPredictedRangeKm: 100, chargingLocationId: f.locationId, chargingType: 'COMPANY_AC' });
   const endCharge = (f, chargingSessionId) => f.call('endChargingSession', { chargingSessionId, endChargePercent: 80, endPredictedRangeKm: 300 });
 
+  test(`${backend}: return damage atomically links one defect across concurrent/lost-response retries`, async () => {
+    const f = await fixture(); await inspect(f, 'PICKUP');
+    const inspectionId = await prepare(f, 'RETURN', draft(f));
+    const payload = { vehicleId: f.vehicleId, sourceInspectionId: inspectionId, category: 'Other', urgency: 'Medium', description: 'Scratch' };
+    const [one, two] = await Promise.all([f.call('reportDefectWithSession', payload), f.call('reportDefectWithSession', payload)]);
+    assert.equal(one.defectId, two.defectId);
+    const defect = await read('defects', one.defectId);
+    for (const key of ['driverId', 'vehicleId', 'shiftId', 'assignmentId']) assert.equal(defect[key], f[key]);
+    assert.equal(defect.sourceInspectionId, inspectionId); assert.equal(defect.photos, undefined);
+    await expectCode(f.call('completeVehicleInspection', { inspectionId, hasDamage: false }));
+    const done = await f.call('completeVehicleInspection', { inspectionId, hasDamage: true });
+    assert.equal(done.inspection.damageDescription, null); assert.equal(done.inspection.hasDamage, true);
+    assert.equal(done.inspection.linkedDefectId, one.defectId);
+    assert.equal(done.inspection.retentionClass, 'EVIDENCE'); assert.equal(done.inspection.expiresAt, null);
+    assert.equal((await f.call('reportDefectWithSession', payload)).defectId, one.defectId);
+    await f.call('completeVehicleInspection', { inspectionId, hasDamage: true });
+    await end(f); assert.equal((await db.collection('defects').where('driverId', '==', f.driverId).get()).size, 1);
+  });
+  test(`${backend}: return defect rejects pickup and foreign inspections`, async () => {
+    const f = await fixture(); const other = await fixture();
+    for (const inspectionId of [await prepare(f, 'PICKUP'), await prepare(other, 'RETURN', draft(other))]) {
+      await expectCode(f.call('reportDefectWithSession', { vehicleId: f.vehicleId, sourceInspectionId: inspectionId,
+        category: 'Other', urgency: 'Medium', description: 'Scratch' }), 'permission-denied');
+    }
+  });
+
   for (const boundaryType of ['PICKUP', 'RETURN']) for (const hasDamage of [false, true]) {
     test(`${backend}: ${boundaryType} damage=${hasDamage} retains correct evidence policy without creating defects`, async () => {
       const f = await fixture();

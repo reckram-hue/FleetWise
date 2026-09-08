@@ -149,3 +149,25 @@ test('pending local photo read cannot race ahead into report submission', () => 
   reader.result = 'data:image/jpeg;base64,c3ludGhldGlj'; reader.onload(); await read;
   assert.equal(nodes(h.render(), 'img').length, 1);
 }));
+
+for (const withPhoto of [false, true]) test('return standard report callback and optional Storage photos: ' + withPhoto, async () => {
+  const calls = []; let fail = true, submitted;
+  const h = harness({ uploadDefectPhoto: async () => { calls.push('upload'); return { photoPath: 'vehicle-defects/test/photo.jpg' }; },
+    reportDefectWithSession: async payload => { calls.push('report'); assert.equal(payload.sourceInspectionId, 'return-inspection');
+      assert.equal(payload.photos?.length || 0, withPhoto ? 1 : 0);
+      if (fail) throw new Error('Recoverable failure'); return { id: 'linked-defect' }; } });
+  const Form = h.load('src/components/driver/ReportDefectForm.tsx').default;
+  const props = { currentVehicle: { id: 'vehicle', registration: 'TEST', vehicleType: 'ICE' }, onBack: () => assert.fail('Must use callback'),
+    prepareReturnInspection: async () => 'return-inspection', onSubmitted: id => submitted = id };
+  const render = () => h.renderComponent(Form, props);
+  global.localStorage = { getItem: () => null };
+  global.FileReader = class { readAsDataURL() { this.result = 'data:image/jpeg;base64,dGVzdA=='; this.onload(); } };
+  let tree = render();
+  for (const label of ['Category', 'Urgency', 'Vehicle Location', 'Description', 'Notes', 'optional']) assert.ok(renderToStaticMarkup(tree).includes(label));
+  field(tree, 'driver-formData-description').props.onChange({ target: { value: 'Visible return scratch' } });
+  if (withPhoto) await field(render(), 'defect-photos').props.onChange({ target: { files: [{ type: 'image/jpeg' }], value: '' } });
+  await submit(render()); assert.equal(submitted, undefined);
+  assert.equal(field(render(), 'driver-formData-description').props.value, 'Visible return scratch');
+  fail = false; await submit(render()); assert.equal(submitted, 'linked-defect');
+  assert.equal(calls.includes('upload'), withPhoto);
+});

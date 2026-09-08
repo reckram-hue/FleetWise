@@ -20,6 +20,8 @@ import { outstandingDefects, defectSeverityClasses } from '../../lib/driverVehic
 interface ReportDefectFormProps {
     onBack: () => void;
     pickup?: boolean;
+    prepareReturnInspection?: () => Promise<string>;
+    onSubmitted?: (defectId: string) => void;
     /**
      * The selected pickup vehicle or CURRENT assigned vehicle.
      * Required — reporting is locked to this vehicle; the existing server validates it.
@@ -27,7 +29,7 @@ interface ReportDefectFormProps {
     currentVehicle: VehiclePick;
 }
 
-const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehicle, pickup = false }) => {
+const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehicle, pickup = false, prepareReturnInspection, onSubmitted }) => {
     const { currentUser } = useContext(UserContext);
     const [existingDefects, setExistingDefects] = useState<DefectReport[]>([]);
     const [similarDefects, setSimilarDefects] = useState<DefectReport[]>([]);
@@ -136,6 +138,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                 throw new Error('Your session has expired. Please log in again.');
             }
 
+            const sourceInspectionId = await prepareReturnInspection?.();
+
             // Upload photos to Cloud Storage first. If any upload fails, abort here —
             // no defect record is created for a submission with a missing photo.
             const photoPaths: string[] = [];
@@ -144,7 +148,8 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                 photoPaths.push(photoPath);
             }
 
-            await api.reportDefectWithSession({
+            const report = await api.reportDefectWithSession({
+                sourceInspectionId,
                 vehicleId: currentVehicle.id,
                 driverId: currentUser.id,
                 sessionToken: session.sessionToken,
@@ -157,6 +162,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                 deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
             });
 
+            if (onSubmitted) { onSubmitted(report.id); return; }
             alert('Defect report submitted successfully! The maintenance team will review it shortly.');
             onBack();
         } catch (err) {

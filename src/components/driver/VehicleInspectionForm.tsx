@@ -10,6 +10,7 @@ import { ReturnReadings } from './VehicleReadings';
 import ReturnChargingChoice from './ReturnChargingChoice';
 import SavedReturnNotice from './SavedReturnNotice';
 import Card from '../shared/Card';
+import ReportDefectForm from './ReportDefectForm';
 import { Camera, CheckCircle, AlertCircle, Loader, Car, RefreshCw } from 'lucide-react';
 
 export interface VehicleInspectionResult {
@@ -28,7 +29,7 @@ interface VehicleInspectionFormProps {
   boundaryType: 'PICKUP' | 'RETURN';
   assignmentId: string;
   driverId: string;
-  vehicle: { registration: string; alias?: string; vehicleType: 'ICE' | 'EV' };
+  vehicle: { id: string; registration: string; alias?: string; vehicleType: 'ICE' | 'EV' };
   startOdo?: number;
   returnIntent?: VehicleReturnIntent;
   onCompleted: (result: VehicleInspectionResult) => void | Promise<void>;
@@ -118,7 +119,8 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
   const [exterior, setExterior] = useState<PhotoSlot>({ status: 'empty', preview: null });
   const [interior, setInterior] = useState<PhotoSlot>({ status: 'empty', preview: null });
   const [hasDamage, setHasDamage] = useState(false);
-  const [damageDescription, setDamageDescription] = useState('');
+  const [linkedDefectId, setLinkedDefectId] = useState<string | null>(null);
+  const [showDefectForm, setShowDefectForm] = useState(false);
   const [endOdo, setEndOdo] = useState('');
   const [endCharge, setEndCharge] = useState('');
   const [endPredictedRange, setEndPredictedRange] = useState('');
@@ -155,7 +157,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         if (insp && insp.interiorPhotoPath) setInterior({ status: 'uploaded', preview: null });
         setEvidenceCompleted(insp?.status === 'COMPLETED');
         setHasDamage(insp?.hasDamage === true);
-        setDamageDescription(insp?.damageDescription || '');
+        setLinkedDefectId(insp?.linkedDefectId || null);
         const draft = insp?.returnFinalization;
         setSavedDraft(draft || null);
         if (draft) {
@@ -216,7 +218,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
 
   const handleSubmit = async () => {
     if (loading || loadFailed || submitting) return;
-    if (isReturn && hasDamage && !damageDescription.trim()) { setError('Please describe the damage.'); return; }
+    if (isReturn && hasDamage && !linkedDefectId) { setError('Submit the damage report before completing the return.'); return; }
 
     let endOdometer: number | undefined;
     let endChargePercent: number | undefined;
@@ -296,7 +298,6 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
         // PICKUP records photographic custody evidence, not a second defect declaration.
         // The backend retains PICKUP evidence independently of this compatibility value.
         hasDamage: isReturn ? hasDamage : false,
-        damageDescription: isReturn && hasDamage ? damageDescription.trim() : undefined,
       });
       const authoritativeDraft = completed.returnFinalization || draft;
       await onCompleted(authoritativeDraft
@@ -326,6 +327,17 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
           finally { setSubmitting(false); }
         }} />
     </Card>
+  );
+
+  if (isReturn && showDefectForm && !linkedDefectId) return (
+    <ReportDefectForm currentVehicle={vehicle} onBack={() => setShowDefectForm(false)}
+      prepareReturnInspection={async () => {
+        const session = getDriverSession();
+        if (!session) throw new Error('Your session has expired. Please log in again.');
+        const inspection = await api.createVehicleInspection(driverId, session.sessionToken, assignmentId, 'RETURN', returnIntent);
+        return inspection.id;
+      }}
+      onSubmitted={id => { setLinkedDefectId(id); setHasDamage(true); setShowDefectForm(false); setError(null); }} />
   );
 
   return (
@@ -387,16 +399,17 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
       {isReturn && <fieldset disabled={evidenceCompleted || submitting} className='mt-4'>
         <legend className='block text-sm font-semibold text-gray-700 mb-2'>Any new damage? <span className='text-red-500'>*</span></legend>
         <div className='flex gap-3'>
-          <button aria-pressed={!hasDamage} onClick={() => setHasDamage(false)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${!hasDamage ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500'}`}>No</button>
-          <button aria-pressed={hasDamage} onClick={() => setHasDamage(true)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${hasDamage ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500'}`}>Yes</button>
+          <button aria-pressed={!hasDamage} disabled={!!linkedDefectId} onClick={() => setHasDamage(false)} className={`flex-1 py-3 rounded-lg font-bold border-2 ${!hasDamage ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500'}`}>No</button>
+          <button aria-pressed={hasDamage} onClick={() => { setHasDamage(true); if (!linkedDefectId) setShowDefectForm(true); }} className={`flex-1 py-3 rounded-lg font-bold border-2 ${hasDamage ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500'}`}>Yes</button>
         </div>
         {hasDamage && (
-          <textarea aria-label='Damage description' value={damageDescription} onChange={e => setDamageDescription(e.target.value)} rows={3} placeholder='Describe the damage...' className='w-full px-4 py-3 border border-gray-300 rounded-lg mt-3' />
+          linkedDefectId ? <p role='status'>Damage report submitted. Complete the return inspection below.</p>
+            : <button onClick={() => setShowDefectForm(true)}>Report return damage</button>
         )}
       </fieldset>}
 
       <div className='mt-6 space-y-3'>
-        <button onClick={handleSubmit} disabled={submitting} className='w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center'>
+        <button onClick={handleSubmit} disabled={submitting || (isReturn && hasDamage && !linkedDefectId)} className='w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center'>
           {submitting ? <Loader className='animate-spin h-6 w-6' /> : (isReturn ? 'Complete Return Inspection' : 'Complete Pickup Inspection')}
         </button>
         {onBack && (

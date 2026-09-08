@@ -207,6 +207,7 @@ const ReportDefectWithSessionSchema = z.object({
   driverId: z.string().min(1, 'Driver ID is required'),
   sessionToken: z.string().min(1, 'Session token is required'),
   vehicleId: z.string().min(1, 'Vehicle ID is required'),
+  sourceInspectionId: z.string().min(1).max(512).regex(/^[^/]+$/).optional(),
   category: z.string().min(1, 'Category is required'),
   description: z.string().min(1, 'Description is required'),
   urgency: z.string().min(1, 'Urgency is required'),
@@ -2063,11 +2064,37 @@ export const reportDefectWithSession = functions.https.onCall(async (data, conte
     if (notes) defectData.notes = notes;
     if (photos && photos.length > 0) defectData.photos = photos;
 
-    const defectRef = await db.collection('defects').add(defectData);
+    const defectRef = db.collection('defects').doc();
+    let defectId = defectRef.id;
+    if (validated.sourceInspectionId) {
+      // One operational report per return, linked atomically for refresh/lost-response recovery.
+      const inspectionRef = db.collection('vehicleInspections').doc(validated.sourceInspectionId);
+      defectId = await db.runTransaction(async tx => {
+        const inspection = (await tx.get(inspectionRef)).data();
+        if (!inspection || inspection.driverId !== driverId || inspection.vehicleId !== vehicleId
+          || inspection.boundaryType !== 'RETURN') {
+          throw new functions.https.HttpsError('permission-denied', 'Return inspection does not match this driver and vehicle.');
+        }
+        if (inspection.linkedDefectId) return inspection.linkedDefectId as string;
+        const assignment = (await tx.get(db.collection('vehicleAssignments').doc(inspection.assignmentId))).data();
+        if (inspection.status !== 'PENDING' || !assignment || assignment.status !== 'ACTIVE'
+          || assignment.driverId !== driverId || assignment.vehicleId !== vehicleId || assignment.shiftId !== inspection.shiftId) {
+          throw new functions.https.HttpsError('failed-precondition', 'Return inspection is no longer open for damage reporting.');
+        }
+        tx.create(defectRef, { ...defectData, sourceInspectionId: inspectionRef.id,
+          assignmentId: inspection.assignmentId, shiftId: inspection.shiftId });
+        tx.update(inspectionRef, { linkedDefectId: defectRef.id, hasDamage: true,
+          damageDescription: null, retentionClass: 'EVIDENCE', expiresAt: null,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        return defectRef.id;
+      });
+    } else {
+      await defectRef.set(defectData);
+    }
 
     return {
       success: true,
-      defectId: defectRef.id,
+      defectId,
       message: 'Defect report submitted successfully',
     };
   } catch (error: any) {
@@ -3443,8 +3470,11 @@ export const completeVehicleInspection = onMeasuredCall('completeVehicleInspecti
       throw new functions.https.HttpsError('failed-precondition', 'Inspection does not match the assignment.');
     }
 
-    // Damage description is required when damage is reported.
-    if (hasDamage && (!damageDescription || damageDescription.trim() === '')) {
+    // Legacy declarations require text; linked standard reports own their detail.
+    if (inspectionData.linkedDefectId && !hasDamage) {
+      throw new functions.https.HttpsError('failed-precondition', 'A linked damage report requires damage evidence retention.');
+    }
+    if (hasDamage && !inspectionData.linkedDefectId && (!damageDescription || damageDescription.trim() === '')) {
       throw new functions.https.HttpsError('invalid-argument', 'A damage description is required when damage is reported.');
     }
 
@@ -3484,6 +3514,7 @@ export const completeVehicleInspection = onMeasuredCall('completeVehicleInspecti
         || i.assignmentId !== assignmentRef.id || i.vehicleId !== a.vehicleId || i.shiftId !== a.shiftId
         || i.boundaryType !== inspectionData.boundaryType || i.returnIntent !== inspectionData.returnIntent
         || JSON.stringify(i.returnFinalization) !== JSON.stringify(inspectionData.returnFinalization)
+        || i.linkedDefectId !== inspectionData.linkedDefectId
         || i.exteriorPhotoPath !== extPath || i.interiorPhotoPath !== intPath) {
         throw new functions.https.HttpsError('failed-precondition', 'Inspection evidence or return draft changed; reload and retry completion.');
       }
@@ -3492,7 +3523,7 @@ export const completeVehicleInspection = onMeasuredCall('completeVehicleInspecti
         capturedAt: admin.firestore.FieldValue.serverTimestamp(),
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
         hasDamage,
-        damageDescription: hasDamage ? damageDescription!.trim() : null,
+        damageDescription: hasDamage && !i.linkedDefectId ? damageDescription!.trim() : null,
         // Explicitly freeze the EXACT verified object paths (WP7D2B). A concurrent replacement
         // upload writes a distinct unique object, so these frozen bytes can never be overwritten.
         exteriorPhotoPath: extPath,

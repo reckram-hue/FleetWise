@@ -346,6 +346,7 @@ const api = {
     driverId: string;
     sessionToken: string;
     vehicleId: string;
+    sourceInspectionId?: string;
     category: DefectCategory;
     description: string;
     urgency: DefectUrgency;
@@ -358,6 +359,7 @@ const api = {
       driverId: defectData.driverId,
       sessionToken: defectData.sessionToken,
       vehicleId: defectData.vehicleId,
+      ...(defectData.sourceInspectionId ? { sourceInspectionId: defectData.sourceInspectionId } : {}),
       category: defectData.category,
       description: defectData.description,
       urgency: defectData.urgency,

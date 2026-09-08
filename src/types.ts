@@ -323,6 +323,7 @@ export interface VehicleInspection {
     interiorPhotoCaptured: boolean;
     hasDamage: boolean;
     damageDescription?: string | null;
+    linkedDefectId?: string;
     retentionClass: RetentionClass;
     expiresAt?: Date | null;
     createdAt: Date;
@@ -404,6 +405,9 @@ export enum DefectStatus {
 }
 
 export interface DefectReport {
+    sourceInspectionId?: string;
+    assignmentId?: string;
+    shiftId?: string;
     id: string;
     vehicleId: string;
     driverId: string;

@@ -14,9 +14,9 @@ Use an explicitly authorized Preview test driver/vehicle for the checks below.
 - ActiveShift replacement pickup: TakeVehicleForm previously showed outstanding
   defects but offered no report action. It now opens that same full form for the
   selected vehicle, preserving start readings and refreshing defects on return.
-- VehicleInspectionForm's short damage declaration is inspection evidence, not a
-  reduced Report Fault form. Its required inspection photos and lifecycle are
-  unchanged. Optional photos in this patch apply to standalone defect reporting.
+- RETURN inspection now opens the shared ReportDefectForm for new damage. See
+  return-damage-preview-checklist.md for the linkage, recovery and deployment checks.
+  Mandatory inspection photos remain separate from optional defect photos.
 
 No reduced standalone driver fault form was found in current source. The reported
 Preview discrepancy is not proven: capture its exact URL, screen and deployed
