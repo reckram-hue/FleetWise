@@ -14,7 +14,7 @@ function harness(overrides = {}) {
   const api = { getSettings: async () => ({ areas: ['Cape Town'], departments: ['Operations'] }),
     getAdminUsers: async () => [], getVehicles: async () => [], getUsers: async () => [], getActiveDefects: async () => [],
     listChargingLocationsAdmin: async () => [], ...overrides };
-  const hooks = { ...React, useRef(initial) { const i = cursor++; return current.state[i] ||= { current: initial }; }, useState(initial) {
+  const hooks = { ...React, useContext: () => ({ currentUser: { id: 'driver' } }), useRef(initial) { const i = cursor++; return current.state[i] ||= { current: initial }; }, useState(initial) {
     const instance = current, i = cursor++; if (!(i in instance.state)) instance.state[i] = initial;
     return [instance.state[i], next => instance.state[i] = typeof next === 'function' ? next(instance.state[i]) : next];
   }, useEffect(callback, deps) {
@@ -22,12 +22,15 @@ function harness(overrides = {}) {
     if (!old || !deps || deps.some((v, j) => !Object.is(v, old[j]))) current.effects.push(callback);
     current.deps[i] = deps;
   } };
-  const realFiles = ['AccidentReportEntry', 'AccidentReportForm', 'AccidentReportDetails', 'AccidentReports', 'accidentDraft', 'accidentFields'];
+  const realFiles = ['AccidentReportEntry', 'AccidentReportForm', 'AccidentReportDetails', 'AccidentReports', 'accidentDraft', 'accidentFields', 'DriverDashboard'];
   function load(filename) {
     filename = path.resolve(filename); if (cache.has(filename)) return cache.get(filename).exports;
     const mod = new Module(filename, module); cache.set(filename, mod); const req = Module.createRequire(filename);
     mod.require = name => {
       if (name === 'react') return hooks;
+      if (name === 'react-router-dom') return { useNavigate: () => () => {} };
+      if (name.endsWith('/store/shift')) return { useShiftStore: () => ({ activeShift: null, setActiveShift() {}, clearActiveShift() {} }) };
+      if (name.endsWith('/resolveActiveShift')) return { resolveActiveShiftState: async () => null };
       if (name.includes('firebaseApi')) return api;
       if (name.includes('accidentApi')) return { accidentApi: overrides };
       if (name.endsWith('store/session')) return { getDriverSession: () => ({ driverId: 'driver', projectId: 'demo' }) };
@@ -201,4 +204,96 @@ test('edits arriving during a save flush as a new mutation without dropping the 
   });
   draft.change({ narrative: 'First' }); const saving = draft.save(); draft.change({ narrative: 'Later' }); release(); await saving;
   assert.equal(calls.length, 2); assert.notEqual(calls[0].mutationId, calls[1].mutationId); assert.equal(draft.report.fields.narrative, 'Later');
+});
+
+
+test('Dashboard exposes historical drafts without an active shift; refresh/later login resumes original report', async () => {
+  const old = fixture({ assignmentId: 'closed-assignment', vehicleId: 'original-vehicle', shiftId: 'ended-shift' });
+  const second = fixture({ id: 'second-draft', vehicleId: 'second-vehicle' });
+  for (let login = 0; login < 2; login++) {
+    const h = harness({ drafts: async () => [old, second], get: async id => { assert.equal(id, old.id); return old; }, create: () => assert.fail('Discovery cannot create') });
+    const Dashboard = h.load(modulePath('DriverDashboard')).default;
+    const entryNode = nodes(h.render(Dashboard), n => n.type.name === 'AccidentReportEntry')[0];
+    assert.ok(entryNode); assert.equal(entryNode.props.assignmentId, undefined);
+    const Entry = h.load(modulePath('AccidentReportEntry')).default;
+    h.render(Entry, entryNode.props); await h.settle(); let tree = h.render(Entry, entryNode.props);
+    assert.equal(button(tree, 'Report Accident / Collision'), undefined);
+    assert.match(text(tree), /original-vehicle/); assert.match(text(tree), /second-vehicle/);
+    assert.equal(nodes(tree, n => n.type === 'button' && text(n) === 'Resume Report').length, 2);
+    await button(tree, 'Resume Report').props.onClick(); tree = h.render(Entry, entryNode.props);
+    const formNode = nodes(tree, n => n.type.name === 'AccidentReportForm')[0];
+    assert.equal(formNode.props.initialReport.assignmentId, old.assignmentId);
+    assert.equal(formNode.props.backLabel, 'Back to Dashboard');
+    h.render(formNode.type, formNode.props); await h.settle();
+    assert.ok(button(h.render(formNode.type, formNode.props), 'Save Draft'));
+  }
+});
+
+test('throwing browser recovery never blocks successive server saves, submission or read-only rendering', async () => {
+  const calls = []; let submitted = 0;
+  const h = harness({
+    save: async (_id, revision, mutationId, fields) => { calls.push({ revision, mutationId }); return fixture({ revision: revision + 1, lastMutationId: mutationId, fields }); },
+    submit: async (_id, revision) => { submitted++; assert.equal(revision, 3); return fixture({ status: 'SUBMITTED', revision, fields: complete, submittedAt: new Date() }); },
+  });
+  const complete = { accidentAt: '2026-09-08T05:00:00.000Z', locationDescription: 'Road', narrative: 'Account', injuries: 'UNKNOWN', incompleteDetailsAcknowledged: true };
+  const broken = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('full'); }, removeItem() { throw new Error('blocked'); } };
+  global.localStorage = broken;
+  const Form = h.load(modulePath('AccidentReportForm')).default;
+  const props = { initialReport: fixture({ fields: complete }), onBack() {} };
+  h.render(Form, props); await h.settle(); const tree = () => h.render(Form, props);
+  setField(tree(), 'What happened?', 'First'); await button(tree(), 'Save Draft').props.onClick(); await h.settle();
+  assert.match(text(tree()), /Draft saved on server/); assert.match(text(tree()), /Draft saved to FleetWise, but this browser cannot keep an offline recovery copy/);
+  setField(tree(), 'What happened?', 'Second'); await button(tree(), 'Save Draft').props.onClick(); await h.settle();
+  assert.deepEqual(calls.map(v => v.revision), [0, 1]); assert.notEqual(calls[0].mutationId, calls[1].mutationId);
+  setField(tree(), 'What happened?', 'Third'); button(tree(), '6. Review & submit').props.onClick();
+  await button(tree(), 'Submit accident report').props.onClick();
+  assert.equal(submitted, 1); assert.match(text(tree()), /Report submitted. This report is read-only/);
+  assert.equal(button(tree(), 'Save Draft'), undefined);
+  assert.doesNotMatch(text(tree()), /quota|localStorage|mutation ID|revision/);
+});
+
+test('unavailable browser storage getter restores server state and lost save response retains in-memory request', async () => {
+  const h = harness(), { AccidentDraft } = h.load('src/lib/accidentDraft.ts'); let server = fixture(), fail = true; const calls = [];
+  const unavailable = () => { throw new Error('Storage getter blocked'); };
+  const persist = async (_id, revision, mutationId, fields) => {
+    calls.push({ revision, mutationId });
+    if (server.lastMutationId !== mutationId) server = fixture({ revision: revision + 1, lastMutationId: mutationId, fields });
+    if (fail) { fail = false; throw new Error('Lost response'); } return server;
+  };
+  const draft = new AccidentDraft(server, unavailable, 'draft', persist);
+  draft.change({ narrative: 'Preserved on server' }); await assert.rejects(draft.save(), /Lost response/);
+  await draft.save(); assert.deepEqual(calls[0], calls[1]); assert.equal(draft.report.revision, 1);
+  const refreshed = new AccidentDraft(server, unavailable, 'draft', persist);
+  assert.equal(refreshed.fields.narrative, 'Preserved on server'); assert.equal(refreshed.dirty, false);
+  const done = fixture({ status: 'SUBMITTED', fields: server.fields });
+  assert.doesNotThrow(() => new AccidentDraft(done, unavailable, 'draft', persist));
+});
+
+test('quota failure after a normal backup clears stale copy and reload uses server draft', async () => {
+  const h = harness(), { AccidentDraft } = h.load('src/lib/accidentDraft.ts'); const storage = memory(); let server = fixture();
+  const draft = new AccidentDraft(server, storage, 'draft', async (_id, revision, mutationId, fields) => server = fixture({ revision: revision + 1, lastMutationId: mutationId, fields }));
+  draft.change({ narrative: 'Old text' }); storage.setItem = () => { throw new Error('Quota'); };
+  draft.change({ narrative: 'Latest text' }); await draft.save(); assert.equal(storage.getItem('draft'), null);
+  assert.equal(new AccidentDraft(server, storage, 'draft', async () => server).fields.narrative, 'Latest text');
+});
+
+test('session survives browser storage failure in memory and explicit logout cannot resurrect stored credentials', () => {
+  const filename = path.resolve('src/store/session.ts'); const mod = new Module(filename, module);
+  const source = fs.readFileSync(filename, 'utf8').replaceAll('import.meta.env.VITE_FIREBASE_PROJECT_ID', "'demo'");
+  mod._compile(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
+  const session = mod.exports; const storage = memory(); global.localStorage = storage;
+  const credential = { driverId: 'driver', sessionToken: 'synthetic-only', expiresAt: '2099-01-01', projectId: 'demo' };
+  session.setDriverSession(credential); assert.deepEqual(session.getDriverSession(), credential);
+  storage.getItem = () => { throw new Error('Blocked'); }; storage.removeItem = () => { throw new Error('Blocked'); };
+  assert.deepEqual(session.getDriverSession(), credential);
+  session.clearDriverSession(); assert.equal(session.getDriverSession(), null);
+  storage.setItem = () => { throw new Error('Blocked'); }; session.setDriverSession(credential);
+  assert.deepEqual(session.getDriverSession(), credential);
+  session.clearDriverSession(); assert.equal(session.getDriverSession(), null);
+  global.localStorage = memory(); session.setDriverSession(credential);
+  global.localStorage.setItem('fleetwise_driver_session', '{invalid');
+  assert.equal(session.getDriverSession(), null);
+  session.setDriverSession(credential);
+  global.localStorage.setItem('fleetwise_driver_session', JSON.stringify({ ...credential, projectId: 'foreign-project' }));
+  assert.equal(session.getDriverSession(), null);
 });

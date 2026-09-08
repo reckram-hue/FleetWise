@@ -11,6 +11,7 @@ const driverCall = async <T,>(name: string, data: object): Promise<T> => {
 export const accidentApi = {
     create: (assignmentId: string, requestId: string) => driverCall<AccidentReport>('createAccidentReportDraft', { assignmentId, requestId }),
     list: (assignmentId: string) => driverCall<AccidentReport[]>('getAccidentReportForDriver', { assignmentId }),
+    drafts: () => driverCall<AccidentReport[]>('getAccidentReportForDriver', {}),
     get: (reportId: string) => driverCall<AccidentReport>('getAccidentReportForDriver', { reportId }),
     save: (reportId: string, revision: number, mutationId: string, fields: AccidentFields) => driverCall<AccidentReport>('updateAccidentReportDraft', { reportId, revision, mutationId, fields }),
     submit: (reportId: string, revision: number) => driverCall<AccidentReport>('submitAccidentReport', { reportId, revision }),

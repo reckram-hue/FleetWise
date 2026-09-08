@@ -9,6 +9,7 @@ import api from '../../services/firebaseApi';
 import { useShiftStore } from '../../store/shift';
 import { getDriverSession } from '../../store/session';
 import { resolveActiveShiftState } from '../../lib/resolveActiveShift';
+import AccidentReportEntry from './AccidentReportEntry';
 import ReportDefectForm from './ReportDefectForm';
 import LogChargeForm from './LogChargeForm';
 import LogRefuelForm from './LogRefuelForm';
@@ -175,6 +176,8 @@ const DriverDashboard: React.FC = () => {
                             </div>
                         )}
                     </Card>
+
+                    <AccidentReportEntry key={currentUser.id} />
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
                         <MainButton

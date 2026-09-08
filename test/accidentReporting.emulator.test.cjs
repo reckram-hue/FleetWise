@@ -182,9 +182,59 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
     const r = await save(f, await create(f), fields); const done = await submit(f, r);
     assert.deepEqual(done.fields, fields); assert.equal(done.fields.policeReference, undefined);
   });
-  test(`${backend}: closed assignment drafts remain viewable but cannot be edited or uploaded`, async () => {
-    const f = await fixture(), r = await create(f); await db.collection('vehicleAssignments').doc(f.assignmentId).update({ status: 'COMPLETED' });
-    assert.equal((await f.call('getAccidentReportForDriver', { reportId: r.id })).id, r.id);
-    await expectCode(save(f, r), 'permission-denied'); await expectCode(photo(f, r), 'permission-denied');
+  for (const endShift of [false, true]) {
+    test(`${backend}: historical draft survives return, ${endShift ? 'shift end and later login' : 'vehicle swap'}`, async () => {
+      const f = await fixture(); let r = await save(f, await create(f), { narrative: 'Roadside draft' });
+      await inspect(f, 'PICKUP');
+      const values = draft(f, { transitionReason: endShift ? 'SHIFT_END' : 'VEHICLE_SWAP' });
+      await inspect(f, 'RETURN', values); await end(f, values);
+      if (endShift) {
+        await f.call('endShiftWithSession', { shiftId: f.shiftId });
+        const login = await api.driverLogin({ driverId: f.driverId, pin: '2468', deviceId: 'later-login' }, {});
+        f.call = (name, payload = {}) => api[name]({ driverId: f.driverId, sessionToken: login.sessionToken, ...payload }, {});
+      } else {
+        const replacement = id();
+        await db.collection('vehicles').doc(replacement).set({ status: 'Active', vehicleType: 'EV', registration: 'REPLACEMENT', currentOdometer: 12000, isTestData: true });
+        await f.call('startVehicleAssignment', { ...f.startPayload, vehicleId: replacement, startOdometer: 12000, transitionReason: 'VEHICLE_SWAP' });
+      }
+      const discovered = await f.call('getAccidentReportForDriver');
+      assert.ok(discovered.some(v => v.id === r.id));
+      assert.equal((await f.call('getAccidentReportForDriver', { reportId: r.id })).fields.narrative, 'Roadside draft');
+      const other = await fixture();
+      assert.ok(!(await other.call('getAccidentReportForDriver')).some(v => v.id === r.id));
+      await expectCode(other.call('getAccidentReportForDriver', { reportId: r.id }), 'permission-denied');
+      await expectCode(save(other, r), 'permission-denied');
+      await expectCode(photo(other, r), 'permission-denied');
+      await expectCode(submit(other, r), 'permission-denied');
+      await expectCode(create(f), 'permission-denied');
+      await expectCode(save(f, r, { assignmentId: other.assignmentId }), 'invalid-argument');
+      r = await save(f, r); const evidence = await photo(f, r); const done = await submit(f, r);
+      for (const key of ['driverId', 'vehicleId', 'shiftId', 'assignmentId']) assert.equal(done[key], f[key]);
+      assert.equal(done.orgId, r.orgId); assert.equal(done.isTestData, r.isTestData);
+      assert.equal(done.photos[0].path, evidence.path);
+      assert.match(evidence.path, new RegExp('^accident-reports/' + r.orgId + '/' + r.id + '/'));
+      await expectCode(save(f, done)); await expectCode(photo(f, done));
+      const retry = await f.call('submitAccidentReport', { reportId: done.id, revision: done.revision, fields: { narrative: 'Changed' }, vehicleId: other.vehicleId });
+      assert.equal(retry.submittedAt.toMillis(), done.submittedAt.toMillis());
+      assert.deepEqual(retry.fields, done.fields); assert.equal(retry.vehicleId, done.vehicleId);
+      assert.ok(!(await f.call('getAccidentReportForDriver')).some(v => v.id === r.id));
+    });
+  }
+  test(`${backend}: historical draft rejects inactive owner and changed original linkage`, async () => {
+    const f = await fixture(), r = await create(f);
+    await db.collection('vehicleAssignments').doc(f.assignmentId).update({ status: 'COMPLETED' });
+    await db.collection('users').doc(f.driverId).update({ employmentStatus: 'Inactive' });
+    await expectCode(save(f, r), 'permission-denied'); await expectCode(submit(f, r), 'permission-denied');
+    await expectCode(f.call('getAccidentReportForDriver'), 'permission-denied');
+    await db.collection('users').doc(f.driverId).update({ employmentStatus: 'Active' });
+    await db.collection('vehicleAssignments').doc(f.assignmentId).update({ vehicleId: id() });
+    await expectCode(save(f, r)); await expectCode(photo(f, r)); await expectCode(submit(f, r));
+  });
+  test(`${backend}: mixed test provenance is retained`, async () => {
+    for (const driverTest of [false, true]) {
+      const f = await fixture(80000, driverTest);
+      await db.collection('vehicles').doc(f.vehicleId).update({ isTestData: !driverTest });
+      assert.equal((await create(f)).isTestData, true);
+    }
   });
 }

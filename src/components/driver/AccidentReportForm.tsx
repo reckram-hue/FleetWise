@@ -11,8 +11,8 @@ const action = 'min-h-11 rounded border px-4 py-2 font-semibold disabled:opacity
 const localDateTime = (iso: string) => { const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
 const recoveryKey = (report: AccidentReport) => {
     const session = getDriverSession();
-    if (!session || session.driverId !== report.driverId) throw new Error('Report does not belong to the current session.');
-    return `fleetwise_accident_${session.projectId || 'current'}_${session.driverId}_${report.id}`;
+    if (session && session.driverId !== report.driverId) throw new Error('Report does not belong to the current session.');
+    return `fleetwise_accident_${session?.projectId || 'current'}_${report.driverId}_${report.id}`;
 };
 const readPhoto = (file: File) => new Promise<string>((resolve, reject) => {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024 || !file.size) {
@@ -22,7 +22,7 @@ const readPhoto = (file: File) => new Promise<string>((resolve, reject) => {
     reader.onerror = reader.onabort = () => reject(new Error('Could not read photo. Please select it again.')); reader.readAsDataURL(file);
 });
 
-export default function AccidentReportForm({ initialReport, onBack }: { initialReport: AccidentReport; onBack: () => void }) {
+export default function AccidentReportForm({ initialReport, onBack, backLabel = 'Back to Active Shift' }: { initialReport: AccidentReport; onBack: () => void; backLabel?: string }) {
     const draft = useRef<AccidentDraft | null>(null);
     const [report, setReport] = useState(initialReport);
     const [fields, setFields] = useState(initialReport.fields);
@@ -39,15 +39,14 @@ export default function AccidentReportForm({ initialReport, onBack }: { initialR
     useEffect(() => {
         try {
             const key = recoveryKey(initialReport);
-            draft.current = new AccidentDraft(initialReport, localStorage, key, accidentApi.save);
+            draft.current = new AccidentDraft(initialReport, () => localStorage, key, accidentApi.save);
             setFields(draft.current.fields); setReady(true);
-        } catch { setError('Could not restore local recovery data. Check browser storage access and reopen the report.'); }
+        } catch { setError('Could not open this report. Please reopen it from your dashboard.'); }
     }, [initialReport.id]);
     const change = (next: AccidentFields) => {
         if (busyRef.current || draft.current?.report.status === 'SUBMITTED') return;
         setFields(next); setSaved('Unsaved changes');
-        try { draft.current!.change(next); }
-        catch { setError('Local recovery storage is unavailable. Save Draft before leaving this page.'); }
+        draft.current!.change(next);
     };
     const save = async () => {
         if (!draft.current || busyRef.current || photoLock.current) return null;
@@ -93,15 +92,21 @@ export default function AccidentReportForm({ initialReport, onBack }: { initialR
         {error && <div role="alert" className="my-3 rounded bg-red-50 p-3 text-red-900"><p>{error}</p>
             <button className={action} disabled={busy || photoReading} onClick={async () => {
                 if (busyRef.current) return; busyRef.current = true; setBusy(true);
-                try { const latest = await accidentApi.get(report.id); const key = recoveryKey(latest); localStorage.removeItem(key);
-                    draft.current = new AccidentDraft(latest, localStorage, key, accidentApi.save); setReport(latest); setFields(latest.fields); setReady(true); setError(''); }
+                try { const latest = await accidentApi.get(report.id); const key = recoveryKey(latest); draft.current?.clearRecovery();
+                    // Explicit discard must use server fields even if browser cleanup fails.
+                    draft.current = new AccidentDraft(latest, () => localStorage, key, accidentApi.save, false); setReport(latest); setFields(latest.fields); setReady(true); setError(''); }
                 catch { setError('Could not reload saved draft. Retry when connected.'); }
                 finally { busyRef.current = false; setBusy(false); }
             }}>Use server-saved version (discard local text edits)</button>
         </div>}
+        {ready && draft.current?.recoveryAvailable === false && <p role="status" className="my-3 rounded bg-amber-50 p-3 text-amber-900">
+            {report.status === 'SUBMITTED' ? 'Report submitted to FleetWise. Browser recovery is unavailable.' : saved === 'Draft saved on server'
+                ? 'Draft saved to FleetWise, but this browser cannot keep an offline recovery copy.'
+                : 'This browser cannot keep an offline recovery copy. Save to FleetWise before leaving; unsaved text may be lost on refresh.'}
+        </p>}
         {!ready ? <p role="status">Restoring report...</p> : report.status === 'SUBMITTED' ? <>
             <p role="status" className="my-4 font-bold text-green-800">Report submitted. This report is read-only.</p>
-            <AccidentReportDetails report={report} /><button className={action} onClick={onBack}>Back to Active Shift</button>
+            <AccidentReportDetails report={report} /><button className={action} onClick={onBack}>{backLabel}</button>
         </> : <>
             <div className="sticky top-0 z-10 flex flex-wrap gap-2 bg-white py-3 border-b">
                 <button className={action} disabled={busy || photoReading} onClick={() => { void save(); }}>Save Draft</button>
@@ -109,7 +114,7 @@ export default function AccidentReportForm({ initialReport, onBack }: { initialR
                 <button className={action} disabled={busy || photoReading} onClick={onBack}>Leave for now</button>
                 <span role="status" className="self-center text-sm">{busy ? 'Saving / uploading...' : saved}</span>
             </div>
-            <p className="text-xs text-gray-600 my-2">Text is saved automatically and recovered on this device if interrupted. Selected photos must finish uploading before leaving; unuploaded photos need to be selected again after refresh.</p>
+            <p className="text-xs text-gray-600 my-2">Text is saved automatically to FleetWise when connected. This browser also keeps recovery text when available. Selected photos must finish uploading before leaving; unuploaded photos need to be selected again after refresh.</p>
             <nav aria-label="Accident report steps" className="flex flex-wrap gap-2 my-4">{accidentSteps.map((s, i) =>
                 <button key={s.title} className={`${action} ${i === step ? 'bg-blue-100 border-blue-600' : ''}`} disabled={busy || photoReading} aria-current={i === step ? 'step' : undefined} onClick={() => setStep(i)}>{i + 1}. {s.title}</button>)}</nav>
             <h3 className="text-xl font-bold mb-3">{accidentSteps[step].title}</h3>

@@ -72,7 +72,7 @@ export function createAccidentHandlers(deps: {
     if (!report || report.driverId !== driverId) error('permission-denied', 'This accident report is not available to this driver.');
     return report!;
   }
-  async function active(tx: FirebaseFirestore.Transaction, assignmentId: string, driverId: string) {
+  async function creationContext(tx: FirebaseFirestore.Transaction, assignmentId: string, driverId: string) {
     const assignment = (await tx.get(db.collection('vehicleAssignments').doc(assignmentId))).data();
     if (!assignment || assignment.driverId !== driverId || assignment.status !== 'ACTIVE') error('permission-denied', 'An active assignment owned by you is required.');
     const a = assignment!;
@@ -85,8 +85,14 @@ export function createAccidentHandlers(deps: {
   async function editContext(tx: FirebaseFirestore.Transaction, ref: FirebaseFirestore.DocumentReference, driverId: string) {
     const report = owned((await tx.get(ref)).data(), driverId);
     if (report.status !== 'DRAFT') error('failed-precondition', 'Submitted accident reports are read-only.');
-    const { assignment } = await active(tx, report.assignmentId, driverId);
-    if (assignment.vehicleId !== report.vehicleId || assignment.shiftId !== report.shiftId) error('failed-precondition', 'Report context changed.');
+    // Reports are server-created only. Validate historical linkage, never current pointers.
+    const assignment = (await tx.get(db.collection('vehicleAssignments').doc(report.assignmentId))).data();
+    const shift = (await tx.get(db.collection('shifts').doc(report.shiftId))).data();
+    if (report.createdByDriverId !== driverId || !assignment || assignment.driverId !== driverId
+      || assignment.vehicleId !== report.vehicleId || assignment.shiftId !== report.shiftId
+      || (assignment.orgId && assignment.orgId !== report.orgId) || shift?.driverId !== driverId) {
+      error('failed-precondition', 'Report context changed.');
+    }
     return report;
   }
   const createAccidentReportDraft = wrap(async data => {
@@ -95,7 +101,7 @@ export function createAccidentHandlers(deps: {
     const ref = reports.doc(v.requestId);
     const pointer = db.collection('accidentDrafts').doc(v.assignmentId);
     const reportId = await db.runTransaction(async tx => {
-      const { assignment, vehicle } = await active(tx, v.assignmentId, session.driverId);
+      const { assignment, vehicle } = await creationContext(tx, v.assignmentId, session.driverId);
       const existing = await tx.get(ref);
       if (existing.exists) {
         const r = owned(existing.data(), session.driverId);
@@ -135,7 +141,12 @@ export function createAccidentHandlers(deps: {
     const v = Credentials.extend({ reportId: id.optional(), assignmentId: id.optional() }).parse(data);
     const { driverId } = await deps.requireDriverSession(v);
     if (v.reportId) { const doc = await reports.doc(v.reportId).get(); owned(doc.data(), driverId); return record(doc); }
-    if (!v.assignmentId) error('invalid-argument', 'Assignment is required.');
+    if (!v.assignmentId) {
+      // One draft per assignment; a driver may have unfinished reports from several shifts.
+      // A single-field owner query needs no new composite index.
+      const docs = await reports.where('driverId', '==', driverId).get();
+      return docs.docs.filter(d => d.data().status === 'DRAFT').map(record);
+    }
     const a = (await db.collection('vehicleAssignments').doc(v.assignmentId!).get()).data();
     if (a?.driverId !== driverId) error('permission-denied', 'Assignment is not yours.');
     const docs = await reports.where('assignmentId', '==', v.assignmentId).get();

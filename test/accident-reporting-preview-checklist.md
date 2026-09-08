@@ -21,13 +21,16 @@ The new admin surface is an embedded section, not a new dashboard tile.
   concurrent creation without writing to vehicle, shift or assignment records.
   One unfinished report per assignment; a deliberate later incident can create a
   new report after the previous report is submitted.
-- DRAFT and SUBMITTED are the only statuses. Ordinary driver updates and uploads
-  require the original assignment to remain active and owned by that driver.
-  Server checks shift and vehicle assignment pointers on each mutation.
-- Driver sessions use the existing active-driver session validation. Owner reads
-  remain allowed after the original assignment closes; edits then require a later
-  admin/amendment work package. Active Shift surfaces reports for its current
-  assignment; historical review is available to admins.
+- DRAFT and SUBMITTED are the only statuses. Creation still requires the active
+  assignment, active shift and matching current pointers. Existing drafts instead
+  validate original owner/creator, historical assignment vehicle/shift/org linkage
+  and shift ownership; historical state does not need to remain active.
+- Driver sessions still require an active account and valid current credentials.
+  Owner reads, updates, photo uploads and submission remain available after return,
+  swap or shift end. Identity/provenance is never rebound. Dashboard discovery uses
+  an authenticated owner query and lists every DRAFT across assignments.
+  One unfinished draft per assignment is retained, so multiple historical drafts
+  are possible and each row identifies its date, original vehicle and report ID.
 - Active-admin callables provide paged listing, detail and photo viewing. TEST
   reports are excluded on the server unless explicitly requested. Detail displays
   driver name/registration plus authoritative IDs and audit timestamps. Current
@@ -50,6 +53,11 @@ location available after permission denial. Up to 20 witnesses are supported.
 
 - The six steps cover basics, other party/vehicle, insurance/witnesses, damage,
   photos, and review. Save Draft remains accessible; text autosaves after edits.
+- Browser recovery is best-effort: failed reads/writes/cleanup never block server
+  saving, submission or read-only display. A non-blocking warning identifies when
+  unsaved refresh recovery is unavailable. Pending retry identity stays in memory.
+  Session credentials also remain in this tab if browser storage fails; explicit
+  logout clears that fallback. Server authorization continues on every request.
 - Local recovery text is scoped to project/driver/report and supplements the
   server draft. No credential is copied into recovery records. It preserves edits
   made before autosave and exact pending mutation IDs across lost responses.
@@ -95,6 +103,13 @@ Use Preview test drivers/vehicles. Check both desktop and a narrow mobile viewpo
   Verify private photo viewing in Preview, including runtime signed-URL capability.
 - R–S. Report Fault still works. Exercise pickup, mid-shift charge/end charge,
   return damage, interrupted return, vehicle swap and multi-vehicle shift closure.
+- Start a partial report, complete the real return and end the shift. Refresh/log
+  in again, then find it on Driver Dashboard, save, upload and submit. Repeat after
+  a vehicle swap; verify the report still names the original vehicle/assignment.
+  Check multiple historical drafts appear, while another driver sees none of them.
+- Simulate blocked/full browser recovery storage: successive saves and submission
+  succeed on the server, warning copy remains non-blocking, and reopening uses
+  saved server state. Verify logout and a later login with browser storage restored.
 - Test two browser windows editing the same draft: stale saves must conflict,
   preserve local text and allow explicitly loading the server version.
 
@@ -131,14 +146,21 @@ No Firestore rules, Storage rules, indexes or Firebase configuration changed:
 existing default-deny rules cover the new server-only collection/prefix. Both
 backend domain modules are identical. No migration or backfill is needed.
 
+Recovery-hardening redeployment changes only four existing JHB callables:
+updateAccidentReportDraft, uploadAccidentPhoto, submitAccidentReport,
+getAccidentReportForDriver. The other four WP3 callables must still be deployed if
+WP3 has not been deployed yet. Frontend redeployment is required.
+
 No push or deployment is included in this work package.
 
 ## Local verification results — 8 September 2026
 
-- Accident emulator tests: 18 passed across both backends.
+- Accident emulator tests: 24 passed across both backends, including historical
+  return/swap/shift-end recovery, later login, ownership denial and mixed provenance.
 - Existing lifecycle emulator regression tests: 38 passed.
-- Frontend behavioral/recovery tests: 14 passed; existing frontend regressions:
-  37 passed (51 total).
+- Frontend behavioral/recovery tests: 19 passed; existing frontend regressions:
+  37 passed (56 total). Recovery covers dashboard discovery, unavailable browser
+  storage, server success warnings, retry identity and session/logout fallback.
 - Frontend production build, frontend-only TypeScript, and both backend builds
   passed. The frontend build retains its large-bundle warning.
 - Root typecheck reports only the known benchmark errors in functions-jhb at
@@ -149,9 +171,12 @@ No push or deployment is included in this work package.
 ## Remaining limits / deliberate deferrals
 
 - Manual Preview and deployed private-photo signing must be checked before release.
-- No full offline mode. Report creation needs a connection; local recovery requires
-  available browser storage. Selected but unuploaded photos must be reselected
-  after refresh. Recovery text stays on the same browser until submission or
+- No full offline mode. Creation and server saves need a connection; local recovery requires
+  available browser storage. Unsaved text may be lost on refresh if recovery writes
+  fail; saved server drafts remain discoverable. If all credential storage is blocked,
+  a fresh page load requires login again. Historical linkage records must remain
+  present and consistent; a missing/tampered assignment or shift fails closed.
+  Selected but unuploaded photos must be reselected after refresh. Recovery text stays on the same browser until submission or
   explicit discard; it is not a substitute for shared-device access controls.
 - A retried/racing upload can leave an unreferenced Storage object. It never
   replaces evidence or creates another attachment. Cleanup/retention policy is
