@@ -7,11 +7,45 @@ const report = () => calculateEconomy({ vehicles: [
   { id: 'ev', vehicleType: 'EV', registration: 'EV-ONE', manufacturerEnergyConsumption: 15 },
 ], drivers: [], assignments: [], refuels: [], sessions: [], chargingEvents: [] }, { period: '30', includeTest: false, now: Date.parse('2026-09-09T10:00Z') });
 
+test('central presentation mapping uses sentence case and does not leak unknown codes', () => {
+  const { formatEconomyStatus, formatEconomyReason } = harness().load('src/lib/economyPresentation.ts');
+  for (const [status, label] of Object.entries({ INSUFFICIENT_DATA: 'Insufficient data', INSUFFICIENT_COST_DATA: 'Insufficient cost data',
+    INSUFFICIENT: 'Insufficient data', LIMITED: 'Limited data', MEASURED: 'Measured', ESTIMATED: 'Estimated', MIXED: 'Mixed data', UNKNOWN: 'Not available' })) {
+    assert.equal(formatEconomyStatus(status), label);
+  }
+  assert.equal(formatEconomyStatus('FUTURE_STATUS'), 'Not available');
+  assert.equal(formatEconomyReason('FUTURE_REASON'), 'Additional evidence is needed');
+});
+
+for (const [status, label] of [['MEASURED', 'Measured'], ['ESTIMATED', 'Estimated'], ['MIXED', 'Mixed data'], ['UNKNOWN', 'Not available']]) {
+  test(`rendered economy humanizes ${status}, including expanded evidence, without changing values`, async () => {
+    const data = report();
+    for (const f of [data.fleet.ev, data.fleet.ice]) f.provenance = status;
+    for (const v of data.vehicles) {
+      v.distanceProvenance = v.economy.provenance = v.cost.provenance = v.chargerEnergy.provenance = v.provenance = status;
+      v.economy.quality = 'LIMITED'; v.economy.value = 10.5; v.cost.value = 2.25;
+      v.evidence = [{ recordIds: ['capture-1'], capacityUsed: null, provenance: status }];
+      v.reasons.push('FUTURE_REASON');
+    }
+    const before = structuredClone(data), h = harness({ economyApi: { get: async () => data } });
+    const C = h.load('src/components/admin/FuelEconomyMonitor.tsx').default;
+    h.render(C, { vehicles: [] }); await h.settle();
+    const tree = h.render(C, { vehicles: [] }), words = text(tree);
+    assert.ok(words.includes(label)); assert.ok(words.includes('Limited data'));
+    assert.match(words, /10[,.]5 L\/100 km/); assert.match(words, /10[,.]5 kWh\/100 km/); assert.match(words, /R2[,.]25\/km/);
+    assert.ok(words.includes('Manufacturer Reference')); assert.ok(words.includes('Reference only; not an observed baseline.'));
+    assert.match(words, /8[,.]0 L\/100 km/); assert.match(words, /15[,.]0 kWh\/100 km/);
+    assert.ok(words.includes(`${label} · records: capture-1`));
+    assert.doesNotMatch(words, /\b(?:INSUFFICIENT|LIMITED|MEASURED|ESTIMATED|MIXED|UNKNOWN)\b|\b[A-Z]+(?:_[A-Z]+)+\b/);
+    assert.deepEqual(data, before);
+  });
+}
+
 for (const [label, shares, expected] of [
   ['numeric', [42.5, 57.5], [/42[,.]5% of known/, /57[,.]5% of known/]],
   ['zero and full', [0, 100], [/km · 0[,.]0% of known/, /km · 100[,.]0% of known/]],
-  ['unavailable', [null, null], [/Insufficient Data of known/, /Insufficient Data of known/]],
-  ['nonfinite', [NaN, Infinity], [/Insufficient Data of known/, /Insufficient Data of known/]],
+  ['unavailable', [null, null], [/Insufficient data of known/, /Insufficient data of known/]],
+  ['nonfinite', [NaN, Infinity], [/Insufficient data of known/, /Insufficient data of known/]],
 ]) test(`fleet share presentation: ${label}`, async () => {
   const data = report(); [data.fleet.evSharePercent, data.fleet.iceSharePercent] = shares;
   const h = harness({ economyApi: { get: async () => data } });
@@ -19,7 +53,7 @@ for (const [label, shares, expected] of [
   h.render(C, { vehicles: [] }); await h.settle();
   const tree = h.render(C, { vehicles: [] }), cards = nodes(tree, n => n.type === 'article');
   for (let i = 0; i < 2; i++) assert.match(text(cards[i]), expected[i]);
-  assert.doesNotMatch(text(tree), /Insufficient Data\s*%/);
+  assert.doesNotMatch(text(tree), /Insufficient data\s*%/);
 });
 
 test('economy UI uses server evidence, distinct units and honest unknowns; period and TEST controls reach API', async () => {
@@ -28,7 +62,11 @@ test('economy UI uses server evidence, distinct units and honest unknowns; perio
   const render = () => h.render(C, { vehicles: [{ currentFuelConsumption: 12345 }] });
   assert.match(text(render()), /Loading observed economy/); await h.settle();
   let tree = render(), words = text(tree);
-  for (const phrase of ['L/100 km', 'kWh/100 km', 'Insufficient Data', 'INSUFFICIENT_COST_DATA', 'Manufacturer Reference', 'Observed FleetWise Baseline', 'Coverage / Data Quality']) assert.ok(words.includes(phrase), phrase);
+  for (const phrase of ['L/100 km', 'kWh/100 km', 'Insufficient data', 'Insufficient cost data', 'Manufacturer Reference', 'Observed FleetWise Baseline', 'Coverage / Data Quality']) assert.ok(words.includes(phrase), phrase);
+  assert.ok(words.includes('No usable driving data yet'));
+  assert.ok(words.includes('Not enough data to calculate a reliable baseline.'));
+  assert.doesNotMatch(words, /\b[A-Z]+(?:_[A-Z]+)+\b|\b(?:LIMITED|MEASURED|ESTIMATED|MIXED|UNKNOWN)\b/);
+  assert.equal(nodes(tree, n => n.props.role === 'alert' || /(?:text|bg)-red-/.test(n.props.className || '')).length, 0);
   assert.doesNotMatch(words, /Performing Well|Normal|Poor|12345|leaderboard/i);
   assert.deepEqual(calls, [['30', false]]);
   nodes(tree, n => n.type === 'select')[0].props.onChange({ target: { value: '90' } });
