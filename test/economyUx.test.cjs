@@ -7,6 +7,21 @@ const report = () => calculateEconomy({ vehicles: [
   { id: 'ev', vehicleType: 'EV', registration: 'EV-ONE', manufacturerEnergyConsumption: 15 },
 ], drivers: [], assignments: [], refuels: [], sessions: [], chargingEvents: [] }, { period: '30', includeTest: false, now: Date.parse('2026-09-09T10:00Z') });
 
+for (const [label, shares, expected] of [
+  ['numeric', [42.5, 57.5], [/42[,.]5% of known/, /57[,.]5% of known/]],
+  ['zero and full', [0, 100], [/km · 0[,.]0% of known/, /km · 100[,.]0% of known/]],
+  ['unavailable', [null, null], [/Insufficient Data of known/, /Insufficient Data of known/]],
+  ['nonfinite', [NaN, Infinity], [/Insufficient Data of known/, /Insufficient Data of known/]],
+]) test(`fleet share presentation: ${label}`, async () => {
+  const data = report(); [data.fleet.evSharePercent, data.fleet.iceSharePercent] = shares;
+  const h = harness({ economyApi: { get: async () => data } });
+  const C = h.load('src/components/admin/FuelEconomyMonitor.tsx').default;
+  h.render(C, { vehicles: [] }); await h.settle();
+  const tree = h.render(C, { vehicles: [] }), cards = nodes(tree, n => n.type === 'article');
+  for (let i = 0; i < 2; i++) assert.match(text(cards[i]), expected[i]);
+  assert.doesNotMatch(text(tree), /Insufficient Data\s*%/);
+});
+
 test('economy UI uses server evidence, distinct units and honest unknowns; period and TEST controls reach API', async () => {
   const calls = [], h = harness({ economyApi: { get: async (...args) => { calls.push(args); return report(); } } });
   const C = h.load('src/components/admin/FuelEconomyMonitor.tsx').default;

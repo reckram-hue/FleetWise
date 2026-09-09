@@ -3,6 +3,7 @@ import type { Vehicle } from '../../types';
 import { economyApi, EconomyReport } from '../../services/economyApi';
 
 const number = (v: number | null, decimals = 1) => v === null ? 'Insufficient Data' : v.toLocaleString('en-ZA', { maximumFractionDigits: decimals, minimumFractionDigits: decimals });
+const percentage = (v: number | null) => typeof v === 'number' && Number.isFinite(v) ? `${number(v)}%` : 'Insufficient Data';
 const money = (v: number | null) => v === null ? 'INSUFFICIENT_COST_DATA' : `R${number(v, 2)}/km`;
 const control = 'min-h-11 rounded border border-gray-300 bg-white px-3 py-2';
 
@@ -32,7 +33,7 @@ export default function FuelEconomyMonitor(_props: { vehicles: Vehicle[] }) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {[report.fleet.ev, report.fleet.ice].map(f => <article key={f.powertrain} className="rounded border bg-white p-4 space-y-2">
                     <h3 className="font-bold">{f.powertrain} fleet</h3>
-                    <p>{number(f.distanceKm)} km · {number(f.powertrain === 'EV' ? report.fleet.evSharePercent : report.fleet.iceSharePercent)}% of known EV/ICE distance</p>
+                    <p>{number(f.distanceKm)} km · {percentage(f.powertrain === 'EV' ? report.fleet.evSharePercent : report.fleet.iceSharePercent)} of known EV/ICE distance</p>
                     <p>Observed: {number(f.per100Km)} {f.powertrain === 'EV' ? 'kWh/100 km' : 'L/100 km'}</p>
                     <p>Covered consumption: {number(f.quantity)} {f.powertrain === 'EV' ? 'kWh (estimated battery energy)' : 'litres'}</p>
                     <p>Coverage: {number(f.coverageKm)} km · {f.sampleCount} samples · {f.provenance}</p>
