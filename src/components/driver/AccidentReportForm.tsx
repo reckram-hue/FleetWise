@@ -122,8 +122,8 @@ export default function AccidentReportForm({ initialReport, onBack, backLabel = 
                 {accidentSteps[step].fields.map(spec => <label key={spec.key} className="block"><span className="block font-medium mb-1">{spec.label}</span>
                     {spec.type === 'tri' || spec.type === 'motion' ? <select className={control} value={String(fields[spec.key] || '')} onChange={e => change({ ...fields, [spec.key]: e.target.value || null })}>
                         <option value="">Not answered</option>{(spec.type === 'tri' ? ['YES', 'NO', 'UNKNOWN'] : ['MOVING', 'PARKED', 'UNKNOWN']).map(v => <option key={v} value={v}>{v}</option>)}
-                    </select> : spec.type === 'long' ? <textarea className={control} rows={3} maxLength={6000} value={String(fields[spec.key] || '')} onChange={e => change({ ...fields, [spec.key]: e.target.value })} />
-                        : <input className={control} type={spec.type === 'datetime' ? 'datetime-local' : 'text'} maxLength={300}
+                    </select> : spec.type === 'long' ? <textarea spellCheck={true} lang="en-ZA" className={control} rows={3} maxLength={6000} value={String(fields[spec.key] || '')} onChange={e => change({ ...fields, [spec.key]: e.target.value })} />
+                        : <input spellCheck={spec.type !== 'datetime'} lang="en-ZA" className={control} type={spec.type === 'datetime' ? 'datetime-local' : 'text'} maxLength={300}
                             value={spec.type === 'datetime' && fields.accidentAt ? localDateTime(fields.accidentAt) : String(fields[spec.key] || '')}
                             onChange={e => change({ ...fields, [spec.key]: spec.type === 'datetime' ? (e.target.value ? new Date(e.target.value).toISOString() : null) : e.target.value })} />}
                 </label>)}
@@ -135,14 +135,14 @@ export default function AccidentReportForm({ initialReport, onBack, backLabel = 
                 {step === 2 && <section className="space-y-3"><h4 className="font-bold">Witnesses (optional)</h4>
                     {(fields.witnesses || []).map((w, i) => <div className="border rounded p-3 space-y-2" key={i}>
                         {(['name', 'phone', 'email', 'notes'] as const).map(k => <label className="block" key={k}>Witness {i + 1} {k}
-                            <input className={control} value={w[k] || ''} maxLength={k === 'notes' ? 6000 : 300} onChange={e => change({ ...fields, witnesses: fields.witnesses!.map((v, j) => j === i ? { ...v, [k]: e.target.value } : v) })} /></label>)}
+                            <input spellCheck={k === 'notes'} lang="en-ZA" className={control} value={w[k] || ''} maxLength={k === 'notes' ? 6000 : 300} onChange={e => change({ ...fields, witnesses: fields.witnesses!.map((v, j) => j === i ? { ...v, [k]: e.target.value } : v) })} /></label>)}
                         <button className={action} onClick={() => change({ ...fields, witnesses: fields.witnesses!.filter((_, j) => j !== i) })}>Remove witness {i + 1}</button>
                     </div>)}<button className={action} disabled={(fields.witnesses?.length || 0) >= 20} onClick={() => change({ ...fields, witnesses: [...(fields.witnesses || []), {}] })}>Add witness</button>
                 </section>}
                 {step === 3 && fields.vehicleDriveable === 'NO' && <p role="status" className="bg-red-50 p-3 font-bold text-red-900">Vehicle reported not driveable. Contact your fleet team to arrange assistance.</p>}
                 {step === 4 && <section className="space-y-3">
                     <p>Photos are optional. You can submit without photos. Up to 20 photos, 5 MB each.</p>
-                    <label className="block">Photo category / description (optional)<input className={control} value={caption} maxLength={300} onChange={e => setCaption(e.target.value)} placeholder="Scene, vehicle, number plate, document..." /></label>
+                    <label className="block">Photo category / description (optional)<input spellCheck={true} lang="en-ZA" className={control} value={caption} maxLength={300} onChange={e => setCaption(e.target.value)} placeholder="Scene, vehicle, number plate, document..." /></label>
                     <label className="block">Add photos<input className={control} type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={async e => {
                         if (photoLock.current || busyRef.current) return;
                         const files = Array.from(e.target.files || []); e.target.value = '';

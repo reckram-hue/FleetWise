@@ -381,7 +381,7 @@ const VehicleInspectionForm: React.FC<VehicleInspectionFormProps> = ({
                       </>
                     )}
                     <label htmlFor='return-charging-notes' className='block text-sm font-medium'>Charging note (optional)</label>
-                    <textarea id='return-charging-notes' value={chargingNotes} onChange={e => setChargingNotes(e.target.value)} rows={3} maxLength={500} placeholder='Charging note (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
+                    <textarea spellCheck={true} lang="en-ZA" id='return-charging-notes' value={chargingNotes} onChange={e => setChargingNotes(e.target.value)} rows={3} maxLength={500} placeholder='Charging note (optional)' className='w-full px-4 py-3 border border-gray-300 rounded-lg' />
                 </div>
               ) : <p className='mt-3 text-sm text-red-700'>Your session has expired. Please log in again.</p>)}
             </ReturnChargingChoice>

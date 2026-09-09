@@ -296,6 +296,23 @@ export interface ReturnFinalizationDraft {
     transitionReason: VehicleReturnIntent;
 }
 
+// Admin read DTO: dates are ISO strings; no raw Storage paths or driver credentials.
+export interface AdminInspection {
+    id: string; vehicleId: string | null; driverId: string | null; assignmentId: string | null; shiftId: string | null;
+    vehicleRegistration: string | null; vehicleDisplayName: string | null; identitySource: string; driverName: string | null;
+    boundaryType: string | null; status: string | null; createdAt: string | null; capturedAt: string | null; completedAt: string | null;
+    isTestData: boolean; odometer: number | null; chargePercent: number | null; predictedRangeKm: number | null;
+    hasDamage: boolean | null; damageDescription: string | null; linkedDefectId: string | null;
+    returnIntent: string | null; returnFinalizationStatus: string | null; retentionClass: string | null; expiresAt: string | null;
+    photos: { exterior: boolean; interior: boolean };
+}
+export interface InspectionHistoryCursor { id: string; seconds: number; nanoseconds: number }
+export interface InspectionHistoryFilters {
+    vehicleId?: string; driverId?: string; boundaryType?: 'PICKUP' | 'RETURN'; assignmentId?: string; shiftId?: string;
+    from?: string; until?: string; includeTest?: boolean; cursor?: InspectionHistoryCursor; limit?: number;
+}
+export interface InspectionHistoryPage { inspections: AdminInspection[]; nextCursor: InspectionHistoryCursor | null }
+
 export interface VehicleInspection {
     id: string;
     orgId: string;

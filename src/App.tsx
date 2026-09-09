@@ -204,7 +204,7 @@ function App() {
         <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white p-6">
           <div className="text-center">
             <ShieldCheck className="w-20 h-20 text-blue-500 mx-auto mb-4 animate-pulse" />
-            <h2 className="text-2xl font-semibold mb-2">Restoring Driver Session...</h2>
+            <h2 className="text-2xl font-semibold mb-2">Restoring session…</h2>
             <p className="text-gray-400">Please wait while FleetWise checks your session.</p>
           </div>
         </div>

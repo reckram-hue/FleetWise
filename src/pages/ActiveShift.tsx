@@ -495,7 +495,7 @@ const ActiveShift: React.FC<ActiveShiftProps> = ({ onShiftEnded, onBack }) => {
           </>
         )}
 
-        {hasAssignment && currentVehicle && <AccidentReportEntry key={activeShift.assignmentId} assignmentId={activeShift.assignmentId!} />}
+        {hasAssignment && currentVehicle && !inspecting && !takingVehicle && <AccidentReportEntry key={activeShift.assignmentId} assignmentId={activeShift.assignmentId!} />}
 
         {/* Overlay modals */}
         {showReportFault && hasAssignment && currentVehicle && (

@@ -502,7 +502,7 @@ const LogChargeForm: React.FC<LogChargeFormProps> = ({ onBack, assignmentId, act
 
                             <div>
                                 <label htmlFor="driver-endNotes" className="block text-sm font-medium text-gray-700">Notes (Optional)</label>
-                                <textarea id="driver-endNotes"
+                                <textarea spellCheck={true} lang="en-ZA" id="driver-endNotes"
                                     value={endNotes}
                                     onChange={(e) => setEndNotes(e.target.value)}
                                     rows={2}

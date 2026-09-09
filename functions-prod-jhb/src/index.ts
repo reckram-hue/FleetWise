@@ -9,6 +9,7 @@ import { z } from 'zod';
 import * as crypto from 'crypto';
 import { driverDistance, intervalDistance } from './assignmentDistance';
 import { createActiveAdminProfile, requireActiveAdmin } from './adminAuthorization';
+import { createInspectionHistoryHandlers } from './inspectionHistory';
 import { reservePinAttempt, assertActivePinDriver, pinAttemptDocumentId } from './pinAttempts';
 import { onCall as onCallV2 } from 'firebase-functions/v2/https';
 import {
@@ -3865,3 +3866,8 @@ export const getAccidentReportAdmin = onProdCall(accidentHandlers.getAccidentRep
 export const getAccidentPhoto = onProdCall(accidentHandlers.getAccidentPhoto);
 
 export const getDefectPhotoAdmin = onProdCall(createDefectEvidenceHandler({ db, requireAdmin, bucket: inspectionStorageBucket }));
+
+const inspectionHistory = createInspectionHistoryHandlers({ db, requireAdmin, bucket: inspectionStorageBucket });
+export const listVehicleInspectionsAdmin = onProdCall(inspectionHistory.listVehicleInspectionsAdmin);
+export const getVehicleInspectionAdmin = onProdCall(inspectionHistory.getVehicleInspectionAdmin);
+export const getInspectionPhotoAdmin = onProdCall(inspectionHistory.getInspectionPhotoAdmin);

@@ -11,6 +11,7 @@ import Reports from './Reports';
 import Settings from './Settings';
 import ManageServiceProviders from './ManageServiceProviders';
 import ManageDefects from './ManageDefects';
+import InspectionHistory from './InspectionHistory';
 import TelegramDrivers from './TelegramDrivers';
 import VehicleLicenseRenewal from './VehicleLicenseRenewal';
 
@@ -119,6 +120,10 @@ const AdminDashboard: React.FC = () => {
         );
     }
 
+    if (view === 'inspections') {
+        return <InspectionHistory onBack={() => setView('dashboard')} onOpenDefect={id => { setSelectedDefectId(id); setView('defects'); }} />;
+    }
+
     if (view === 'telegram') {
         return <TelegramDrivers onBack={() => setView('dashboard')} />;
     }
@@ -178,6 +183,12 @@ const AdminDashboard: React.FC = () => {
         </div>
         
         <div className="flex flex-wrap gap-6">
+            <button onClick={() => { setSelectedDefectId(null); setView('defects'); }} className="bg-amber-700 text-white font-bold py-3 px-6 rounded-lg hover:bg-amber-800 transition duration-300 shadow-lg">
+                <Wrench className="h-5 w-5 mr-2 inline" />Manage Defects
+            </button>
+            <button onClick={() => setView('inspections')} className="bg-teal-700 text-white font-bold py-3 px-6 rounded-lg hover:bg-teal-800 transition duration-300 shadow-lg">
+                <FileText className="h-5 w-5 mr-2 inline" />Inspection History
+            </button>
             <button onClick={() => setView('drivers')} className="bg-indigo-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-indigo-600 transition duration-300 shadow-lg">
                 <Users className="h-5 w-5 mr-2 inline" />
                 Drivers

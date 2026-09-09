@@ -83,7 +83,7 @@ for (const [entry, filename, pickup] of [
   assert.equal(field(tree, 'driver-formData-description').props.required, true);
   assert.ok(!field(tree, 'defect-photos').props.required);
   const html = renderToStaticMarkup(tree);
-  assert.match(html, /Vehicle Location/); assert.match(html, /Add photos \(optional\)/);
+  assert.match(html, /Where on the vehicle is the problem/); assert.match(html, /Add photos \(optional\)/);
   assert.match(html, /You can submit without photos/);
   assert.equal(nodes(tree, 'select').length, 2); // Category and urgency, never vehicle selection.
 });
@@ -163,11 +163,24 @@ for (const withPhoto of [false, true]) test('return standard report callback and
   global.localStorage = { getItem: () => null };
   global.FileReader = class { readAsDataURL() { this.result = 'data:image/jpeg;base64,dGVzdA=='; this.onload(); } };
   let tree = render();
-  for (const label of ['Category', 'Urgency', 'Vehicle Location', 'Description', 'Notes', 'optional']) assert.ok(renderToStaticMarkup(tree).includes(label));
+  for (const label of ['Category', 'Urgency', 'Where on the vehicle is the problem?', 'Description', 'Notes', 'optional']) assert.ok(renderToStaticMarkup(tree).includes(label));
   field(tree, 'driver-formData-description').props.onChange({ target: { value: 'Visible return scratch' } });
   if (withPhoto) await field(render(), 'defect-photos').props.onChange({ target: { files: [{ type: 'image/jpeg' }], value: '' } });
   await submit(render()); assert.equal(submitted, undefined);
   assert.equal(field(render(), 'driver-formData-description').props.value, 'Visible return scratch');
   fail = false; await submit(render()); assert.equal(submitted, 'linked-defect');
   assert.equal(calls.includes('upload'), withPhoto);
+});
+
+test('success dispatches a nonblocking notice and remains locked after completion', async () => {
+  const oldWindow = global.window, oldAlert = global.alert; const events = []; let reports = 0;
+  global.window = { dispatchEvent: event => events.push(event) }; global.alert = () => assert.fail('No blocking acknowledgement');
+  try {
+    const h = harness({ reportDefectWithSession: async payload => { reports++; assert.equal(payload.location, 'Left rear door'); return { id: 'reported' }; } });
+    field(h.render(), 'driver-formData-description').props.onChange({ target: { value: 'Original scratch description' } });
+    field(h.render(), 'driver-formData-location').props.onChange({ target: { value: 'Left rear door' } });
+    await submit(h.render()); await submit(h.render());
+    assert.equal(reports, 1); assert.equal(h.closed(), 1); assert.equal(events.length, 1);
+    assert.equal(events[0].detail, 'Fault reported successfully');
+  } finally { global.window = oldWindow; global.alert = oldAlert; }
 });

@@ -16,6 +16,7 @@ import {
 import { DefectReport, DefectCategory, DefectUrgency } from '../../types';
 import type { VehiclePick } from './TakeVehicleForm';
 import { outstandingDefects, defectSeverityClasses } from '../../lib/driverVehiclePresentation';
+import { notifyFaultReported } from '../../lib/successNotice';
 
 interface ReportDefectFormProps {
     onBack: () => void;
@@ -38,6 +39,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
     const [photos, setPhotos] = useState<string[]>([]);
     const [submitError, setSubmitError] = useState<string | null>(null);
     const submissionLock = useRef(false);
+    const submittedSuccessfully = useRef(false);
     const photoReadLock = useRef(false);
     const [readingPhotos, setReadingPhotos] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -162,8 +164,9 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                 deviceId: localStorage.getItem('fleetwise_device_id') || undefined,
             });
 
+            submittedSuccessfully.current = true;
+            notifyFaultReported();
             if (onSubmitted) { onSubmitted(report.id); return; }
-            alert('Defect report submitted successfully! The maintenance team will review it shortly.');
             onBack();
         } catch (err) {
             console.error('Failed to submit defect report:', err);
@@ -174,7 +177,9 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
             // formData and photos are intentionally left untouched so the driver can retry
             // without re-entering anything.
         } finally {
-            submissionLock.current = false;
+            // A successful form stays locked until navigation unmounts it. Failed
+            // requests may retry without losing the driver's text or photos.
+            if (!submittedSuccessfully.current) submissionLock.current = false;
             setLoading(false);
         }
     };
@@ -272,9 +277,9 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                 <div>
                                     <label htmlFor="driver-formData-location" className="block text-sm font-medium text-gray-700 mb-2">
                                         <MapPin className="inline w-4 h-4 mr-1" />
-                                        Vehicle Location
+                                        Where on the vehicle is the problem?
                                     </label>
-                                    <input id="driver-formData-location"
+                                    <input id="driver-formData-location" spellCheck={true} lang="en-ZA"
                                         type="text"
                                         value={formData.location}
                                         onChange={(e) => setFormData({ ...formData, location: e.target.value })}
@@ -286,10 +291,10 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                 {/* Description */}
                                 <div>
                                     <label htmlFor="driver-formData-description" className="block text-sm font-medium text-gray-700 mb-2">Description *</label>
-                                    <textarea id="driver-formData-description"
+                                    <textarea spellCheck={true} lang="en-ZA" id="driver-formData-description"
                                         value={formData.description}
                                         onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                                        placeholder="Describe the issue in detail. Be specific about when it occurs, sounds, visual indicators, etc."
+                                        placeholder="Describe the problem. What do you see or hear? When does it happen?"
                                         rows={4}
                                         className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                                         required
@@ -329,7 +334,7 @@ const ReportDefectForm: React.FC<ReportDefectFormProps> = ({ onBack, currentVehi
                                 {/* Notes */}
                                 <div>
                                     <label htmlFor="driver-formData-notes" className="block text-sm font-medium text-gray-700 mb-2">Additional Notes</label>
-                                    <textarea id="driver-formData-notes"
+                                    <textarea spellCheck={true} lang="en-ZA" id="driver-formData-notes"
                                         value={formData.notes}
                                         onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                                         placeholder="Any additional context, when it started, etc."

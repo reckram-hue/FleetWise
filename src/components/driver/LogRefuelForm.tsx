@@ -298,7 +298,7 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, act
                         {/* Notes */}
                         <div>
                             <label className="block text-sm font-medium text-gray-700">Notes (Optional)</label>
-                            <textarea
+                            <textarea spellCheck={true} lang="en-ZA"
                                 value={refuelData.notes}
                                 onChange={(e) => handleInputChange('notes', e.target.value)}
                                 rows={2}

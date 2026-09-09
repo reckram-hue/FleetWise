@@ -9,6 +9,7 @@ import { z } from 'zod';
 import * as crypto from 'crypto';
 import { driverDistance, intervalDistance } from './assignmentDistance';
 import { createActiveAdminProfile, requireActiveAdmin } from './adminAuthorization';
+import { createInspectionHistoryHandlers } from './inspectionHistory';
 import { reservePinAttempt, assertActivePinDriver, pinAttemptDocumentId } from './pinAttempts';
 import {
   assertCanStartChargingSession,
@@ -3860,3 +3861,8 @@ export const getAccidentReportAdmin = functions.https.onCall(accidentHandlers.ge
 export const getAccidentPhoto = functions.https.onCall(accidentHandlers.getAccidentPhoto);
 
 export const getDefectPhotoAdmin = functions.https.onCall(createDefectEvidenceHandler({ db, requireAdmin, bucket: inspectionStorageBucket }));
+
+const inspectionHistory = createInspectionHistoryHandlers({ db, requireAdmin, bucket: inspectionStorageBucket });
+export const listVehicleInspectionsAdmin = functions.https.onCall(inspectionHistory.listVehicleInspectionsAdmin);
+export const getVehicleInspectionAdmin = functions.https.onCall(inspectionHistory.getVehicleInspectionAdmin);
+export const getInspectionPhotoAdmin = functions.https.onCall(inspectionHistory.getInspectionPhotoAdmin);
