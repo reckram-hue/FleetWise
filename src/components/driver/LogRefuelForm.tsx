@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Card from '../shared/Card';
 import Header from '../shared/Header';
 import api from '../../services/firebaseApi';
@@ -24,12 +24,15 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, act
     const [refuelData, setRefuelData] = useState({
         odometer: '',
         litres: '',
+        fillLevel: 'UNKNOWN' as 'FULL' | 'PARTIAL' | 'UNKNOWN',
         fuelCost: '',
         oilRequired: false,
         oilCost: '',
         notes: ''
     });
     const [submitting, setSubmitting] = useState(false);
+    const submissionLock = useRef(false);
+    const pendingCapture = useRef<Parameters<typeof api.logRefuelWithSession>[0] | null>(null);
 
     useEffect(() => {
         const fetchVehicle = async () => {
@@ -72,6 +75,7 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, act
     };
 
     const handleCompleteChecklist = () => {
+        if (submissionLock.current) return;
         const allItemsChecked = Object.values(checklistItems).every(item => item);
         if (!allItemsChecked) return;
         const session = getDriverSession();
@@ -79,17 +83,23 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, act
             alert('Your session has expired. Please log in again.');
             return;
         }
+        submissionLock.current = true;
         setSubmitting(true);
-        api.logRefuelWithSession({
+        pendingCapture.current ||= {
             driverId: session.driverId,
             sessionToken: session.sessionToken,
             assignmentId,
             odometer: parseFloat(refuelData.odometer),
             litresFilled: parseFloat(refuelData.litres),
+            fillLevel: refuelData.fillLevel,
+            clientRequestId: crypto.randomUUID(),
             fuelCost: parseFloat(refuelData.fuelCost),
             oilCost: refuelData.oilRequired ? parseFloat(refuelData.oilCost || '0') : undefined,
             notes: refuelData.notes.trim() || undefined,
-        }).then(() => {
+        };
+        let succeeded = false;
+        api.logRefuelWithSession(pendingCapture.current).then(() => {
+            succeeded = true;
             const totalCost = parseFloat(refuelData.fuelCost) + (refuelData.oilRequired ? parseFloat(refuelData.oilCost || '0') : 0);
             alert(`Refueling completed successfully!\n\nSummary:\n- Vehicle: ${fullVehicle?.registration}\n- Odometer: ${parseInt(refuelData.odometer).toLocaleString()} km\n- Fuel: ${refuelData.litres}L @ R${parseFloat(refuelData.fuelCost).toFixed(2)}\n- Oil: ${refuelData.oilRequired ? `Yes - R${parseFloat(refuelData.oilCost || '0').toFixed(2)}` : 'No'}\n- Total Cost: R${totalCost.toFixed(2)}`);
             onBack();
@@ -97,6 +107,7 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, act
             console.error("Failed to log refuel record", error);
             alert('Failed to save refuel record. Please try again.');
         }).finally(() => {
+            if (!succeeded) submissionLock.current = false;
             setSubmitting(false);
         });
     };
@@ -136,7 +147,7 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, act
             'oil_level': 'Checked engine oil level',
             'washer_fluid': 'Checked washer fluid level',
             'tyre_pressure': 'Checked tyre pressure and condition',
-            'fuel_level': 'Confirmed fuel tank is properly filled'
+            'fuel_level': 'Checked the recorded fill state (full, partial or unknown)'
         };
 
         return (
@@ -185,6 +196,7 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, act
                             <button
                                 type="button"
                                 onClick={() => setShowChecklist(false)}
+                                disabled={submitting || pendingCapture.current !== null}
                                 className="w-full bg-gray-200 text-gray-800 font-bold py-3 px-4 rounded-lg hover:bg-gray-300 transition"
                             >
                                 Back
@@ -202,6 +214,7 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, act
                                 {submitting ? 'Saving...' : 'Complete Refueling'}
                             </button>
                         </div>
+                        {pendingCapture.current && !submitting && <p role="status" className="mt-3 text-sm">Retry sends the same recorded refuelling details. Do not create another record for this fill.</p>}
                     </Card>
                 </main>
             </div>
@@ -295,6 +308,12 @@ const LogRefuelForm: React.FC<LogRefuelFormProps> = ({ onBack, assignmentId, act
                             </div>
                         </div>
 
+                        <label className="block text-sm font-medium text-gray-700">Tank level after this fill
+                            <select aria-label="Tank level after this fill" value={refuelData.fillLevel} onChange={e => handleInputChange('fillLevel', e.target.value)} className="mt-1 w-full min-h-11 rounded border p-2">
+                                <option value="UNKNOWN">Unknown / not sure</option><option value="FULL">Full tank</option><option value="PARTIAL">Partial fill</option>
+                            </select>
+                        </label>
+                        <p className="text-sm text-gray-600">Choose Full only if the tank was filled completely. Unknown remains unknown in economy reports.</p>
                         {/* Notes */}
                         <div>
                             <label className="block text-sm font-medium text-gray-700">Notes (Optional)</label>

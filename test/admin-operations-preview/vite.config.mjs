@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: { alias: [
     { find: /^.*\/services\/firebaseApi$/, replacement: here + 'mocks.ts' },
     { find: /^.*\/services\/inspectionApi$/, replacement: here + 'mocks.ts' },
+    { find: /^.*\/services\/economyApi$/, replacement: here + 'mocks.ts' },
     { find: /^.*\/lib\/firebase$/, replacement: here + 'mocks.ts' },
     { find: /^.*\/store\/session$/, replacement: here + 'mocks.ts' },
   ] },

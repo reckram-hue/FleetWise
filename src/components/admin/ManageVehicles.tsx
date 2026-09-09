@@ -567,7 +567,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         const { name, value } = e.target;
         const numericFields = [
-            'currentOdometer', 'serviceIntervalKm', 'lastServiceOdometer', 'batteryCapacityKwh',
+            'currentOdometer', 'serviceIntervalKm', 'lastServiceOdometer', 'batteryCapacityKwh', 'usableBatteryCapacityKWh',
             'financeCost', 'insuranceFee', 'trackingFee', 'balloonPayment', 'freeServicesUntilKm',
             // Manufacturer and performance specs
             'manufacturerFuelConsumption', 'manufacturerEnergyConsumption',
@@ -622,6 +622,10 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (selectedVehicle.vehicleType === VehicleType.EV && (selectedVehicle.usableBatteryCapacityKWh || selectedVehicle.usableBatteryCapacitySource?.trim())
+            && (!(Number.isFinite(selectedVehicle.usableBatteryCapacityKWh) && selectedVehicle.usableBatteryCapacityKWh! > 0) || !selectedVehicle.usableBatteryCapacitySource?.trim())) {
+            alert('Enter a positive usable battery capacity and its evidence source, or leave both blank.'); return;
+        }
         if (!isEditMode && isEditing) {
             // If viewing an existing vehicle and not in edit mode, don't submit
             return;
@@ -663,6 +667,8 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
             } else {
                 // For ICE vehicles, remove EV-specific fields completely
                 delete vehicleToSave.batteryCapacityKwh;
+                delete vehicleToSave.usableBatteryCapacityKWh;
+                delete vehicleToSave.usableBatteryCapacitySource;
                 delete vehicleToSave.manufacturerEnergyConsumption;
                 delete vehicleToSave.baselineEnergyConsumption;
                 delete vehicleToSave.currentEnergyConsumption;
@@ -897,6 +903,14 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700">Battery Capacity (kWh)</label>
                                     <input type="number" name="batteryCapacityKwh" value={selectedVehicle.batteryCapacityKwh || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                                    <p className="text-sm text-gray-600">Legacy/reference capacity; not used for new energy estimates.</p>
+                                    <label className="block mt-4">Verified usable battery capacity (kWh)
+                                        <input type="number" min="0.1" step="any" name="usableBatteryCapacityKWh" value={selectedVehicle.usableBatteryCapacityKWh || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                                    </label>
+                                    <label className="block mt-3">Usable capacity evidence source
+                                        <input name="usableBatteryCapacitySource" maxLength={500} value={selectedVehicle.usableBatteryCapacitySource || ''} onChange={handleFormChange} placeholder="Specification or service document that explicitly states usable capacity" className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                                    </label>
+                                    <p className="text-sm text-gray-600">Optional. Never copy a gross capacity without evidence. New assignments snapshot this value and source; history is not backfilled.</p>
                                 </div>
                             )}
                         </div>

@@ -960,6 +960,8 @@ const api = {
     assignmentId: string;
     odometer: number;
     litresFilled: number;
+    fillLevel?: 'FULL' | 'PARTIAL' | 'UNKNOWN';
+    clientRequestId?: string;
     fuelCost: number;
     oilCost?: number;
     notes?: string;

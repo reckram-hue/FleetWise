@@ -1,311 +1,66 @@
-import { fuelEconomyCounts } from '../../lib/fuelEconomy';
-import React, { useState, useEffect, useMemo } from 'react';
-import { Vehicle, FuelEconomyAlert } from '../../types';
-import api from '../../services/firebaseApi';
-import Card from '../shared/Card';
-import {
-    AlertTriangle,
-    TrendingUp,
-    TrendingDown,
-    Minus,
-    CheckCircle,
-    XCircle,
-    Fuel,
-    Zap
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import type { Vehicle } from '../../types';
+import { economyApi, EconomyReport } from '../../services/economyApi';
 
-interface FuelEconomyMonitorProps {
-    vehicles: Vehicle[];
-}
+const number = (v: number | null, decimals = 1) => v === null ? 'Insufficient Data' : v.toLocaleString('en-ZA', { maximumFractionDigits: decimals, minimumFractionDigits: decimals });
+const money = (v: number | null) => v === null ? 'INSUFFICIENT_COST_DATA' : `R${number(v, 2)}/km`;
+const control = 'min-h-11 rounded border border-gray-300 bg-white px-3 py-2';
 
-const FuelEconomyMonitor: React.FC<FuelEconomyMonitorProps> = ({ vehicles }) => {
-    const [economyStatuses, setEconomyStatuses] = useState<{ [vehicleId: string]: any }>({});
-    const [alerts, setAlerts] = useState<FuelEconomyAlert[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [selectedVehicle, setSelectedVehicle] = useState<string | null>(null);
-
-    // Test-data isolation: fleet economy KPIs must never include TEST EV/TEST ICE,
-    // regardless of whether the caller already filtered its vehicles prop.
-    const realVehicles = useMemo(
-        () => (vehicles || []).filter(v => v.isTestData !== true),
-        [vehicles]
-    );
-
+export default function FuelEconomyMonitor(_props: { vehicles: Vehicle[] }) {
+    const [period, setPeriod] = useState<'30' | '90' | 'ALL'>('30'), [includeTest, setIncludeTest] = useState(false);
+    const [report, setReport] = useState<EconomyReport | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(true), [retry, setRetry] = useState(0);
     useEffect(() => {
-        if (realVehicles.length > 0) {
-            fetchEconomyData();
-        } else {
-            setAlerts([]);
-            setEconomyStatuses({});
-            setLoading(false);
-        }
-    }, [realVehicles]);
-
-    const fetchEconomyData = async () => {
-        setLoading(true);
-        try {
-            if (realVehicles.length === 0) {
-                setAlerts([]);
-                setEconomyStatuses({});
-                return;
-            }
-
-            const [allAlertsData, ...statusPromises] = await Promise.all([
-                api.getFuelEconomyAlerts(),
-                ...realVehicles.map(v => api.calculateFuelEconomyStatus(v.id))
-            ]);
-
-            const realVehicleIds = new Set(realVehicles.map(v => v.id));
-            setAlerts((allAlertsData || []).filter(a => realVehicleIds.has(a.vehicleId)));
-
-            const statusMap: { [vehicleId: string]: any } = {};
-            statusPromises.forEach((status, index) => {
-                if (status && realVehicles[index]) {
-                    statusMap[realVehicles[index].id] = status;
-                }
-            });
-            setEconomyStatuses(statusMap);
-        } catch (error) {
-            console.error('Failed to fetch economy data:', error);
-            setAlerts([]);
-            setEconomyStatuses({});
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const getTrendIcon = (trend: string) => {
-        switch (trend) {
-            case 'improving':
-                return <TrendingDown className="h-4 w-4 text-green-500" />;
-            case 'degrading':
-                return <TrendingUp className="h-4 w-4 text-red-500" />;
-            case 'stable':
-                return <Minus className="h-4 w-4 text-blue-500" />;
-            default:
-                return <Minus className="h-4 w-4 text-gray-500" />;
-        }
-    };
-
-    const getStatusColor = (percentage: number) => {
-        if (percentage > 20) return 'text-red-600 bg-red-50 border-red-200';
-        if (percentage > 15) return 'text-orange-600 bg-orange-50 border-orange-200';
-        if (percentage > 10) return 'text-yellow-600 bg-yellow-50 border-yellow-200';
-        if (percentage > -10) return 'text-green-600 bg-green-50 border-green-200';
-        return 'text-blue-600 bg-blue-50 border-blue-200';
-    };
-
-    const formatConsumption = (consumption: number | null | undefined, vehicleType: string) =>
-        typeof consumption === 'number' && Number.isFinite(consumption) && consumption > 0
-          ? consumption.toFixed(1) + (vehicleType === 'ICE' ? ' L/100km' : ' kWh/100km') : 'Insufficient Data';
-    const formatVariance = (value: number | null) => value == null ? 'Unknown' : value.toFixed(1) + '%';
-    const counts = fuelEconomyCounts(Object.values(economyStatuses), realVehicles.length);
-
-    const activeAlerts = (alerts || []).filter(a => !a.isResolved);
-    const criticalVehicles = Object.values(economyStatuses || {}).filter(s => s && s.needsAttention);
-
-    if (loading) {
-        return (
-            <Card>
-                <div className="text-center py-8">Loading fuel economy data...</div>
-            </Card>
-        );
-    }
-
-    return (
-        <div className="space-y-6">
-            {/* Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <Card className="p-4">
-                    <div className="flex items-center">
-                        <AlertTriangle className="h-8 w-8 text-red-500 mr-3" />
-                        <div>
-                            <p className="text-2xl font-bold text-gray-900">{activeAlerts.length}</p>
-                            <p className="text-sm text-gray-500">Active Alerts</p>
-                        </div>
-                    </div>
-                </Card>
-
-                <Card className="p-4">
-                    <div className="flex items-center">
-                        <XCircle className="h-8 w-8 text-orange-500 mr-3" />
-                        <div>
-                            <p className="text-2xl font-bold text-gray-900">{criticalVehicles.length}</p>
-                            <p className="text-sm text-gray-500">Need Attention</p>
-                        </div>
-                    </div>
-                </Card>
-
-                <Card className="p-4">
-                    <div className="flex items-center">
-                        <CheckCircle className="h-8 w-8 text-green-500 mr-3" />
-                        <div>
-                            <p className="text-2xl font-bold text-gray-900">{counts.healthy}</p>
-                            <p className="text-sm text-gray-500">Performing Well</p>
-                        </div>
-                    </div>
-                </Card>
-            </div>
-
-            <p role="status">Insufficient Data: {counts.insufficient}</p>
-            {/* Active Alerts */}
-            {activeAlerts.length > 0 && (
-                <Card>
-                    <h3 className="text-lg font-semibold mb-4 flex items-center">
-                        <AlertTriangle className="h-5 w-5 text-red-500 mr-2" />
-                        Active Fuel Economy Alerts
-                    </h3>
-                    <div className="space-y-3">
-                        {activeAlerts.map(alert => {
-                            const vehicle = realVehicles.find(v => v.id === alert.vehicleId);
-                            const severityColor = {
-                                low: 'border-yellow-200 bg-yellow-50',
-                                medium: 'border-orange-200 bg-orange-50',
-                                high: 'border-red-200 bg-red-50',
-                                critical: 'border-red-300 bg-red-100'
-                            }[alert.severity];
-
-                            return (
-                                <div key={alert.id} className={`p-3 border rounded-lg ${severityColor}`}>
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <h4 className="font-medium">
-                                                {vehicle?.registration} - {vehicle?.make} {vehicle?.model}
-                                            </h4>
-                                            <p className="text-sm text-gray-600 mt-1">{alert.notes}</p>
-                                            <div className="text-sm text-gray-500 mt-2">
-                                                Current: {formatConsumption(alert.currentConsumption, vehicle?.vehicleType || 'ICE')}
-                                                | Baseline: {formatConsumption(alert.baselineConsumption, vehicle?.vehicleType || 'ICE')}
-                                                | Variance: <span className="font-medium">{alert.variancePercentage.toFixed(1)}%</span>
-                                            </div>
-                                        </div>
-                                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                                            alert.severity === 'critical' ? 'bg-red-200 text-red-800' :
-                                            alert.severity === 'high' ? 'bg-red-100 text-red-700' :
-                                            alert.severity === 'medium' ? 'bg-orange-100 text-orange-700' :
-                                            'bg-yellow-100 text-yellow-700'
-                                        }`}>
-                                            {alert.severity.toUpperCase()}
-                                        </span>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </Card>
-            )}
-
-            {/* Vehicle Economy Overview */}
-            <Card>
-                <h3 className="text-lg font-semibold mb-4">Vehicle Fuel Economy Overview</h3>
-                <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                            <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vehicle</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Manufacturer Spec</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actual Baseline</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Trend</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Variance</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {realVehicles.map(vehicle => {
-                                const status = economyStatuses[vehicle.id];
-                                if (!status) return null;
-
-                                const manufacturerConsumption = status.manufacturer;
-                                const baselineConsumption = status.baseline;
-                                const currentConsumption = status.current;
-
-                                return (
-                                    <tr key={vehicle.id} className={status.needsAttention ? 'bg-red-50' : ''}>
-                                        <td className="px-6 py-4 whitespace-nowrap">
-                                            <div className="flex items-center">
-                                                {vehicle.vehicleType === 'ICE' ?
-                                                    <Fuel className="h-4 w-4 text-gray-400 mr-2" /> :
-                                                    <Zap className="h-4 w-4 text-blue-400 mr-2" />
-                                                }
-                                                <div>
-                                                    <div className="text-sm font-medium text-gray-900">{vehicle.registration}</div>
-                                                    <div className="text-sm text-gray-500">{vehicle.make} {vehicle.model}</div>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                            {formatConsumption(manufacturerConsumption, vehicle.vehicleType)}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                            {formatConsumption(baselineConsumption, vehicle.vehicleType)}
-                                            <div className="text-xs text-gray-500">
-                                                {formatVariance(status.manufacturerVsBaseline)} vs manufacturer
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                            {formatConsumption(currentConsumption, vehicle.vehicleType)}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                            <div className="flex items-center">
-                                                {getTrendIcon(status.trend)}
-                                                <span className="ml-1 capitalize">{status.trend}</span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                            <div className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full border ${status.currentVsBaseline == null ? 'text-gray-600 bg-gray-50' : getStatusColor(status.currentVsBaseline)}`}>
-                                                {formatVariance(status.currentVsBaseline)}
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                            {!status.hasSufficientData ? <span>Insufficient Data</span> : status.needsAttention ? (
-                                                <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800">
-                                                    Attention Required
-                                                </span>
-                                            ) : (
-                                                <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
-                                                    Normal
-                                                </span>
-                                            )}
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
-            </Card>
-
-            {/* Recommendations */}
-            {Object.values(economyStatuses || {}).some(s => s && s.recommendations && s.recommendations.length > 0) && (
-                <Card>
-                    <h3 className="text-lg font-semibold mb-4">Maintenance Recommendations</h3>
-                    <div className="space-y-4">
-                        {(vehicles || []).map(vehicle => {
-                            const status = economyStatuses[vehicle.id];
-                            if (!status || !status.recommendations || status.recommendations.length === 0) return null;
-
-                            return (
-                                <div key={vehicle.id} className="p-4 border border-yellow-200 bg-yellow-50 rounded-lg">
-                                    <h4 className="font-medium text-gray-900 mb-2">
-                                        {vehicle.registration} - {vehicle.make} {vehicle.model}
-                                    </h4>
-                                    <ul className="space-y-1">
-                                        {status.recommendations.map((rec: string, index: number) => (
-                                            <li key={index} className="text-sm text-gray-700 flex items-start">
-                                                <span className="text-yellow-500 mr-2">•</span>
-                                                {rec}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </Card>
-            )}
+        let cancelled = false; setBusy(true); setError(''); setReport(null);
+        economyApi.get(period, includeTest).then(data => { if (!cancelled) setReport(data); })
+            .catch(() => { if (!cancelled) setError('Economy data could not load. Retry or contact support. No partial totals are shown.'); })
+            .finally(() => { if (!cancelled) setBusy(false); });
+        return () => { cancelled = true; };
+    }, [period, includeTest, retry]);
+    return <section className="space-y-5" aria-label="Vehicle economy metrics">
+        <h2 className="text-2xl font-bold">Observed Economy</h2>
+        <p>Completed vehicle assignments define distance. Unknown evidence stays unknown. These are vehicle observations, not driver scores.</p>
+        <div className="flex flex-wrap gap-4 items-center">
+            <label>Period <select className={control} value={period} onChange={e => setPeriod(e.target.value as typeof period)}>
+                <option value="30">Trailing 30 days</option><option value="90">Trailing 90 days</option><option value="ALL">All valid history</option>
+            </select></label>
+            <label className="min-h-11 flex gap-2 items-center"><input type="checkbox" checked={includeTest} onChange={e => setIncludeTest(e.target.checked)} />Include TEST / QA</label>
         </div>
-    );
-};
-
-export default FuelEconomyMonitor;
+        {busy && <p role="status">Loading observed economy…</p>}
+        {error && <div role="alert"><p>{error}</p><button className={control} onClick={() => setRetry(n => n + 1)}>Retry economy</button></div>}
+        {report && <>
+            <p className="text-sm text-gray-600">Calculated {new Date(report.updatedAt).toLocaleString()}. Whole intervals only; boundary-crossing intervals are excluded. No confidence rating is assigned; eligible samples remain LIMITED.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[report.fleet.ev, report.fleet.ice].map(f => <article key={f.powertrain} className="rounded border bg-white p-4 space-y-2">
+                    <h3 className="font-bold">{f.powertrain} fleet</h3>
+                    <p>{number(f.distanceKm)} km · {number(f.powertrain === 'EV' ? report.fleet.evSharePercent : report.fleet.iceSharePercent)}% of known EV/ICE distance</p>
+                    <p>Observed: {number(f.per100Km)} {f.powertrain === 'EV' ? 'kWh/100 km' : 'L/100 km'}</p>
+                    <p>Covered consumption: {number(f.quantity)} {f.powertrain === 'EV' ? 'kWh (estimated battery energy)' : 'litres'}</p>
+                    <p>Coverage: {number(f.coverageKm)} km · {f.sampleCount} samples · {f.provenance}</p>
+                    <p>Cost/km: {money(f.costPerKm)} · cost coverage {number(f.costCoverageKm)} km</p>
+                </article>)}
+            </div>
+            <p className="text-sm">Cost/km is recorded fuel/energy replenishment expense over its covered distance, not total ownership cost. EV cost requires matching SOC boundaries and known metered charge costs. Unknown costs and charging losses are never filled in.</p>
+            {!report.vehicles.length && <p>No vehicles match this selection.</p>}
+            <div className="space-y-4">{report.vehicles.map(v => <article key={v.vehicleId} className="rounded border bg-white p-4 space-y-3">
+                <h3 className="text-xl font-bold">{v.registration || 'Registration unavailable'}{v.isTestData ? ' — TEST' : ''} · {v.powertrain}</h3>
+                <p className="text-sm">Period: {v.periodStart ? new Date(v.periodStart).toLocaleDateString() : 'No valid start recorded'} – {new Date(v.periodEnd).toLocaleDateString()}</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div><h4 className="font-semibold">Assignment distance</h4><p>{number(v.distanceKm)} km · {v.distanceSampleCount} intervals · {v.distanceProvenance}</p><p>{v.unknownAssignments} unknown/invalid intervals</p></div>
+                    <div><h4 className="font-semibold">Observed FleetWise Baseline</h4><p>{number(v.economy.value)} {v.economy.unit}</p><p>{v.economy.provenance}</p></div>
+                    <div><h4 className="font-semibold">Coverage / Data Quality</h4><p>{number(v.economy.coverageKm)} km · {v.economy.sampleCount} samples</p><p>{v.economy.quality}</p></div>
+                    <div><h4 className="font-semibold">Cost/km</h4><p className="break-words">{money(v.cost.value)}</p><p>Coverage {number(v.cost.coverageKm)} km · {v.cost.sampleCount} samples · {v.cost.provenance}</p></div>
+                    <div><h4 className="font-semibold">Manufacturer Reference</h4><p>{v.manufacturerReference === null ? 'Not recorded' : `${number(v.manufacturerReference)} ${v.economy.unit}`}</p><p>Reference only; not an observed baseline.</p></div>
+                    {v.powertrain === 'EV' && <div><h4 className="font-semibold">Charger energy (meter-reported)</h4><p>{number(v.chargerEnergy.valueKWh)} kWh · {v.chargerEnergy.provenance}</p><p>{v.chargerEnergy.sampleCount} meters within assignments covering {number(v.chargerEnergy.coverageKm)} km. Separate from battery consumption; not a consumption denominator.</p></div>}
+                </div>
+                {v.reasons.length > 0 && <p className="text-sm break-words">Coverage limitations: {v.reasons.map(r => r.replace(/_/g, ' ').toLowerCase()).join('; ')}.</p>}
+                <details className="text-sm break-words"><summary className="cursor-pointer min-h-11">Calculation provenance</summary>
+                    <p>Vehicle reference: {v.vehicleId} · method version {report.methodVersion} · {v.provenance}</p>
+                    <p>Return-charging events excluded: {v.excludedReturnEvents}. No charging energy inferred across custody.</p>
+                    {v.evidence.map((e, i) => <div key={i} className="mt-2 border-t pt-2"><p>{e.provenance} · records: {e.recordIds.join(', ')}</p>
+                        {e.capacityUsed && <p>Usable capacity used: {e.capacityUsed.valueKWh} kWh; source: {e.capacityUsed.source}; snapshot: {e.capacityUsed.recordedAt}</p>}
+                    </div>)}
+                </details>
+            </article>)}</div>
+        </>}
+    </section>;
+}

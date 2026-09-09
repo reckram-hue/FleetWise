@@ -10,6 +10,9 @@ import * as crypto from 'crypto';
 import { driverDistance, intervalDistance } from './assignmentDistance';
 import { createActiveAdminProfile, requireActiveAdmin } from './adminAuthorization';
 import { createInspectionHistoryHandlers } from './inspectionHistory';
+import { createEconomyHandler } from './economyApi';
+import { usableCapacitySnapshot } from './economyMetrics';
+import { persistRefuel } from './refuelCapture';
 import { reservePinAttempt, assertActivePinDriver, pinAttemptDocumentId } from './pinAttempts';
 import { onCall as onCallV2 } from 'firebase-functions/v2/https';
 import {
@@ -426,6 +429,8 @@ const LogRefuelWithSessionSchema = z.object({
     z.number().min(0, 'Oil cost must be zero or greater').optional()
   ),
   notes: optionalNotes,
+  fillLevel: z.enum(['FULL', 'PARTIAL', 'UNKNOWN']).default('UNKNOWN'),
+  clientRequestId: z.string().regex(/^[A-Za-z0-9_-]{8,96}$/).optional(),
 });
 
 // =============================================================================
@@ -2658,6 +2663,8 @@ export const startVehicleAssignment = onMeasuredCall('startVehicleAssignment', a
       }
 
       const assignmentData: any = {
+        energyCaptureVersion: 1,
+        usableCapacitySnapshot: usableCapacitySnapshot(txVehicleDoc.data() || {}, new Date().toISOString()),
         orgId: DEFAULT_ORG_ID,
         driverId,
         shiftId,
@@ -2906,6 +2913,8 @@ export const startChargingSession = onMeasuredCall('startChargingSession', async
       const locationSnapshot = chargingLocationSnapshot(txLocationDoc.data()!);
 
       transaction.set(chargingSessionRef, {
+        economyCaptureVersion: 1, recordStatus: 'ACTIVE',
+        usableCapacitySnapshot: currentAssignment.usableCapacitySnapshot || null,
         id: chargingSessionRef.id,
         orgId,
         vehicleId: assignmentData.vehicleId,
@@ -2996,9 +3005,8 @@ export const endChargingSession = onMeasuredCall('endChargingSession', async (da
       // delta — never client-asserted — so it can't be fabricated or inflated. chargerEnergy
       // DeliveredKWh (below) is the separate, driver/meter-reported figure for locations
       // with trustworthy metering — the two concepts are never merged (business rule 12).
-      const txVehicleData = txVehicleDoc.data() || {};
       resultEstimatedBatteryEnergyAddedKWh = estimateBatteryEnergyAddedKWh(
-        txVehicleData.batteryCapacityKwh,
+        txSession.economyCaptureVersion === 1 && txSession.usableCapacitySnapshot?.source ? txSession.usableCapacitySnapshot.valueKWh : undefined,
         txSession.startChargePercent,
         endChargePercent,
       );
@@ -3010,6 +3018,9 @@ export const endChargingSession = onMeasuredCall('endChargingSession', async (da
         endPredictedRangeKm,
         chargerEnergyDeliveredKWh: chargerEnergyDeliveredKWh ?? null,
         estimatedBatteryEnergyAddedKWh: resultEstimatedBatteryEnergyAddedKWh,
+        batteryEnergyProvenance: resultEstimatedBatteryEnergyAddedKWh === null ? 'INSUFFICIENT_DATA' : 'ESTIMATED',
+        chargerEnergyProvenance: chargerEnergyDeliveredKWh === undefined ? 'UNKNOWN' : 'REPORTED_METER',
+        costProvenance: chargeCost === undefined ? 'UNKNOWN' : 'REPORTED', currency: 'ZAR',
         chargeCost: chargeCost ?? null,
         notes: notes ?? null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -3808,6 +3819,7 @@ export const logRefuelWithSession = onProdCall(async (data, context) => {
       fuelCost,
       oilCost,
       notes,
+      fillLevel, clientRequestId,
     } = validated;
     const { driverId } = await requireDriverSession({ driverId: reqDriverId, sessionToken });
     const { assignmentData, vehicleData } = await getActiveAssignmentForDriverAction(driverId, assignmentId);
@@ -3823,7 +3835,6 @@ export const logRefuelWithSession = onProdCall(async (data, context) => {
       );
     }
 
-    const recordRef = db.collection('refuelRecords').doc();
     const recordData: Record<string, any> = {
       vehicleId: assignmentData.vehicleId,
       driverId,
@@ -3835,15 +3846,15 @@ export const logRefuelWithSession = onProdCall(async (data, context) => {
       odometer,
       litresFilled,
       fuelCost,
+      fillLevel,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
     if (typeof oilCost === 'number' && oilCost > 0) recordData.oilCost = oilCost;
     if (typeof notes === 'string' && notes.trim()) recordData.notes = notes.trim();
 
-    await recordRef.set(recordData);
-    const saved = await recordRef.get();
-    return { success: true, record: { id: saved.id, ...saved.data() } };
+    const record = await persistRefuel(db, recordData, clientRequestId);
+    return { success: true, record };
   } catch (error: any) {
     if (error instanceof functions.https.HttpsError) throw error;
     if (error instanceof z.ZodError) {
@@ -3871,3 +3882,5 @@ const inspectionHistory = createInspectionHistoryHandlers({ db, requireAdmin, bu
 export const listVehicleInspectionsAdmin = onProdCall(inspectionHistory.listVehicleInspectionsAdmin);
 export const getVehicleInspectionAdmin = onProdCall(inspectionHistory.getVehicleInspectionAdmin);
 export const getInspectionPhotoAdmin = onProdCall(inspectionHistory.getInspectionPhotoAdmin);
+
+export const getFleetEconomySummaryAdmin = onProdCall(createEconomyHandler({ db, requireAdmin }));

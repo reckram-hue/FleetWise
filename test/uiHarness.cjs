@@ -21,7 +21,7 @@ function harness(overrides = {}) {
     if (!old || !deps || deps.some((v, j) => !Object.is(v, old[j]))) current.effects.push(callback);
     current.deps[i] = deps;
   } };
-  const realFiles = ['AdminDashboard', 'InspectionHistory', 'successNotice', 'SuccessNotice', 'ActiveShift','App','vehicleIdentity', 'EvidencePhoto', 'defectVisibility', 'elapsedTime', 'fuelEconomy', 'adminSession', 'AdminLogin', 'ManageDefects', 'TelegramDrivers', 'AccidentReportEntry', 'AccidentReportDetails'];
+  const realFiles = ['FuelEconomyMonitor', 'LogRefuelForm', 'AdminDashboard', 'InspectionHistory', 'successNotice', 'SuccessNotice', 'ActiveShift','App','vehicleIdentity', 'EvidencePhoto', 'defectVisibility', 'elapsedTime', 'fuelEconomy', 'adminSession', 'AdminLogin', 'ManageDefects', 'TelegramDrivers', 'AccidentReportEntry', 'AccidentReportDetails'];
   function load(filename) {
     filename = path.resolve(filename); if (cache.has(filename)) return cache.get(filename).exports;
     const mod = new Module(filename, module); cache.set(filename, mod); const req = Module.createRequire(filename);
@@ -35,6 +35,7 @@ function harness(overrides = {}) {
       if (name.endsWith('/resolveActiveShift')) return { resolveActiveShiftState: async () => overrides.activeShift || null };
       if (name.includes('firebaseApi')) return api;
       if (name.includes('inspectionApi')) return { inspectionApi: overrides.inspectionApi };
+      if (name.includes('economyApi')) return { economyApi: overrides.economyApi };
       if (name.includes('accidentApi')) return { accidentApi: overrides };
       if (name.endsWith('store/session')) return { getDriverSession: () => overrides.noDriver ? null : ({ driverId: 'driver', projectId: 'demo' }), clearDriverSession() {}, isSessionLocallyExpired: () => false };
       if (name.endsWith('/Header')) return function Header(p) { return React.createElement('header', null, p.title); };

@@ -44,12 +44,12 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
   const id = () => backend + '-' + randomUUID();
   const read = async (collection, id) => (await db.collection(collection).doc(id).get()).data();
   const expectCode = (promise, code = 'failed-precondition') => assert.rejects(promise, e => e.code === code);
-  async function fixture(odo = 80000, isTestData = true) {
+  async function fixture(odo = 80000, isTestData = true, vehicleOverrides = {}) {
     const driverId = id(), vehicleId = id(), locationId = id();
     await db.collection('users').doc(driverId).set({ role: 'driver', employmentStatus: 'Active', firstName: 'Synthetic', surname: 'WP2',
       isTestData, pinHash: await req('bcryptjs').hash('2468', 4) });
     await db.collection('vehicles').doc(vehicleId).set({ status: 'Active', vehicleType: 'EV', registration: 'SYNTHETIC-WP2',
-      currentOdometer: odo, batteryCapacityKwh: 60, isTestData });
+      currentOdometer: odo, batteryCapacityKwh: 60, isTestData, ...vehicleOverrides });
     await db.collection('chargingLocations').doc(locationId).set({ active: true, orgId: 'default', name: 'Synthetic office', type: 'OFFICE', costOwner: 'COMPANY' });
     const login = await api.driverLogin({ driverId, pin: '2468', deviceId: 'wp2-emulator' }, {});
     const credentials = { driverId, sessionToken: login.sessionToken };
@@ -75,6 +75,41 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
   const charge = f => f.call('startChargingSession', { assignmentId: f.assignmentId, startOdometer: f.odo + 50,
     startChargePercent: 30, startPredictedRangeKm: 100, chargingLocationId: f.locationId, chargingType: 'COMPANY_AC' });
   const endCharge = (f, chargingSessionId) => f.call('endChargingSession', { chargingSessionId, endChargePercent: 80, endPredictedRangeKm: 300 });
+
+  test(`${backend}: economy captures explicit usable capacity once and never promotes legacy capacity`, async () => {
+    for (const explicit of [false, true]) {
+      const f = await fixture(80000, true, explicit ? { usableBatteryCapacityKWh: 50, usableBatteryCapacitySource: 'Synthetic usable specification' } : {});
+      const a = await read('vehicleAssignments', f.assignmentId);
+      assert.equal(a.energyCaptureVersion, 1);
+      assert.equal(a.usableCapacitySnapshot?.valueKWh ?? null, explicit ? 50 : null);
+      await db.collection('vehicles').doc(f.vehicleId).update({ usableBatteryCapacityKWh: 90, usableBatteryCapacitySource: 'Later specification' });
+      await inspect(f, 'PICKUP');
+      const result = await charge(f);
+      const chargingSessionId = result.chargingSessionId;
+      await endCharge(f, chargingSessionId);
+      const s = await read('chargingSessions', chargingSessionId);
+      assert.deepEqual(s.usableCapacitySnapshot, a.usableCapacitySnapshot);
+      assert.equal(s.estimatedBatteryEnergyAddedKWh, explicit ? 25 : null);
+      assert.equal(s.batteryEnergyProvenance, explicit ? 'ESTIMATED' : 'INSUFFICIENT_DATA');
+      assert.equal(s.costProvenance, 'UNKNOWN'); assert.equal(s.chargerEnergyProvenance, 'UNKNOWN');
+    }
+  });
+
+  test(`${backend}: refuel callable preserves explicit fill state and deduplicates concurrent retries`, async () => {
+    const f = await fixture(); await inspect(f, 'PICKUP');
+    await db.collection('vehicles').doc(f.vehicleId).update({ vehicleType: 'ICE' });
+    const payload = { assignmentId: f.assignmentId, odometer: f.odo + 10, litresFilled: 20, fuelCost: 400, fillLevel: 'FULL', clientRequestId: randomUUID() };
+    const [one, two] = await Promise.all([f.call('logRefuelWithSession', payload), f.call('logRefuelWithSession', payload)]);
+    assert.deepEqual(one, two);
+    let records = await db.collection('refuelRecords').where('assignmentId', '==', f.assignmentId).get();
+    assert.equal(records.size, 1); assert.equal(records.docs[0].data().fillLevel, 'FULL');
+    assert.equal(records.docs[0].data().recordStatus, 'ACTIVE');
+    await f.call('logRefuelWithSession', { assignmentId: f.assignmentId, odometer: f.odo + 20, litresFilled: 10, fuelCost: 200 });
+    records = await db.collection('refuelRecords').where('assignmentId', '==', f.assignmentId).get();
+    assert.equal(records.size, 2);
+    const legacy = records.docs.map(d => d.data()).find(r => r.odometer === f.odo + 20);
+    assert.equal(legacy.fillLevel, 'UNKNOWN'); assert.equal(legacy.recordStatus, 'UNVERIFIED');
+  });
 
   test(`${backend}: return damage atomically links one defect across concurrent/lost-response retries`, async () => {
     const f = await fixture(); await inspect(f, 'PICKUP');

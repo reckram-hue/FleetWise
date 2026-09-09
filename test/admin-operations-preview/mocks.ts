@@ -1,4 +1,16 @@
 // Synthetic browser fixture. Every application API is local; unknown calls fail closed.
+import { calculateEconomy } from '../../functions-prod-jhb/src/economyMetrics';
+export const economyApi = { get: async (period: '30' | '90' | 'ALL', includeTest: boolean) => {
+  const now = Date.now(), at = (h: number) => new Date(now - h * 3600000).toISOString();
+  return calculateEconomy({ vehicles: [
+    { id: 'ev', registration: 'SYNTHETIC EV', vehicleType: 'EV', manufacturerEnergyConsumption: 15 },
+    { id: 'ice', registration: 'SYNTHETIC ICE', vehicleType: 'ICE', manufacturerFuelConsumption: 8 },
+    { id: 'qa', registration: 'SYNTHETIC TEST', vehicleType: 'ICE', isTestData: true },
+  ], drivers: [], assignments: [{ id: 'fixture-a', vehicleId: 'ev', driverId: 'driver', shiftId: 'shift', status: 'COMPLETED',
+    startOdometer: 100, endOdometer: 200, startedAt: at(4), endedAt: at(1), startChargePercent: 80, endChargePercent: 60,
+    energyCaptureVersion: 1, usableCapacitySnapshot: { valueKWh: 50, source: 'Synthetic usable capacity specification', recordedAt: at(4) } }],
+    refuels: [], sessions: [], chargingEvents: [] }, { period, includeTest, now });
+} };
 export const vehicle = { id: 'fixture-vehicle', registration: 'CA 123-456', make: 'Sample', model: 'EV', vehicleType: 'EV', status: 'Active' };
 export const driver = { id: 'fixture-driver', firstName: 'Sample', surname: 'Driver', role: 'driver', employmentStatus: 'Active' };
 const records = ['PICKUP', 'RETURN'].map((boundaryType, index) => ({

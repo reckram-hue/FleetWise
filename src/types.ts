@@ -126,6 +126,8 @@ export interface Vehicle {
     statusDate?: string; // YYYY-MM-DD when status was last changed
     statusNotes?: string; // Reason for status change, expected return date, etc.
     batteryCapacityKwh?: number; // for EVs
+    usableBatteryCapacityKWh?: number; // explicit usable capacity; never inferred from generic capacity
+    usableBatteryCapacitySource?: string; // Admin supplied specification / evidence reference
     serviceIntervalKm?: number;
     lastServiceOdometer?: number;
     currentOdometer?: number;
@@ -533,6 +535,11 @@ export interface RefuelRecord {
     date: Date;
     odometer: number;
     litresFilled: number;
+    fillLevel?: 'FULL' | 'PARTIAL' | 'UNKNOWN'; // absent historical fields remain UNKNOWN
+    clientRequestId?: string | null;
+    captureVersion?: number;
+    recordStatus?: 'ACTIVE' | 'UNVERIFIED' | 'CANCELLED' | 'SUPERSEDED' | 'DUPLICATE';
+    currency?: string;
     fuelCost: number;
     oilCost?: number;
     notes?: string;
@@ -677,6 +684,13 @@ export const CHARGING_TYPE_LABELS: Record<ChargingType, string> = {
  * vehicle-level guard field (see Vehicle.activeChargingSessionId vs openChargingEventId).
  */
 export interface ChargingSession {
+    economyCaptureVersion?: number;
+    recordStatus?: 'ACTIVE' | 'UNVERIFIED' | 'CANCELLED' | 'SUPERSEDED' | 'DUPLICATE';
+    usableCapacitySnapshot?: { valueKWh: number; source: string; recordedAt: string } | null;
+    batteryEnergyProvenance?: 'ESTIMATED' | 'INSUFFICIENT_DATA';
+    chargerEnergyProvenance?: 'REPORTED_METER' | 'UNKNOWN';
+    costProvenance?: 'REPORTED' | 'UNKNOWN';
+    currency?: string;
     id: string;
     orgId: string;
     vehicleId: string;
@@ -697,8 +711,8 @@ export interface ChargingSession {
     // Charger-metered/billed energy, when known — reported by the driver or later
     // reconciled by admin from an invoice. Never invented; null when not known.
     chargerEnergyDeliveredKWh?: number | null;
-    // Server-derived estimate from usable battery capacity x SOC delta. Left null (never
-    // fabricated) when the vehicle's battery capacity isn't known. Deliberately a SEPARATE
+    // New captures estimate from the explicit usable-capacity snapshot x SOC delta.
+    // Historical estimates without this provenance are not economy evidence. A SEPARATE
     // field from chargerEnergyDeliveredKWh — battery energy gained and charger energy
     // supplied/billed are different concepts (charging losses mean they're rarely equal).
     estimatedBatteryEnergyAddedKWh?: number | null;
