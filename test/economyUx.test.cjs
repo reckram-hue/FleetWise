@@ -62,17 +62,36 @@ test('economy UI uses server evidence, distinct units and honest unknowns; perio
   const render = () => h.render(C, { vehicles: [{ currentFuelConsumption: 12345 }] });
   assert.match(text(render()), /Loading observed economy/); await h.settle();
   let tree = render(), words = text(tree);
-  for (const phrase of ['L/100 km', 'kWh/100 km', 'Insufficient data', 'Insufficient cost data', 'Manufacturer Reference', 'Observed FleetWise Baseline', 'Coverage / Data Quality']) assert.ok(words.includes(phrase), phrase);
+  for (const phrase of ['L/100 km', 'kWh/100 km', 'Insufficient data', 'Insufficient cost data', 'Manufacturer Reference', 'Observed Economy', 'Coverage / Data quality', 'Fleet Economics']) assert.ok(words.includes(phrase), phrase);
   assert.ok(words.includes('No usable driving data yet'));
   assert.ok(words.includes('Not enough data to calculate a reliable baseline.'));
   assert.doesNotMatch(words, /\b[A-Z]+(?:_[A-Z]+)+\b|\b(?:LIMITED|MEASURED|ESTIMATED|MIXED|UNKNOWN)\b/);
   assert.equal(nodes(tree, n => n.props.role === 'alert' || /(?:text|bg)-red-/.test(n.props.className || '')).length, 0);
-  assert.doesNotMatch(words, /Performing Well|Normal|Poor|12345|leaderboard/i);
+  assert.doesNotMatch(words, /Performing Well|Normal|Poor|12345|leaderboard|ROI|Ready for analysis|Replacement candidate|Replace now/i);
+  assert.equal(nodes(tree, n => n.type === 'table').length, 1);
+  assert.equal(text(nodes(tree, n => n.type === 'th')[0]), 'Registration / provenance');
+  assert.match(words, /Total eligible EV\/ICE distance: Insufficient data km/);
   assert.deepEqual(calls, [['30', false]]);
   nodes(tree, n => n.type === 'select')[0].props.onChange({ target: { value: '90' } });
   render(); await h.settle(); tree = render();
   nodes(tree, n => n.type === 'input' && n.props.type === 'checkbox')[0].props.onChange({ target: { checked: true } });
   render(); await h.settle(); assert.deepEqual(calls.at(-1), ['90', true]);
+  tree = render(); nodes(tree, n => n.type === 'select')[0].props.onChange({ target: { value: 'ALL' } });
+  render(); await h.settle(); assert.deepEqual(calls.at(-1), ['ALL', true]);
+});
+
+test('comparison exposes partial cost amount, denominator and human provenance without changing the report', async () => {
+  const data = report();
+  Object.assign(data.fleet.ice, { cost: 100, costPerKm: 2, costCoverageKm: 50, costSampleCount: 1, costProvenance: 'MEASURED', partialCostCoverage: true });
+  Object.assign(data.vehicles[0], { distanceKm: 100, distanceSampleCount: 1 });
+  Object.assign(data.vehicles[0].cost, { amount: 100, value: 2, coverageKm: 50, sampleCount: 1, provenance: 'MEASURED' });
+  const before = structuredClone(data), h = harness({ economyApi: { get: async () => data } });
+  const C = h.load('src/components/admin/FuelEconomyMonitor.tsx').default;
+  h.render(C, { vehicles: [] }); await h.settle(); const words = text(h.render(C, { vehicles: [] }));
+  assert.match(words, /Operating fuel cost\/km: R2[,.]00\/km/);
+  assert.match(words, /R100[,.]00/); assert.match(words, /Coverage 50[,.]0 km/);
+  assert.match(words, /Partial cost coverage/); assert.match(words, /Measured/);
+  assert.deepEqual(data, before);
 });
 
 test('economy API failure shows no partial numbers and retry recovers', async () => {

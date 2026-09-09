@@ -33,6 +33,15 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
     }
     const before = (await db.collection('vehicleAssignments').doc('ice-a').get()).data();
     let r = await api({}, context); assert.equal(r.fleet.ice.distanceKm, 100); assert.equal(r.fleet.ev.distanceKm, 0); assert.equal(r.fleet.ice.per100Km, 10); assert.equal(r.fleet.ice.costPerKm, 2);
+    assert.equal(r.fleet.totalEligibleKm, 100); assert.equal(r.fleet.ice.costSampleCount, 1); assert.equal(r.fleet.ice.costCoverageKm, 100);
+    assert.equal(r.fleet.ev.eligibleDistanceKm, null); assert.equal(r.fleet.ice.costProvenance, 'MEASURED');
+    for (const period of ['30', '90', 'ALL']) { const p = await api({ period }, context); assert.equal(p.fleet.totalEligibleKm, 100); assert.equal(p.fleet.ice.period, period); }
+    await db.collection('vehicleAssignments').doc('old').set({ ...a, vehicleId: 'ice', startedAt: '2026-07-01T00:00:00Z', endedAt: '2026-07-01T04:00:00Z', startOdometer: 0, endOdometer: 0 });
+    assert.equal((await api({ period: '30' }, context)).fleet.ice.distanceSampleCount, 1);
+    assert.equal((await api({ period: '90' }, context)).fleet.ice.distanceSampleCount, 2);
+    await db.collection('refuelRecords').doc('last').update({ fuelCost: null });
+    const missing = await api({}, context); assert.equal(missing.fleet.ice.costPerKm, null); assert.equal(missing.fleet.ice.costStatus, 'INSUFFICIENT_COST_DATA'); assert.equal(missing.fleet.ice.quantity, 10);
+    await db.collection('refuelRecords').doc('last').update({ fuelCost: 200 });
     r = await api({ includeTest: true }, context); assert.equal(r.fleet.ev.distanceKm, 50); assert.equal(r.fleet.evSharePercent, 50 / 150 * 100);
     assert.doesNotMatch(JSON.stringify(r), /NEVER_SERIALIZE|pinHash/);
     assert.deepEqual((await db.collection('vehicleAssignments').doc('ice-a').get()).data(), before);

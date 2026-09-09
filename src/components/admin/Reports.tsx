@@ -64,7 +64,7 @@ const Reports: React.FC<ReportsProps> = ({ onBack }) => {
         },
         {
             key: 'fuel-economy',
-            label: 'Fuel Economy',
+            label: 'Fleet Economics',
             icon: Fuel,
             color: 'text-blue-600 border-blue-500'
         },

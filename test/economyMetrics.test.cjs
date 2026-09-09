@@ -21,6 +21,51 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
   const m = require(resolve(backend, 'lib/economyMetrics.js'));
   const run = (label, fn) => test(`${backend}: ${label}`, fn);
   const calculate = (data, options = {}) => m.calculateEconomy(data, { ...opts, ...options });
+  run('factual fleet metadata reconciles EV, ICE, missing and TEST evidence without readiness claims', () => {
+    const data = input();
+    data.vehicles.push({ id: 'ev', vehicleType: 'EV' }, { id: 'qa', vehicleType: 'EV', isTestData: true }, { id: 'unknown', vehicleType: 'OTHER' });
+    data.assignments.push(assignment({ id: 'ev-a', vehicleId: 'ev', endOdometer: 100 }), assignment({ id: 'qa-a', vehicleId: 'qa', endOdometer: 50 }), assignment({ id: 'u-a', vehicleId: 'unknown' }));
+    const r = calculate(data), f = r.fleet;
+    assert.equal(f.totalEligibleKm, 400); assert.equal(f.distanceSampleCount, 2); assert.equal(f.excludedPowertrainAssignments, 1);
+    assert.equal(f.evSharePercent, 25); assert.equal(f.iceSharePercent, 75);
+    assert.equal(f.provenance, 'MIXED'); assert.equal(f.ev.provenance, 'ESTIMATED'); assert.equal(f.ice.provenance, 'MEASURED');
+    assert.equal(f.ice.cost, 600); assert.equal(f.ice.costCoverageKm, 300); assert.equal(f.ice.costPerKm, 2);
+    assert.equal(f.ice.costSampleCount, 1); assert.equal(f.ice.costProvenance, 'MEASURED'); assert.equal(f.ice.partialCostCoverage, false);
+    assert.equal(f.ev.costStatus, 'INSUFFICIENT_COST_DATA'); assert.equal(f.ev.cost, null);
+    assert.equal(f.ice.quality, 'LIMITED'); assert.equal(calculate(data, { includeTest: true }).fleet.totalEligibleKm, 450);
+    assert.doesNotMatch(JSON.stringify(r), /READY_FOR_ANALYSIS|replacement|ROI/);
+    for (const powertrain of ['EV', 'ICE']) {
+      const only = calculate(input(powertrain)).fleet;
+      assert.equal(only.totalEligibleKm, 300); assert.equal(only[powertrain === 'EV' ? 'evSharePercent' : 'iceSharePercent'], 100);
+    }
+  });
+  run('fleet unknown distance stays null and measured stationary distance remains zero', () => {
+    for (const assignments of [[], [assignment({ endOdometer: null })], [assignment(), assignment()]]) {
+      const f = calculate(input('ICE', { assignments })).fleet;
+      assert.equal(f.totalEligibleKm, null); assert.equal(f.ice.eligibleDistanceKm, null);
+      assert.equal(f.evSharePercent, null); assert.equal(f.ice.costPerKm, null);
+      assert.equal(f.ice.distanceProvenance, 'INSUFFICIENT_DATA');
+    }
+    const f = calculate(input('ICE', { assignments: [assignment({ endOdometer: 0 })] })).fleet;
+    assert.equal(f.totalEligibleKm, 0); assert.equal(f.ice.distanceProvenance, 'MEASURED'); assert.equal(f.iceSharePercent, null);
+  });
+  run('partial cost metadata uses cost-covered km only; unknown price is not zero', () => {
+    const data = input(); data.assignments.push(assignment({ id: 'b', startedAt: at(5), endedAt: at(6), startOdometer: 300, endOdometer: 400 }));
+    let f = calculate(data).fleet.ice;
+    assert.equal(f.distanceKm, 400); assert.equal(f.costCoverageKm, 300); assert.equal(f.costPerKm, 2); assert.equal(f.partialCostCoverage, true);
+    data.refuels[1].fuelCost = null; f = calculate(data).fleet.ice;
+    assert.equal(f.cost, null); assert.equal(f.costPerKm, null); assert.equal(f.costProvenance, 'INSUFFICIENT_DATA');
+    const ev = calculate(input('EV', { assignments: [assignment({ endChargePercent: 80 })], sessions: [charge({ endChargePercent: 90 })] })).fleet.ev;
+    assert.equal(ev.cost, 24); assert.equal(ev.costCoverageKm, 300); assert.equal(ev.costPerKm, 24 / 300); assert.equal(ev.costProvenance, 'MEASURED');
+  });
+  for (const period of ['30', '90', 'ALL']) run(`fleet ${period} metadata inherits exact whole-interval boundaries`, () => {
+    const from = period === 'ALL' ? 0 : now - Number(period) * 86400000;
+    const a = assignment({ startedAt: new Date(from).toISOString(), endedAt: new Date(from + 3600000).toISOString() });
+    const data = input('EV', { assignments: [a] });
+    let f = calculate(data, { period }).fleet.ev;
+    assert.equal(f.eligibleDistanceKm, 300); assert.equal(f.period, period); assert.equal(f.periodStart, a.startedAt); assert.equal(f.periodEnd, new Date(now).toISOString());
+    if (period !== 'ALL') { a.startedAt = new Date(from - 1).toISOString(); assert.equal(calculate(data, { period }).fleet.ev.eligibleDistanceKm, null); }
+  });
   run('conflicting timestamps and reversed assignment chronology are rejected', () => {
     const r = fills(); r[1].date = r[2].date;
     assert.equal(calculate(input('ICE', { refuels: r })).vehicles[0].economy.value, null);

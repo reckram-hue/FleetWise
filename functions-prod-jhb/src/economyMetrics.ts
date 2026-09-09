@@ -202,12 +202,27 @@ export function calculateEconomy(input: EconomyInput, options: { period: '30' | 
     const costCoverageKm = sum(rows.map(v => v.cost.coverageKm));
     const quantities = rows.filter(v => v.economy.quantity !== null), costs = rows.filter(v => v.cost.amount !== null);
     const quantity = quantities.length ? sum(quantities.map(v => v.economy.quantity!)) : null, cost = costs.length ? sum(costs.map(v => v.cost.amount!)) : null;
+    const distanceSampleCount = sum(rows.map(v => v.distanceSampleCount)), sampleCount = sum(rows.map(v => v.economy.sampleCount));
+    const costSampleCount = sum(rows.map(v => v.cost.sampleCount));
+    const starts = rows.map(v => v.periodStart).filter((v): v is string => v !== null);
     return { powertrain, distanceKm, coverageKm, sampleCount: sum(rows.map(v => v.economy.sampleCount)), quantity,
+      eligibleDistanceKm: distanceSampleCount ? distanceKm : null, distanceSampleCount,
+      unknownAssignments: sum(rows.map(v => v.unknownAssignments)),
+      distanceProvenance: combineProvenance(rows.map(v => v.distanceProvenance)),
+      quality: quality(sampleCount, coverageKm), costSampleCount,
+      costProvenance: combineProvenance(rows.map(v => v.cost.provenance)),
+      costStatus: costSampleCount ? 'AVAILABLE_FOR_COVERED_INTERVALS' : 'INSUFFICIENT_COST_DATA',
+      partialCostCoverage: costSampleCount > 0 && (costCoverageKm < distanceKm || rows.some(v => v.unknownAssignments > 0)),
+      period: options.period, periodStart: starts.length ? starts.sort()[0] : null, periodEnd: new Date(options.now).toISOString(),
       per100Km: coverageKm > 0 && quantity !== null ? quantity / coverageKm * 100 : null, provenance: combineProvenance(rows.map(v => v.economy.provenance)),
       cost, costCoverageKm, costPerKm: costCoverageKm > 0 && cost !== null ? cost / costCoverageKm : null };
   };
   const ev = aggregate('EV'), ice = aggregate('ICE'), total = ev.distanceKm + ice.distanceKm;
   return { methodVersion: 1, period: options.period, includeTest: options.includeTest, updatedAt: new Date(options.now).toISOString(), vehicles,
-    fleet: { ev, ice, evSharePercent: total > 0 ? ev.distanceKm / total * 100 : null, iceSharePercent: total > 0 ? ice.distanceKm / total * 100 : null,
+    fleet: { ev, ice, totalEligibleKm: ev.distanceSampleCount + ice.distanceSampleCount > 0 ? total : null,
+      distanceSampleCount: ev.distanceSampleCount + ice.distanceSampleCount,
+      unknownAssignments: ev.unknownAssignments + ice.unknownAssignments,
+      excludedPowertrainAssignments: sum(vehicles.filter(v => v.powertrain !== 'EV' && v.powertrain !== 'ICE').map(v => v.distanceSampleCount + v.unknownAssignments)),
+      evSharePercent: total > 0 ? ev.distanceKm / total * 100 : null, iceSharePercent: total > 0 ? ice.distanceKm / total * 100 : null,
       provenance: combineProvenance([ev.provenance, ice.provenance]) } };
 }
