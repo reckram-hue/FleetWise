@@ -1,3 +1,4 @@
+import { vehicleDescriptiveUpdate } from '../lib/vehicleFields';
 import { fuelEconomyStatus } from '../lib/fuelEconomy';
 /**
  * Firebase API Service
@@ -690,9 +691,8 @@ const api = {
   },
 
   updateVehicle: async (vehicleData: Vehicle): Promise<Vehicle> => {
-    const { id, ...updateData } = vehicleData;
-    await updateDoc(doc(db, COLLECTIONS.vehicles, id), { ...updateData, updatedAt: serverTimestamp() });
-    return vehicleData;
+    await updateDoc(doc(db, COLLECTIONS.vehicles, vehicleData.id), { ...vehicleDescriptiveUpdate(vehicleData), updatedAt: serverTimestamp() });
+    return (await api.getVehicle(vehicleData.id))!;
   },
 
   getVehicleStats: async (vehicleId: string): Promise<VehicleStats> => {
@@ -722,26 +722,17 @@ const api = {
   },
 
   // ==================== MAINTENANCE ====================
-  addMaintenanceRecord: async (recordData: Omit<MaintenanceRecord, 'id'>): Promise<MaintenanceRecord> => {
-    // Fetched up front (rather than after the write) so the same read can both determine
-    // test-data isolation and drive the existing lastServiceOdometer update below.
-    const vehicle = recordData.vehicleId ? await api.getVehicle(recordData.vehicleId) : null;
-    const isTestData = vehicle?.isTestData === true;
-
-    const newRecord = {
-      ...recordData,
-      isTestData,
-      createdAt: serverTimestamp()
-    };
-    const docRef = await addDoc(collection(db, COLLECTIONS.maintenanceRecords), newRecord);
-
-    // Update vehicle's last service odometer
-    if (vehicle && recordData.odometer > (vehicle.lastServiceOdometer || 0)) {
-      await api.updateVehicle({ ...vehicle, lastServiceOdometer: recordData.odometer });
-    }
-
-    return { id: docRef.id, ...recordData, isTestData } as MaintenanceRecord;
+  getMaintenanceRecords: async (vehicleId: string): Promise<MaintenanceRecord[]> => {
+    const snapshot = await getDocs(query(collection(db, COLLECTIONS.maintenanceRecords), where('vehicleId', '==', vehicleId)));
+    return snapshot.docs.map(d => convertTimestamps({ ...d.data(), id: d.id }) as MaintenanceRecord).sort((a,b) => b.date.localeCompare(a.date));
   },
+  addMaintenanceRecord: async (recordData: Omit<MaintenanceRecord, 'id'>, requestId: string): Promise<MaintenanceRecord> =>
+    convertTimestamps(await callFunction('addMaintenanceRecordAdmin', { ...recordData, requestId })) as MaintenanceRecord,
+  saveScheduledServiceAdmin: async (data: unknown): Promise<ScheduledService> => convertTimestamps(await callFunction('saveScheduledServiceAdmin', data)) as ScheduledService,
+  dispatchServiceAdmin: async (data: unknown): Promise<ScheduledService> => convertTimestamps(await callFunction('dispatchServiceAdmin', data)) as ScheduledService,
+  completeServiceAdmin: async (data: unknown): Promise<ScheduledService> => convertTimestamps(await callFunction('completeServiceAdmin', data)) as ScheduledService,
+  changeVehicleLifecycleAdmin: async (data: unknown): Promise<Vehicle> => convertTimestamps(await callFunction('changeVehicleLifecycleAdmin', data)) as Vehicle,
+  transitionDefectAdmin: async (data: unknown): Promise<DefectReport> => convertTimestamps(await callFunction('transitionDefectAdmin', data)) as DefectReport,
 
   // ==================== SHIFTS ====================
   getDriverShifts: async (driverId: string): Promise<Shift[]> => {
@@ -762,7 +753,7 @@ const api = {
     // Fetch all defects and filter in memory to avoid index requirement
     const snapshot = await getDocs(collection(db, COLLECTIONS.defects));
     const allDefects = snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as DefectReport);
-    return allDefects.filter(d => d.status !== DefectStatus.Resolved && d.isVisibleToDriver);
+    return allDefects.filter(d => d.status !== DefectStatus.Resolved && d.status !== DefectStatus.Duplicate && d.isVisibleToDriver);
   },
 
   getVehicleDefects: async (vehicleId: string): Promise<DefectReport[]> => {
@@ -781,42 +772,6 @@ const api = {
   getAllDefects: async (): Promise<DefectReport[]> => {
     const snapshot = await getDocs(collection(db, COLLECTIONS.defects));
     return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as DefectReport);
-  },
-
-  updateDefectReport: async (defectId: string, updateData: Partial<DefectReport>): Promise<DefectReport> => {
-    const defectRef = doc(db, COLLECTIONS.defects, defectId);
-    await updateDoc(defectRef, { ...updateData, updatedAt: serverTimestamp() });
-    const updatedDoc = await getDoc(defectRef);
-    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as DefectReport;
-  },
-
-  updateDefectStatus: async (defectId: string, status: DefectStatus, notes?: string): Promise<DefectReport> => {
-    const defectRef = doc(db, COLLECTIONS.defects, defectId);
-    const updateData: any = { status, updatedAt: serverTimestamp() };
-    if (notes !== undefined) updateData.notes = notes;
-    if (status === DefectStatus.Resolved) updateData.resolvedDateTime = serverTimestamp();
-    if (status === DefectStatus.Acknowledged) updateData.acknowledgedDateTime = serverTimestamp();
-    await updateDoc(defectRef, updateData);
-    const updatedDoc = await getDoc(defectRef);
-    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as DefectReport;
-  },
-
-  assignDefect: async (defectId: string, assignedTo: string, estimatedCost?: number): Promise<DefectReport> => {
-    const defectRef = doc(db, COLLECTIONS.defects, defectId);
-    const updateData: any = {
-      assignedTo,
-      status: DefectStatus.InProgress,
-      updatedAt: serverTimestamp(),
-    };
-    if (estimatedCost !== undefined) updateData.estimatedCost = estimatedCost;
-    await updateDoc(defectRef, updateData);
-    const updatedDoc = await getDoc(defectRef);
-    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as DefectReport;
-  },
-
-  deleteDefectReport: async (defectId: string): Promise<{ success: boolean }> => {
-    await deleteDoc(doc(db, COLLECTIONS.defects, defectId));
-    return { success: true };
   },
 
   // ==================== COSTS ====================
@@ -867,34 +822,6 @@ const api = {
   getScheduledServices: async (): Promise<ScheduledService[]> => {
     const snapshot = await getDocs(collection(db, COLLECTIONS.scheduledServices));
     return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }) as ScheduledService);
-  },
-
-  addScheduledService: async (serviceData: Omit<ScheduledService, 'id'>): Promise<ScheduledService> => {
-    const docRef = await addDoc(collection(db, COLLECTIONS.scheduledServices), serviceData);
-    return { id: docRef.id, ...serviceData } as ScheduledService;
-  },
-
-  updateScheduledService: async (serviceId: string, updateData: Partial<ScheduledService>): Promise<ScheduledService> => {
-    const serviceRef = doc(db, COLLECTIONS.scheduledServices, serviceId);
-    await updateDoc(serviceRef, { ...updateData, updatedAt: serverTimestamp() });
-    const updatedDoc = await getDoc(serviceRef);
-    return convertTimestamps({ id: updatedDoc.id, ...updatedDoc.data() }) as ScheduledService;
-  },
-
-  sendVehicleForService: async (serviceId: string, sentDate: string): Promise<void> => {
-    await api.updateScheduledService(serviceId, {
-      sentForService: true,
-      sentDate
-    });
-  },
-
-  returnVehicleFromService: async (serviceId: string, returnData: { returnDate: string; actualCost: number; serviceNotes: string }): Promise<void> => {
-    await api.updateScheduledService(serviceId, {
-      returnedFromService: true,
-      returnDate: returnData.returnDate,
-      actualCost: returnData.actualCost,
-      serviceNotes: returnData.serviceNotes
-    });
   },
 
   getServicesNeedingReminders: async (): Promise<ScheduledService[]> => {

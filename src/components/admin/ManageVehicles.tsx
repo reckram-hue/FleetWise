@@ -1,3 +1,4 @@
+import VehicleLifecycleActions from './VehicleLifecycleActions';
 import React, { useState, useEffect, useRef } from 'react';
 import { Vehicle, VehicleType, VehicleStatus, MaintenanceRecord, BodyStyle, FuelType, ServiceProvider } from '../../types';
 import api from '../../services/firebaseApi';
@@ -81,12 +82,23 @@ interface MaintenanceModalProps {
     onRecordAdded: (updatedVehicle: Vehicle) => void;
 }
 
-const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, onRecordAdded }) => {
+export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, onRecordAdded }) => {
     const [newRecord, setNewRecord] = useState<Omit<MaintenanceRecord, 'id' | 'vehicleId'>>({
         ...emptyRecord,
         odometer: vehicle.currentOdometer || 0,
     });
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [records, setRecords] = useState<MaintenanceRecord[]>([]);
+    const [historyError, setHistoryError] = useState('');
+    const [historyLoading, setHistoryLoading] = useState(true);
+    const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+    useEffect(() => {
+        let cancelled = false;
+        setHistoryLoading(true);
+        api.getMaintenanceRecords(vehicle.id).then(r => { if (!cancelled) setRecords(r); })
+            .catch(e => { if (!cancelled) setHistoryError(e.message); }).finally(() => { if (!cancelled) setHistoryLoading(false); });
+        return () => { cancelled = true; };
+    }, [vehicle.id]);
 
     useEffect(() => {
         setNewRecord(prev => ({ ...prev, odometer: vehicle.currentOdometer || 0 }));
@@ -100,30 +112,23 @@ const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, o
 
     const handleRecordSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!newRecord.serviceType || newRecord.cost < 0 || newRecord.odometer <= 0) {
-            alert("Please fill in all required fields: Service Type, Odometer, and a valid Cost.");
+        if (!newRecord.serviceType || !newRecord.notes?.trim() || newRecord.cost < 0 || newRecord.odometer < 0) {
+            alert("Enter the service type, work notes, odometer and a valid cost.");
             return;
         }
         setIsSubmitting(true);
         try {
             const recordData = { ...newRecord, vehicleId: vehicle.id };
-            const addedRecord = await api.addMaintenanceRecord(recordData);
-
-            const updatedHistory = [addedRecord, ...(vehicle.maintenanceHistory || [])];
-            updatedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-            const updatedVehicle = {
-                ...vehicle,
-                maintenanceHistory: updatedHistory,
-                lastServiceOdometer: Math.max(vehicle.lastServiceOdometer || 0, addedRecord.odometer)
-            };
-
+            await api.addMaintenanceRecord(recordData, requestId);
+            const [savedRecords, updatedVehicle] = await Promise.all([api.getMaintenanceRecords(vehicle.id), api.getVehicle(vehicle.id)]);
+            if (!updatedVehicle) throw Error('Vehicle could not be reloaded.');
+            setRecords(savedRecords); setHistoryError(''); setRequestId(crypto.randomUUID());
             onRecordAdded(updatedVehicle);
 
             setNewRecord({ ...emptyRecord, odometer: updatedVehicle.currentOdometer || 0 });
         } catch (error) {
             console.error("Failed to add maintenance record:", error);
-            alert("Error adding record.");
+            setHistoryError((error as Error).message || 'Error adding record.');
         } finally {
             setIsSubmitting(false);
         }
@@ -152,11 +157,11 @@ const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, o
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <input type="date" name="date" value={newRecord.date} onChange={handleRecordChange} className="p-2 border rounded" required />
                             <input name="serviceType" value={newRecord.serviceType} onChange={handleRecordChange} placeholder="Service Type (e.g., Oil Change)" className="p-2 border rounded" required />
-                            <input type="number" name="odometer" value={newRecord.odometer || ''} onChange={handleRecordChange} placeholder="Odometer (km)" className="p-2 border rounded" required />
+                            <input type="number" name="odometer" aria-label="Actual maintenance odometer (km)" min="0" step="any" value={newRecord.odometer} onChange={handleRecordChange} placeholder="Odometer (km)" className="p-2 border rounded" required />
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <input type="number" name="cost" value={newRecord.cost || ''} onChange={handleRecordChange} placeholder="Cost (R)" className="p-2 border rounded col-span-1" required />
-                            <textarea name="notes" value={newRecord.notes || ''} onChange={handleRecordChange} placeholder="Notes (optional)" className="p-2 border rounded md:col-span-2" rows={1}></textarea>
+                            <input type="number" name="cost" aria-label="Actual maintenance cost (R)" min="0" step="0.01" value={newRecord.cost} onChange={handleRecordChange} placeholder="Cost (R)" className="p-2 border rounded col-span-1" required />
+                            <textarea name="notes" value={newRecord.notes || ''} onChange={handleRecordChange} placeholder="Work completed / notes" required className="p-2 border rounded md:col-span-2" rows={1}></textarea>
                         </div>
                         <div className="flex justify-end">
                             <button type="submit" disabled={isSubmitting} className="bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600 transition disabled:bg-gray-400">
@@ -167,8 +172,11 @@ const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, o
                 </div>
 
                 <div className="flex-grow overflow-y-auto">
-                    <h4 className="text-lg font-semibold mb-2">History</h4>
-                    {(!vehicle.maintenanceHistory || vehicle.maintenanceHistory.length === 0) ? (
+                    <h4 className="text-lg font-semibold mb-2">History{vehicle.isTestData ? ' — TEST' : ''}</h4>
+                    {historyError && <p role="alert" className="text-red-800">{historyError}</p>}
+                    {historyLoading && <p>Loading saved maintenance…</p>}
+                    {!!vehicle.maintenanceHistory?.length && <details><summary>Legacy embedded history (reference only)</summary><p>Preserved historical reference; new records are loaded from saved maintenance records.</p>{vehicle.maintenanceHistory.map((r, i) => <p key={r.id || i}>{r.date} · {r.serviceType} · {r.odometer} km</p>)}</details>}
+                    {(!historyLoading && records.length === 0) ? (
                         <p className="text-gray-500">No maintenance records found.</p>
                     ) : (
                         <div className="overflow-x-auto border rounded-lg">
@@ -183,7 +191,7 @@ const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onClose, o
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-200">
-                                    {vehicle.maintenanceHistory.map(record => (
+                                    {records.map(record => (
                                         <tr key={record.id}>
                                             <td className="px-4 py-2 whitespace-nowrap text-sm">{record.date}</td>
                                             <td className="px-4 py-2 whitespace-nowrap text-sm font-medium">{record.serviceType}</td>
@@ -862,7 +870,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                             )}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Status</label>
-                                <select name="status" value={selectedVehicle.status || VehicleStatus.Active} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={!isEditMode}>
+                                <select name="status" value={selectedVehicle.status || VehicleStatus.Active} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled>
                                     <option value={VehicleStatus.Active}>Active</option>
                                     <option value={VehicleStatus.InService}>In Service</option>
                                     <option value={VehicleStatus.Repairs}>Repairs</option>
@@ -872,17 +880,18 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Status Date</label>
-                                <input type="date" name="statusDate" value={selectedVehicle.statusDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                                <input type="date" name="statusDate" value={selectedVehicle.statusDate || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={isEditing || !isEditMode} />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Status Notes</label>
-                                <input name="statusNotes" value={selectedVehicle.statusNotes || ''} onChange={handleFormChange} placeholder="Reason for status change, expected return date, etc." className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                                <input name="statusNotes" value={selectedVehicle.statusNotes || ''} onChange={handleFormChange} placeholder="Reason for status change, expected return date, etc." className="mt-1 p-2 border rounded w-full" disabled={isEditing || !isEditMode} />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">Current Odometer (km)</label>
-                                <input type="number" name="currentOdometer" value={selectedVehicle.currentOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={!isEditMode} />
+                                <input type="number" name="currentOdometer" value={selectedVehicle.currentOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={isEditing || !isEditMode} />
                             </div>
 
+                            {isEditing && 'id' in selectedVehicle && selectedVehicle.id && <div className="md:col-span-2"><VehicleLifecycleActions key={selectedVehicle.id} vehicle={selectedVehicle as Vehicle} onSaved={() => { closeForm(); fetchVehicles(); }} /></div>}
                             {/* Service Information - Available for all vehicle types */}
                             <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div>
@@ -891,7 +900,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700">Last Service Odo (km)</label>
-                                    <input type="number" name="lastServiceOdometer" value={selectedVehicle.lastServiceOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={!isEditMode} />
+                                    <input type="number" name="lastServiceOdometer" value={selectedVehicle.lastServiceOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" disabled={isEditing || !isEditMode} />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700">Free Services Until (km)</label>
@@ -1473,7 +1482,7 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                                     <button onClick={() => handleQRClick(vehicle)} className="text-purple-600 hover:text-purple-900" title="QR Code">
                                                         <QrCode size={16} />
                                                     </button>
-                                                    <button onClick={() => handleDeleteClick(vehicle.id)} className="text-red-600 hover:text-red-900" title="Delete">
+                                                    <button disabled onClick={() => handleDeleteClick(vehicle.id)} className="text-red-600 hover:text-red-900" title="Use Sold or End of Life in the lifecycle action">
                                                         <Trash2 size={16} />
                                                     </button>
                                                 </td>

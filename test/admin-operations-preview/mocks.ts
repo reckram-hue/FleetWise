@@ -1,3 +1,4 @@
+import { convertTimestamps } from '../../src/lib/convertTimestamps';
 // Local-only middleware computes reports from synthetic fixtures; no Firebase calls.
 export const economyApi = {
   get: async (period: '30' | '90' | 'ALL', includeTest: boolean) => {
@@ -34,4 +35,11 @@ export default new Proxy({ getVehicles: async () => [vehicle], getUsers: async (
   listChargingLocationsAdmin: async () => [{ id: 'test-charger', name: 'TEST company charger', active: true, tariffMethod: 'PER_KWH', tariffRate: 2.5 }],
   getScheduledServices: async () => [], getServicesNeedingReminders: async () => [], getVehiclesWithExpiredLicenses: async () => [],
   getVehicleDefectsForSession: async () => [], reportDefectWithSession: async () => ({ id: 'fixture-defect' }),
-}, { get: (target, key) => (target as any)[key] || (() => { throw Error('Unimplemented local fixture operation: ' + String(key)); }) });
+}, { get: (target, key) => {
+  const methods = ['getVehicles','getVehicle','getScheduledServices','getAllDefects','getActiveDefects','getServiceProviders','getMaintenanceRecords','addMaintenanceRecord','saveScheduledServiceAdmin','dispatchServiceAdmin','completeServiceAdmin','changeVehicleLifecycleAdmin','transitionDefectAdmin'];
+  if (new URLSearchParams(location.search).has('maintenance') && methods.includes(String(key))) return async (...args: unknown[]) => {
+    const r = await fetch('/__fixture/maintenance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method: key, args }) });
+    const data = await r.json(); if (!r.ok) throw Error(data.error); return convertTimestamps(data);
+  };
+  return (target as any)[key] || (() => { throw Error('Unimplemented local fixture operation: ' + String(key)); });
+} });

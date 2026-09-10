@@ -389,13 +389,15 @@ const StatusUpdateModal = ({
 }) => {
     const [status, setStatus] = useState<DefectStatus>(defect.status);
     const [notes, setNotes] = useState('');
+    const [requestId] = useState(() => crypto.randomUUID());
+    const [duplicateOf, setDuplicateOf] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsSubmitting(true);
         try {
-            await api.updateDefectStatus(defect.id, status, notes);
+            await api.transitionDefectAdmin({ defectId: defect.id, requestId, expectedStatus: defect.status, status, notes, ...(status === DefectStatus.Duplicate ? { duplicateOf } : {}) });
             onSave();
         } catch (error) {
             console.error('Failed to update defect status:', error);
@@ -423,6 +425,7 @@ const StatusUpdateModal = ({
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
+                    {status === DefectStatus.Duplicate && <label>Original defect reference<input required value={duplicateOf} onChange={e => setDuplicateOf(e.target.value)} className="block border p-2 w-full" /></label>}
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">New Status</label>
                         <select
@@ -444,7 +447,7 @@ const StatusUpdateModal = ({
                         <textarea
                             value={notes}
                             onChange={(e) => setNotes(e.target.value)}
-                            placeholder="Add notes about the status change..."
+                            required placeholder="Reason for status change (required)..."
                             className="w-full p-2 border border-gray-300 rounded-md h-24"
                         />
                     </div>
@@ -483,6 +486,7 @@ const AssignDefectModal = ({
 }) => {
     const [assignedTo, setAssignedTo] = useState('');
     const [estimatedCost, setEstimatedCost] = useState('');
+    const [requestId] = useState(() => crypto.randomUUID());
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -495,7 +499,7 @@ const AssignDefectModal = ({
         setIsSubmitting(true);
         try {
             const cost = estimatedCost ? parseFloat(estimatedCost) : undefined;
-            await api.assignDefect(defect.id, assignedTo, cost);
+            await api.transitionDefectAdmin({ defectId: defect.id, requestId, expectedStatus: defect.status, status: DefectStatus.InProgress, assignedTo, notes: 'Assigned for repair: ' + assignedTo, ...(cost !== undefined ? { estimatedCost: cost } : {}) });
             onSave();
         } catch (error) {
             console.error('Failed to assign defect:', error);

@@ -1,3 +1,4 @@
+import { createMaintenanceHandlers } from './maintenance';
 import { createDefectEvidenceHandler } from './defectEvidence';
 import { vehicleIdentitySnapshot } from './vehicleIdentity';
 import { createAccidentHandlers } from './accidentReports';
@@ -1957,6 +1958,10 @@ export const startShift = onMeasuredCall('startShift', async (data, context, per
         throw new functions.https.HttpsError('failed-precondition', 'Vehicle is already in use');
       }
 
+      if (txVehicleDoc.data()?.status !== 'Active' || txVehicleDoc.data()?.activeAssignmentId || txVehicleDoc.data()?.activeChargingSessionId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Vehicle is unavailable.');
+      }
+
       // Odometer continuity & discrepancy check
       const latestStoredOdometer = txVehicleDoc.data()?.currentOdometer;
       if (typeof startOdometer === 'number' && typeof latestStoredOdometer === 'number') {
@@ -2114,6 +2119,8 @@ export const reportDefectWithSession = onProdCall(async (data, context) => {
           || assignment.driverId !== driverId || assignment.vehicleId !== vehicleId || assignment.shiftId !== inspection.shiftId) {
           throw new functions.https.HttpsError('failed-precondition', 'Return inspection is no longer open for damage reporting.');
         }
+        await tx.get(vehicleDoc.ref);
+        tx.set(db.collection('vehicleMaintenanceLocks').doc(vehicleId), { revision: admin.firestore.FieldValue.increment(1) }, { merge: true });
         tx.create(defectRef, { ...defectData, sourceInspectionId: inspectionRef.id,
           assignmentId: inspection.assignmentId, shiftId: inspection.shiftId });
         tx.update(inspectionRef, { linkedDefectId: defectRef.id, hasDamage: true,
@@ -2122,7 +2129,12 @@ export const reportDefectWithSession = onProdCall(async (data, context) => {
         return defectRef.id;
       });
     } else {
-      await defectRef.set(defectData);
+      await db.runTransaction(async tx => {
+        const currentVehicle = await tx.get(vehicleDoc.ref);
+        if (!currentVehicle.exists) throw new functions.https.HttpsError('not-found', 'Vehicle no longer exists.');
+        tx.set(db.collection('vehicleMaintenanceLocks').doc(vehicleId), { revision: admin.firestore.FieldValue.increment(1) }, { merge: true });
+        tx.create(defectRef, defectData);
+      });
     }
 
     return {
@@ -3885,3 +3897,11 @@ export const getInspectionPhotoAdmin = onProdCall(inspectionHistory.getInspectio
 
 export const getFleetEconomySummaryAdmin = onProdCall(createEconomyHandler({ db, requireAdmin }));
 export const saveVehicleEvidenceReviewAdmin = onProdCall(createEvidenceReviewHandler({ db, requireAdmin }));
+
+const maintenanceHandlers = createMaintenanceHandlers({ db, requireAdmin });
+export const saveScheduledServiceAdmin = onProdCall(maintenanceHandlers.saveScheduledServiceAdmin);
+export const dispatchServiceAdmin = onProdCall(maintenanceHandlers.dispatchServiceAdmin);
+export const completeServiceAdmin = onProdCall(maintenanceHandlers.completeServiceAdmin);
+export const changeVehicleLifecycleAdmin = onProdCall(maintenanceHandlers.changeVehicleLifecycleAdmin);
+export const addMaintenanceRecordAdmin = onProdCall(maintenanceHandlers.addMaintenanceRecordAdmin);
+export const transitionDefectAdmin = onProdCall(maintenanceHandlers.transitionDefectAdmin);

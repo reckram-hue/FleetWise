@@ -164,6 +164,34 @@ describe('FleetWise canonical Firestore rules', () => {
     await assertFails(nonAdmin().collection('vehicles').doc('vehicle-1').update({ registration: 'HACK' }));
   });
 
+
+  test('maintenance commands and audit history cannot be bypassed by direct admin writes', async () => {
+    for (const collection of ['scheduledServices','maintenanceRecords','maintenanceOperations']) {
+      await assertFails(activeAdmin().collection(collection).doc('new').set({vehicleId:'vehicle-1'}));
+      await assertFails(activeAdmin().collection(collection).doc('service-1').delete());
+    }
+    await assertFails(activeAdmin().collection('defects').doc('defect-1').delete());
+    await assertFails(activeAdmin().collection('vehicles').doc('vehicle-1').delete());
+    await assertFails(activeAdmin().collection('vehicles').doc('vehicle-1').collection('history').doc('fake').set({to:'Active'}));
+  });
+  test('stale snapshots cannot replace server-owned vehicle fields; filtered edits preserve pointers', async () => {
+    const {createRequire}=require('node:module'), path=require('node:path'), ts=require('typescript'), Module=require('node:module');
+    const file=path.resolve('src/lib/vehicleFields.ts'), loaded=new Module(file,module);
+    loaded._compile(ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,file);
+    const filtered=loaded.exports.vehicleDescriptiveUpdate;
+    const stale={registration:'EDITED',activeAssignmentId:'old',activeShiftId:'old',activeChargingSessionId:'old',openChargingEventId:'old',status:'Active',currentOdometer:1,lastServiceOdometer:1};
+    const current={activeAssignmentId:'current-a',activeShiftId:'current-s',activeChargingSessionId:'current-c',openChargingEventId:'current-e',status:'In Service',currentOdometer:1500,lastServiceOdometer:1400};
+    await testEnv.withSecurityRulesDisabled(c => c.firestore().collection('vehicles').doc('vehicle-1').update(current));
+    for(const key of Object.keys(current)) await assertFails(activeAdmin().collection('vehicles').doc('vehicle-1').update({[key]:stale[key]}));
+    await assertFails(activeAdmin().collection('vehicles').doc('vehicle-1').set(stale));
+    await assertSucceeds(activeAdmin().collection('vehicles').doc('vehicle-1').update(filtered(stale)));
+    const saved=(await activeAdmin().collection('vehicles').doc('vehicle-1').get()).data();
+    require('node:assert/strict').equal(saved.registration,'EDITED');
+    for(const [key,value] of Object.entries(current)) require('node:assert/strict').equal(saved[key],value);
+    await assertFails(activeAdmin().collection('vehicles').doc('injected').set({status:'Active',activeShiftId:'fake'}));
+    await assertSucceeds(activeAdmin().collection('vehicles').doc('new-safe').set({status:'Active',registration:'TEST',currentOdometer:100,lastServiceOdometer:0}));
+  });
+
   test('E: active admin read vehicles -> ALLOW', async () => {
     await assertSucceeds(activeAdmin().collection('vehicles').doc('vehicle-1').get());
   });
@@ -214,8 +242,8 @@ describe('FleetWise canonical Firestore rules', () => {
     await assertFails(activeAdmin().collection('rateLimits').doc('limit-1').set({ attempts: 2 }));
   });
 
-  test('Q: admin defect update -> ALLOW', async () => {
-    await assertSucceeds(activeAdmin().collection('defects').doc('defect-1').update({ status: 'Acknowledged' }));
+  test('Q: admin defect transition bypass -> DENY', async () => {
+    await assertFails(activeAdmin().collection('defects').doc('defect-1').update({ status: 'Acknowledged' }));
   });
 
   test('R: non-admin defect update -> DENY', async () => {

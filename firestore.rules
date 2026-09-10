@@ -51,10 +51,35 @@ service cloud.firestore {
     // ---- vehicles ----
     // Direct driver/public reads are denied. Driver flows use the session-authenticated
     // listVehiclesForSession/getVehicleForSession callable bridge, which returns only a
-    // safe projection. Admin browser reads/writes remain direct via Firebase Auth.
+    // safe projection. Admin reads and descriptive edits use Firebase Auth; lifecycle writes use callables.
     match /vehicles/{vehicleId} {
       allow read: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly([
+          'registration', 'alias', 'make', 'model', 'year', 'vin', 'engineNumber', 'bodyStyle', 'colour', 'fuelType', 'vehicleType',
+          'batteryCapacityKwh', 'usableBatteryCapacityKWh', 'usableBatteryCapacitySource', 'serviceIntervalKm', 'freeServicesUntilKm',
+          'manufacturerFuelConsumption', 'manufacturerEnergyConsumption', 'baselineFuelConsumption', 'baselineEnergyConsumption', 'economyVarianceThreshold',
+          'financeCompany', 'financeAccountNumber', 'financeCost', 'financeEndDate', 'balloonPayment', 'financeContactName', 'financeContactEmail', 'financeContactPhone',
+          'insuranceCompany', 'insurancePolicyNumber', 'insuranceFee', 'insuranceContactName', 'insuranceContactEmail', 'insuranceContactPhone',
+          'trackingCompany', 'trackingAccountNumber', 'trackingFee', 'trackingContactName', 'trackingContactEmail', 'trackingContactPhone',
+          'warrantyInsurer', 'warrantyPolicyNumber', 'warrantyInceptionDate', 'warrantyExpiryDate', 'warrantyMileageTo', 'warrantyContactName', 'warrantyContactEmail', 'warrantyContactPhone',
+          'defaultServiceProviderId', 'warrantyServiceProviderId', 'licenseExpiryDate', 'licenseRenewalReminderDays', 'lastLicenseRenewalDate', 'licenseNumber', 'licenseDiscNumber', 'updatedAt', 'status', 'statusDate', 'statusNotes', 'currentOdometer', 'lastServiceOdometer', 'isTestData', 'createdAt'])
+        && request.resource.data.status == 'Active'
+        && request.resource.data.get('currentOdometer', 0) is number
+        && request.resource.data.get('currentOdometer', 0) >= 0
+        && request.resource.data.get('lastServiceOdometer', 0) is number
+        && request.resource.data.get('lastServiceOdometer', 0) >= 0
+        && request.resource.data.get('lastServiceOdometer', 0) <= request.resource.data.get('currentOdometer', 0);
+      allow update: if isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'registration', 'alias', 'make', 'model', 'year', 'vin', 'engineNumber', 'bodyStyle', 'colour', 'fuelType', 'vehicleType',
+          'batteryCapacityKwh', 'usableBatteryCapacityKWh', 'usableBatteryCapacitySource', 'serviceIntervalKm', 'freeServicesUntilKm',
+          'manufacturerFuelConsumption', 'manufacturerEnergyConsumption', 'baselineFuelConsumption', 'baselineEnergyConsumption', 'economyVarianceThreshold',
+          'financeCompany', 'financeAccountNumber', 'financeCost', 'financeEndDate', 'balloonPayment', 'financeContactName', 'financeContactEmail', 'financeContactPhone',
+          'insuranceCompany', 'insurancePolicyNumber', 'insuranceFee', 'insuranceContactName', 'insuranceContactEmail', 'insuranceContactPhone',
+          'trackingCompany', 'trackingAccountNumber', 'trackingFee', 'trackingContactName', 'trackingContactEmail', 'trackingContactPhone',
+          'warrantyInsurer', 'warrantyPolicyNumber', 'warrantyInceptionDate', 'warrantyExpiryDate', 'warrantyMileageTo', 'warrantyContactName', 'warrantyContactEmail', 'warrantyContactPhone',
+          'defaultServiceProviderId', 'warrantyServiceProviderId', 'licenseExpiryDate', 'licenseRenewalReminderDays', 'lastLicenseRenewalDate', 'licenseNumber', 'licenseDiscNumber', 'updatedAt']);
+      allow delete: if false;
     }
 
     // ---- shifts ----
@@ -67,17 +92,17 @@ service cloud.firestore {
 
     // ---- defects ----
     // Driver defect creation and visibility are server-mediated via session callables.
-    // Admin can still manage defects directly from the browser with Firebase Auth.
+    // Admin transitions use authenticated callables; direct evidence/status mutations are denied.
     match /defects/{defectId} {
       allow read: if isAdmin();
       allow create: if false;
-      allow update, delete: if isAdmin();
+      allow update, delete: if false;
     }
 
     // ---- admin-only operational collections ----
     match /costs/{id} { allow read, write: if isAdmin(); }
-    match /maintenanceRecords/{id} { allow read, write: if isAdmin(); }
-    match /scheduledServices/{id} { allow read, write: if isAdmin(); }
+    match /maintenanceRecords/{id} { allow read: if isAdmin(); allow write: if false; }
+    match /scheduledServices/{id} { allow read: if isAdmin(); allow write: if false; }
     match /driverFines/{id} { allow read, write: if isAdmin(); }
     match /vehicleDamages/{id} { allow read, write: if isAdmin(); }
     match /serviceProviders/{id} { allow read, write: if isAdmin(); }

@@ -89,6 +89,16 @@ export interface MaintenanceRecord {
 }
 
 export interface ScheduledService {
+    serviceProviderId?: string;
+    linkedDefectIds?: string[];
+    resolvedDefectIds?: string[];
+    revision?: number;
+    dispatchedAt?: Date;
+    completedAt?: Date;
+    releasedAt?: Date;
+    maintenanceRecordId?: string;
+    completionOdometer?: number;
+    isTestData?: boolean;
     id: string;
     vehicleId: string;
     serviceType: string;
@@ -110,6 +120,8 @@ export interface ScheduledService {
 }
 
 export interface Vehicle {
+    manualMaintenanceHold?: boolean;
+    unavailableSince?: Date | null;
     id: string;
     registration: string;
     alias?: string; // Friendly name/alias for the vehicle

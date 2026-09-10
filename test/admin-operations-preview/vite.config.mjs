@@ -1,3 +1,4 @@
+import { maintenanceFixture } from './maintenanceFixture.mjs';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +31,7 @@ const evidenceFixture = { name: 'local-evidence-fixture', configureServer(server
 } };
 const here = fileURLToPath(new URL('.', import.meta.url));
 export default defineConfig({
-  root: here, envDir: false, plugins: [react(), evidenceFixture],
+  root: here, envDir: false, plugins: [react(), evidenceFixture, maintenanceFixture()],
   resolve: { alias: [
     { find: /^.*\/services\/firebaseApi$/, replacement: here + 'mocks.ts' },
     { find: /^.*\/services\/inspectionApi$/, replacement: here + 'mocks.ts' },
