@@ -39,8 +39,20 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
   }
   async function idle(tx: FirebaseFirestore.Transaction, vehicleId: string, v: Row) {
     if (v.activeAssignmentId || v.activeShiftId || v.activeChargingSessionId || v.openChargingEventId) fail('Vehicle has custody or charging activity. Complete or recover that workflow first.');
-    const queries = await Promise.all(['vehicleAssignments', 'shifts', 'chargingSessions', 'chargingEvents'].map(c => tx.get(db.collection(c).where('vehicleId', '==', vehicleId))));
-    if (queries.some(q => q.docs.some(d => ['ACTIVE', 'Active', 'OPEN'].includes(d.data().status) || d.data().lifecycleStatus === 'OPEN'))) fail('Vehicle has an open custody or charging record.');
+    const [assignments, shifts, sessions, events] = await Promise.all(['vehicleAssignments', 'shifts', 'chargingSessions', 'chargingEvents'].map(c => tx.get(db.collection(c).where('vehicleId', '==', vehicleId))));
+    if ([assignments, sessions, events].some(q => q.docs.some(d => ['ACTIVE', 'Active', 'OPEN'].includes(d.data().status) || d.data().lifecycleStatus === 'OPEN'))) fail('Vehicle has an open custody or charging record.');
+    for (const shift of shifts.docs.filter(d => d.data().status === 'Active')) {
+      // A shift's original vehicleId is historical after a return/swap. Require
+      // affirmative completed custody evidence before disregarding that anchor.
+      const returned = assignments.docs.some(a => a.data().shiftId === shift.id && a.data().driverId === shift.data().driverId && a.data().status === 'COMPLETED' && a.data().endedAt);
+      if (!returned) fail('Active legacy shift has no verified return for this vehicle.');
+      if (shift.data().activeAssignmentId) {
+        const a = (await tx.get(db.collection('vehicleAssignments').doc(shift.data().activeAssignmentId))).data();
+        if (!a || a.status !== 'ACTIVE' || a.shiftId !== shift.id || a.driverId !== shift.data().driverId || a.vehicleId === vehicleId) fail('Shift custody pointers are inconsistent.');
+        const other = (await tx.get(db.collection('vehicles').doc(a.vehicleId))).data();
+        if (!other || other.activeAssignmentId !== shift.data().activeAssignmentId || other.activeShiftId !== shift.id) fail('Current assignment vehicle pointers are inconsistent.');
+      }
+    }
   }
   async function related(tx: FirebaseFirestore.Transaction, vehicleId: string) {
     await tx.get(db.collection('vehicleMaintenanceLocks').doc(vehicleId));
@@ -88,13 +100,74 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       if (typeof n === 'number' && Number.isFinite(n) && n > reading) fail('Actual odometer is lower than an existing historical reading. Review the evidence before completing work.');
     }
   }
+  async function manualOdometer(tx: FirebaseFirestore.Transaction, vehicleId: string, v: Row, day: string, reading: number) {
+    const today = new Date().toISOString().slice(0, 10), historical = day < today;
+    const eventDay = (value: any): string | null => {
+      if (value?.toDate) value = value.toDate();
+      if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.toISOString().slice(0, 10) : null;
+      if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(T.*)?$/.test(value) && Number.isFinite(Date.parse(value))) {
+        const day = new Date(value).toISOString().slice(0, 10);
+        return value.length === 10 && day !== value ? null : day;
+      }
+      return null;
+    };
+    for (const field of ['currentOdometer', 'lastServiceOdometer']) if (v[field] != null && (typeof v[field] !== 'number' || !Number.isFinite(v[field]) || v[field] < 0)) fail('Vehicle odometer baseline needs review.');
+    if (historical && (typeof v.currentOdometer !== 'number' || reading > v.currentOdometer)) fail('Historical maintenance cannot exceed the current odometer.');
+    if (!historical) validOdometer(v, reading);
+    const collections = ['vehicleAssignments', 'shifts', 'refuelRecords', 'maintenanceRecords', 'chargingSessions', 'chargingEvents'];
+    const records = await Promise.all(collections.map(c => tx.get(db.collection(c).where('vehicleId', '==', vehicleId))));
+    let newerService = false, unknownService = false;
+    records.forEach((q, i) => { for (const doc of q.docs) {
+      const d = doc.data();
+      // Assignment boundaries are authoritative for assignment-aware shifts;
+      // their multi-vehicle summary odometers cannot be attributed to the anchor.
+      if (collections[i] === 'shifts' && records[0].docs.some(a => a.data().shiftId === doc.id)) continue;
+      if (collections[i] === 'maintenanceRecords') {
+        const serviceDay = eventDay(d.date);
+        newerService ||= !!serviceDay && serviceDay >= day;
+        unknownService ||= !serviceDay;
+      }
+      const fields: [string, any][] = [['odometer', d.date], ['startOdometer', d.startedAt || d.startTime],
+        ['endOdometer', d.endedAt || d.endTime], ['returnOdometer', d.returnedAt], ['pickupOdometer', d.closedAt]];
+      for (const [field, time] of fields) {
+        const n = d[field]; if (n == null) continue;
+        if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) fail('Historical odometer evidence needs review.');
+        const at = eventDay(time);
+        if (!at) {
+          // An undated capture cannot be placed on either side. Equality is the
+          // only provable insertion; current-day captures must exceed all evidence.
+          if (historical ? n !== reading : n > reading) fail('Undated odometer evidence prevents a confident historical insertion.');
+        } else if ((at < day && n > reading) || (at > day && n < reading) || (!historical && at === day && n > reading)) fail('Maintenance odometer contradicts earlier or later dated evidence.');
+        // Date-only records have no intraday ordering. A same-day insertion is
+        // permitted; it cannot advance historical current/service state below.
+      }
+    }});
+    const serviceDay = eventDay(v.lastServiceDate);
+    if (serviceDay && typeof v.lastServiceOdometer === 'number' &&
+      ((serviceDay < day && v.lastServiceOdometer > reading) || (serviceDay > day && v.lastServiceOdometer < reading))) fail('Maintenance odometer contradicts the dated last-service baseline.');
+    const patch: Row = historical ? {} : { currentOdometer: Math.max(v.currentOdometer || 0, reading) };
+    if (!newerService && !unknownService && (!serviceDay || serviceDay < day) && reading >= (v.lastServiceOdometer || 0)) {
+      // Without a dated baseline an older event must not reinterpret service state.
+      if (!historical || serviceDay) Object.assign(patch, { lastServiceOdometer: reading, lastServiceDate: day });
+    }
+    return patch;
+  }
   function releaseBlockers(v: Row, services: FirebaseFirestore.QueryDocumentSnapshot[], defects: FirebaseFirestore.QueryDocumentSnapshot[], clearManualHold: boolean) {
     if (disposed(v)) fail('Sold or End of Life vehicles cannot be released.');
     if (services.some(d => sent(d.data()))) fail('Another dispatched service still requires completion.');
     const linked = new Set(services.filter(d => d.data().sentForService && !d.data().releasedAt).flatMap(d => d.data().linkedDefectIds || []));
-    if (defects.some(d => unresolved(d.data()) && (d.data().urgency === 'Critical' || linked.has(d.id)))) fail('An unresolved critical or service-linked defect prevents release.');
-    const knownServiceHold = services.some(d => d.data().sentForService && !d.data().releasedAt);
-    if ((v.manualMaintenanceHold || (!knownServiceHold && v.status !== 'Active')) && !clearManualHold) fail('Explicitly confirm the separate manual hold has been addressed before release.');
+    const byId = new Map(defects.map(d => [d.id, d.data()])), blockers = new Set<string>();
+    for (const d of defects) {
+      if (d.data().urgency !== 'Critical' && !linked.has(d.id)) continue;
+      let key = d.id, issue = d.data(); const seen = new Set<string>();
+      while (issue.status === 'Duplicate') {
+        if (seen.has(key) || !issue.duplicateOf || !byId.has(issue.duplicateOf)) fail('Duplicate safety evidence has a missing original or cycle. Review it before release.');
+        seen.add(key); key = issue.duplicateOf; issue = byId.get(key)!;
+      }
+      if (unresolved(issue)) blockers.add(key);
+    }
+    if (blockers.size) fail('An unresolved critical or service-linked defect prevents release.');
+    if ((v.manualMaintenanceHold || v.maintenanceHold?.source !== 'SERVICE') && v.status !== 'Active' && !clearManualHold) fail('Explicitly confirm the current manual or legacy hold has been addressed before release.');
   }
   const booking = z.object({ serviceId: id, vehicleId: id, serviceType: text, dueDate: date, dueOdometer: odo,
     bookedDate: date, bookedTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), serviceProviderId: id,
@@ -131,14 +204,19 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       if (!s.isBooked || !s.serviceProvider || s.sentForService || s.returnedFromService || disposed(v)) fail('Service must be booked and not previously dispatched/completed.');
       if (p.sentDate > new Date().toISOString().slice(0, 10)) fail('Actual dispatch date cannot be in the future.');
       await idle(tx, p.vehicleId, v);
-      const r = await related(tx, p.vehicleId);
-      const existingServiceHold = r.services.some(d => d.data().sentForService && !d.data().releasedAt);
+      await related(tx, p.vehicleId);
+      const hold = v.status !== 'Active' && v.maintenanceHold?.id ? v.maintenanceHold : {
+        id: hash(['DISPATCH', p.serviceId]), source: v.status === 'Active' ? 'SERVICE' : 'MANUAL',
+        sourceId: p.serviceId, reason: v.status === 'Active' ? `Sent for ${s.serviceType}` : v.statusNotes || 'Legacy unavailable state requires confirmation', setAt: stamp(),
+      };
       tx.update(ref, { sentForService: true, sentDate: p.sentDate, dispatchedAt: stamp(), dispatchedBy: actor,
+        holdId: hold.id,
         dispatchFingerprint: fingerprint, statusBeforeDispatch: v.status, isTestData: s.isTestData === true || v.isTestData === true, updatedAt: stamp() });
       advance(tx, vr, { status: 'In Service', statusDate: p.sentDate, statusNotes: `Sent for ${s.serviceType}`,
-        manualMaintenanceHold: v.manualMaintenanceHold === true || (v.status !== 'Active' && !existingServiceHold),
+        maintenanceHold: hold, lifecycleRevision: (v.lifecycleRevision || 0) + 1,
+        manualMaintenanceHold: v.manualMaintenanceHold === true || hold.source !== 'SERVICE',
         unavailableSince: v.unavailableSince || stamp() });
-      audit(tx, ref, 'DISPATCHED', actor, { vehicleId: p.vehicleId, previousStatus: v.status, sentDate: p.sentDate });
+      audit(tx, ref, 'DISPATCHED', actor, { vehicleId: p.vehicleId, previousStatus: v.status, sentDate: p.sentDate, holdId: hold.id, lifecycleRevision: (v.lifecycleRevision || 0) + 1 });
     });
     return dto(await ref.get());
   });
@@ -162,10 +240,15 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       const mr = db.collection('maintenanceRecords').doc(`service-${p.serviceId}`);
       if ((await tx.get(mr)).exists) fail('Maintenance history already exists without a matching completion. Review this record.');
       const isTestData = s.isTestData === true || v.isTestData === true;
+      // Completing legacy work establishes an explicit conservative hold. It
+      // never claims that the old dispatch explains a later unavailable state.
+      const hold = v.maintenanceHold?.id ? v.maintenanceHold : { id: hash(['LEGACY_COMPLETION', p.serviceId]),
+        source: 'MANUAL', sourceId: p.serviceId, reason: v.statusNotes || 'Confirm current legacy hold before release', setAt: stamp() };
       tx.create(mr, { vehicleId: p.vehicleId, serviceId: p.serviceId, date: p.returnDate, odometer: p.odometer, cost: p.actualCost,
         serviceType: s.serviceType, notes: p.serviceNotes, serviceProvider: s.serviceProvider, serviceProviderId: s.serviceProviderId || null,
         resolvedDefectIds: p.resolvedDefectIds, source: 'SERVICE_COMPLETION', isTestData, createdBy: actor, createdAt: stamp() });
       tx.update(ref, { returnedFromService: true, returnDate: p.returnDate, completedAt: stamp(), completedBy: actor,
+        holdId: s.holdId || hold.id,
         actualCost: p.actualCost, completionOdometer: p.odometer, serviceNotes: p.serviceNotes, resolvedDefectIds: p.resolvedDefectIds,
         maintenanceRecordId: mr.id, completionFingerprint: fingerprint, isTestData, updatedAt: stamp() });
       for (const d of defects) {
@@ -173,31 +256,42 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
           resolvedByServiceId: p.serviceId, maintenanceRecordId: mr.id, updatedAt: stamp() });
         audit(tx, d.ref, 'Resolved', actor, { from: d.data()!.status, serviceId: p.serviceId, maintenanceRecordId: mr.id, notes: p.serviceNotes });
       }
-      advance(tx, vr, { currentOdometer: p.odometer, lastServiceOdometer: p.odometer });
-      audit(tx, ref, 'WORK_COMPLETED', actor, { maintenanceRecordId: mr.id, resolvedDefectIds: p.resolvedDefectIds });
+      advance(tx, vr, { currentOdometer: p.odometer, lastServiceOdometer: p.odometer, lastServiceDate: p.returnDate,
+        maintenanceHold: hold, manualMaintenanceHold: v.manualMaintenanceHold === true || hold.source !== 'SERVICE', lifecycleRevision: (v.lifecycleRevision || 0) + 1 });
+      audit(tx, ref, 'WORK_COMPLETED', actor, { maintenanceRecordId: mr.id, resolvedDefectIds: p.resolvedDefectIds,
+        currentHoldId: hold.id, serviceHoldId: s.holdId || hold.id, lifecycleRevision: (v.lifecycleRevision || 0) + 1 });
     });
     return dto(await ref.get());
   });
   const changeVehicleLifecycleAdmin = wrap(z.object({ vehicleId: id, requestId: id,
     status: z.enum(['Active', 'In Service', 'Repairs', 'Sold', 'End of Life']), notes: text,
+    expectedLifecycleRevision: z.number().int().nonnegative(), expectedHoldId: id.nullable(), releaseServiceId: id.optional(),
     clearManualHold: z.boolean().default(false) }).strict(), async (p, actor) => {
     await db.runTransaction(async tx => {
       await authorize(tx, actor);
       const op = await operation(tx, 'LIFECYCLE', p.vehicleId, p.requestId, p, actor); if (op.saved) return;
       const { ref, data: v } = await vehicle(tx, p.vehicleId);
+      if (p.expectedLifecycleRevision !== (v.lifecycleRevision || 0) || p.expectedHoldId !== (v.maintenanceHold?.id || null)) fail('Vehicle hold changed. Reload and review the current hold before submitting a new request.');
       await idle(tx, p.vehicleId, v);
       if (disposed(v)) fail('Disposed vehicles cannot be reactivated or reinterpreted by this workflow.');
       const r = await related(tx, p.vehicleId);
       if (p.status === 'Active') {
+        if (p.releaseServiceId) {
+          const service = r.services.find(s => s.id === p.releaseServiceId)?.data();
+          if (!service?.returnedFromService || !service.holdId || service.holdId !== v.maintenanceHold?.id) fail('This service does not own the current hold. Review the current vehicle lifecycle; legacy holds require explicit confirmation there.');
+        }
         releaseBlockers(v, r.services, r.defects, p.clearManualHold);
-        for (const s of r.services.filter(d => d.data().returnedFromService && !d.data().releasedAt)) {
+        for (const s of r.services.filter(d => d.data().returnedFromService && !d.data().releasedAt && d.data().holdId && d.data().holdId === v.maintenanceHold?.id)) {
           tx.update(s.ref, { releasedAt: stamp(), releasedBy: actor, releaseNotes: p.notes, updatedAt: stamp() });
           audit(tx, s.ref, 'RELEASED', actor, { notes: p.notes, requestId: p.requestId });
         }
       } else if (['Sold', 'End of Life'].includes(p.status) && r.services.some(d => sent(d.data()))) fail('Complete outstanding dispatched services before disposal.');
       audit(tx, ref, 'LIFECYCLE', actor, { from: v.status, to: p.status, notes: p.notes,
+        previousHold: v.maintenanceHold || null, previousLifecycleRevision: v.lifecycleRevision || 0, lifecycleRevision: (v.lifecycleRevision || 0) + 1,
         unavailableSince: v.unavailableSince || null, clearManualHold: p.clearManualHold });
       advance(tx, ref, { status: p.status, statusDate: new Date().toISOString().slice(0, 10), statusNotes: p.notes,
+        lifecycleRevision: (v.lifecycleRevision || 0) + 1,
+        maintenanceHold: p.status === 'Active' ? null : { id: op.ref.id, source: 'MANUAL', sourceId: op.ref.id, reason: p.notes, setAt: stamp() },
         manualMaintenanceHold: p.status !== 'Active', unavailableSince: p.status === 'Active' ? null : v.unavailableSince || stamp(),
         ...(p.status === 'Active' ? { lastReleasedAt: stamp(), lastReleasedBy: actor } : {}) });
       saveOperation(tx, op, actor);
@@ -212,13 +306,12 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       const op = await operation(tx, 'MANUAL', actor, p.requestId, p, actor); if (op.saved) return;
       const { ref, data: v } = await vehicle(tx, p.vehicleId); await idle(tx, p.vehicleId, v);
       const r = await related(tx, p.vehicleId);
-      if (disposed(v) || r.services.some(d => d.data().sentForService && !d.data().releasedAt)) fail('Use the existing service completion workflow for this vehicle.');
+      if (disposed(v) || r.services.some(d => sent(d.data()) || (d.data().holdId && d.data().holdId === v.maintenanceHold?.id && !d.data().releasedAt))) fail('Use the existing service completion workflow for this vehicle.');
       if (p.date > new Date().toISOString().slice(0, 10)) fail('Maintenance date cannot be in the future.');
-      validOdometer(v, p.odometer);
-      await historicalOdometer(tx, p.vehicleId, p.odometer);
+      const odometerPatch = await manualOdometer(tx, p.vehicleId, v, p.date, p.odometer);
       const { requestId, ...record } = p;
       tx.create(mr, { ...record, source: 'MANUAL', isTestData: v.isTestData === true, createdBy: actor, createdAt: stamp() });
-      advance(tx, ref, { lastServiceOdometer: p.odometer, currentOdometer: p.odometer });
+      advance(tx, ref, odometerPatch);
       saveOperation(tx, op, actor);
     });
     return dto(await mr.get());
@@ -232,6 +325,7 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       const op = await operation(tx, 'DEFECT', p.defectId, p.requestId, p, actor); if (op.saved) return;
       const d = (await tx.get(ref)).data(); if (!d || d.status !== p.expectedStatus) fail('Defect changed. Reload before changing its status.');
       const { ref: vr } = await vehicle(tx, d.vehicleId);
+      if (d.status === 'Duplicate' && p.status === 'Resolved') fail('Resolve the effective original, or reopen this report before resolving it independently.');
       if (p.status === 'Duplicate') {
         if (!p.duplicateOf || p.duplicateOf === p.defectId) fail('Choose the original defect.');
         const original = (await tx.get(db.collection('defects').doc(p.duplicateOf))).data();
@@ -250,7 +344,8 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       if (p.status === 'Duplicate') patch.duplicateOf = p.duplicateOf;
       if (reopening) for (const field of ['resolvedBy', 'resolvedDateTime', 'resolutionNotes', 'resolvedByServiceId', 'maintenanceRecordId', 'duplicateOf']) patch[field] = FieldValue.delete();
       tx.update(ref, patch);
-      audit(tx, ref, reopening ? 'REOPENED' : p.status, actor, { from: d.status, to: p.status, notes: p.notes, previousServiceId: d.resolvedByServiceId || null });
+      audit(tx, ref, reopening ? 'REOPENED' : p.status, actor, { from: d.status, to: p.status, notes: p.notes, previousServiceId: d.resolvedByServiceId || null,
+        ...(p.status === 'Duplicate' ? { duplicateOf: p.duplicateOf, originalUrgency: d.urgency || null } : {}) });
       advance(tx, vr); saveOperation(tx, op, actor);
     });
     return dto(await ref.get());

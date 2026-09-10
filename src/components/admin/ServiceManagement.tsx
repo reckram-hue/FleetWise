@@ -12,7 +12,8 @@ export function serviceState(s: ScheduledService) {
 type Action = 'book' | 'dispatch' | 'complete' | 'release';
 type Form = { action: Action; requestId: string; serviceId: string; vehicleId: string; serviceType: string; dueDate: string;
   dueOdometer: string; bookedDate: string; bookedTime: string; serviceProviderId: string; notes: string; actualDate: string;
-  odometer: string; cost: string; linked: string[]; resolved: string[]; clearManualHold: boolean; expectedRevision: number };
+  odometer: string; cost: string; linked: string[]; resolved: string[]; clearManualHold: boolean; expectedRevision: number;
+  expectedLifecycleRevision: number; expectedHoldId: string | null; holdReason: string };
 const today = () => new Date().toISOString().slice(0, 10);
 export default function ServiceManagement({ onChanged }: { onChanged: () => void }) {
   const [services, setServices] = useState<ScheduledService[]>([]), [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -31,7 +32,10 @@ export default function ServiceManagement({ onChanged }: { onChanged: () => void
   const label = (id: string) => vehicles.find(v => v.id === id)?.registration || id;
   function open(action: Action, s?: ScheduledService) {
     setError(''); setNotice('');
+    const vehicle = vehicles.find(v => v.id === s?.vehicleId);
     setForm({ action, requestId: crypto.randomUUID(), serviceId: s?.id || crypto.randomUUID(), vehicleId: s?.vehicleId || '',
+      expectedLifecycleRevision: vehicle?.lifecycleRevision || 0, expectedHoldId: vehicle?.maintenanceHold?.id || null,
+      holdReason: vehicle?.maintenanceHold?.reason || vehicle?.statusNotes || 'Legacy hold: review and confirm the current condition in vehicle lifecycle.',
       serviceType: s?.serviceType || '', dueDate: s?.dueDate || today(), dueOdometer: s ? String(s.dueOdometer) : '',
       bookedDate: s?.bookedDate || today(), bookedTime: s?.bookedTime || '09:00', serviceProviderId: s?.serviceProviderId || providers.find(p => p.name === s?.serviceProvider)?.id || '',
       notes: action === 'book' ? s?.notes || '' : '', actualDate: today(), odometer: '', cost: '', linked: s?.linkedDefectIds || [], resolved: [], clearManualHold: false, expectedRevision: s?.revision || 0 });
@@ -47,7 +51,8 @@ export default function ServiceManagement({ onChanged }: { onChanged: () => void
       if (form.action === 'complete') await api.completeServiceAdmin({ serviceId: form.serviceId, vehicleId: form.vehicleId,
         returnDate: form.actualDate, odometer: Number(form.odometer), actualCost: Number(form.cost), serviceNotes: form.notes, resolvedDefectIds: form.resolved });
       if (form.action === 'release') await api.changeVehicleLifecycleAdmin({ vehicleId: form.vehicleId, requestId: form.requestId,
-        status: 'Active', notes: form.notes, clearManualHold: form.clearManualHold });
+        status: 'Active', notes: form.notes, clearManualHold: form.clearManualHold, releaseServiceId: form.serviceId,
+        expectedLifecycleRevision: form.expectedLifecycleRevision, expectedHoldId: form.expectedHoldId });
       setForm(null); setNotice('Saved.'); await reload(); onChanged();
     } catch (e: any) { setError(e.message || 'Could not save. Retry with the same details or reload the saved record.'); }
     finally { setBusy(false); }
@@ -92,7 +97,7 @@ export default function ServiceManagement({ onChanged }: { onChanged: () => void
       {form.action === 'complete' && <><p>Completion records work and cost. The vehicle remains unavailable until explicitly released.</p>
         <label className="block">Actual completion odometer (km)<input required type="number" min="0" step="any" value={form.odometer} onChange={e => patch({ odometer: e.target.value })} className="block border p-2" /></label>
         <label className="block">Actual cost (R)<input required type="number" min="0" step="0.01" value={form.cost} onChange={e => patch({ cost: e.target.value })} className="block border p-2" /></label></>}
-      {form.action === 'release' && <><p>All dispatched work and linked or critical defects must be resolved. Release applies to this vehicle and its completed services.</p>
+      {form.action === 'release' && <><p>Current hold: {form.holdReason}</p><p>All dispatched work and linked or critical defects must be resolved. This service must belong to the current hold. If the hold changes, cancel, refresh and review it again.</p>
         <label className="block"><input type="checkbox" checked={form.clearManualHold} onChange={e => patch({ clearManualHold: e.target.checked })} /> I also confirm any separate manual maintenance/repair hold has been addressed.</label></>}
       {form.action !== 'dispatch' && <label className="block">{form.action === 'complete' ? 'Completion notes' : form.action === 'release' ? 'Release reason' : 'Booking notes'}<textarea required={form.action !== 'book'} value={form.notes} onChange={e => patch({ notes: e.target.value })} className="block border p-2 w-full" /></label>}
       <button disabled={busy} className="bg-blue-600 text-white px-4 py-2 rounded">{busy ? 'Saving…' : 'Save service operation'}</button>

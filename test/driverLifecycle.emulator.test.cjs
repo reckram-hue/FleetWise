@@ -76,6 +76,28 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
     startChargePercent: 30, startPredictedRangeKm: 100, chargingLocationId: f.locationId, chargingType: 'COMPANY_AC' });
   const endCharge = (f, chargingSessionId) => f.call('endChargingSession', { chargingSessionId, endChargePercent: 80, endPredictedRangeKm: 300 });
 
+  test(`${backend}: maintenance dispatch follows actual custody through start A, return A, same-shift pickup B`, async () => {
+    const f=await fixture(), actor=id(), provider=id(), serviceId=id(), day=new Date().toISOString().slice(0,10);
+    await db.collection('users').doc(actor).set({role:'admin',employmentStatus:'Active'});
+    await db.collection('serviceProviders').doc(provider).set({name:'TEST workshop',isActive:true});
+    const adminCall=(name,p)=>api[name](p,{auth:{uid:actor}});
+    await adminCall('saveScheduledServiceAdmin',{serviceId,vehicleId:f.vehicleId,serviceType:'TEST repair',dueDate:day,dueOdometer:f.odo+1000,bookedDate:day,bookedTime:'09:00',serviceProviderId:provider,linkedDefectIds:[]});
+    const dispatch={serviceId,vehicleId:f.vehicleId,sentDate:day};
+    await expectCode(adminCall('dispatchServiceAdmin',dispatch));
+    await inspect(f,'PICKUP');const values=draft(f,{transitionReason:'VEHICLE_SWAP'});await inspect(f,'RETURN',values);await end(f,values);
+    const other=id();await db.collection('vehicles').doc(other).set({status:'Active',vehicleType:'EV',currentOdometer:1000,isTestData:true});
+    const next=await f.call('startVehicleAssignment',{shiftId:f.shiftId,vehicleId:other,startOdometer:1000,startChargePercent:80,startPredictedRangeKm:300,transitionReason:'VEHICLE_SWAP'});
+    const shift=await read('shifts',f.shiftId);assert.equal(shift.status,'Active');assert.equal(shift.vehicleId,f.vehicleId);assert.equal(shift.activeAssignmentId,next.assignmentId);
+    const returned=await read('vehicles',f.vehicleId);assert.equal(returned.activeAssignmentId,undefined);assert.equal(returned.activeShiftId,undefined);
+    await db.collection('shifts').doc(f.shiftId).update({activeAssignmentId:'missing-stale-assignment'});await expectCode(adminCall('dispatchServiceAdmin',dispatch));
+    await db.collection('shifts').doc(f.shiftId).update({activeAssignmentId:next.assignmentId});
+    await db.collection('vehicles').doc(f.vehicleId).update({activeShiftId:f.shiftId});await expectCode(adminCall('dispatchServiceAdmin',dispatch));
+    await db.collection('vehicles').doc(f.vehicleId).update({activeShiftId:FieldValue.delete()});
+    await adminCall('dispatchServiceAdmin',dispatch);
+    assert.equal((await read('vehicles',f.vehicleId)).status,'In Service');assert.equal((await read('vehicleAssignments',next.assignmentId)).status,'ACTIVE');
+    assert.equal((await read('vehicles',other)).activeAssignmentId,next.assignmentId);
+  });
+
   test(`${backend}: economy captures explicit usable capacity once and never promotes legacy capacity`, async () => {
     for (const explicit of [false, true]) {
       const f = await fixture(80000, true, explicit ? { usableBatteryCapacityKWh: 50, usableBatteryCapacitySource: 'Synthetic usable specification' } : {});

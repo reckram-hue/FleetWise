@@ -89,6 +89,7 @@ export interface MaintenanceRecord {
 }
 
 export interface ScheduledService {
+    holdId?: string;
     serviceProviderId?: string;
     linkedDefectIds?: string[];
     resolvedDefectIds?: string[];
@@ -121,6 +122,9 @@ export interface ScheduledService {
 
 export interface Vehicle {
     manualMaintenanceHold?: boolean;
+    lifecycleRevision?: number;
+    maintenanceHold?: { id: string; source: 'SERVICE' | 'MANUAL'; sourceId: string; reason: string; setAt: Date } | null;
+    lastServiceDate?: string;
     unavailableSince?: Date | null;
     id: string;
     registration: string;

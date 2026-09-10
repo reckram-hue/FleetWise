@@ -1,7 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {harness,nodes,text,button}=require('./uiHarness.cjs');
-const vehicle={id:'v',registration:'TEST SERVICE',status:'In Service',currentOdometer:1000,lastServiceOdometer:900,isTestData:true};
+const vehicle={id:'v',registration:'TEST SERVICE',status:'In Service',currentOdometer:1000,lastServiceOdometer:900,isTestData:true,lifecycleRevision:4,maintenanceHold:{id:'hold-a',source:'SERVICE',reason:'Reviewed workshop hold'}};
 const service={id:'s',vehicleId:'v',serviceType:'Oil service',dueDate:'2026-09-10',dueOdometer:2000,isBooked:true,sentForService:true,serviceProvider:'Workshop',linkedDefectIds:['d'],isTestData:true};
 const byLabel=(tree,label)=>nodes(tree,n=>n.type==='label' && text(n).trim().startsWith(label))[0];
 function input(tree,label,type='input') { const l=byLabel(tree,label); assert.ok(l,label); return nodes(l,n=>n.type===type)[0]; }
@@ -37,6 +37,7 @@ test('failed release retains request identity for a safe retry and shows blocker
   assert.match(text(b.render()),/Another dispatched service/);
   await nodes(b.render(),n=>n.type==='form')[0].props.onSubmit({preventDefault(){}});
   assert.equal(calls[0].requestId,calls[1].requestId);assert.equal(calls[0].clearManualHold,false);
+  assert.equal(calls[0].expectedLifecycleRevision,4);assert.equal(calls[0].expectedHoldId,'hold-a');assert.equal(calls[0].releaseServiceId,'s');
 });
 test('maintenance modal reads canonical history on fresh mount, ignoring stale local history as authority',async()=>{
   const record={id:'saved',vehicleId:'v',date:'2026-09-10',odometer:1100,serviceType:'Persisted workshop repair',cost:123,notes:'Saved notes'};
@@ -54,4 +55,24 @@ test('explicit lifecycle UI remains separate from descriptive save and surfaces 
   input(h.render(C,props),'Lifecycle reason').props.onChange({target:{value:'Release check'}});
   await button(h.render(C,props),'Apply lifecycle change').props.onClick();tree=h.render(C,props);
   assert.match(text(tree),/Outstanding linked defect/);assert.equal(calls[0].status,'Active');assert.equal(calls[0].clearManualHold,false);
+});
+
+test('lifecycle draft keeps the reviewed hold when parent data changes before FIRST submission',async()=>{
+  const calls=[];const h=harness({changeVehicleLifecycleAdmin:async p=>{calls.push(p);throw Error('Vehicle hold changed. Reload and review');}});
+  const C=h.load('src/components/admin/VehicleLifecycleActions.tsx').default,props={vehicle,onSaved(){}};
+  let tree=h.render(C,props);input(tree,'New lifecycle state','select').props.onChange({target:{value:'Active'}});
+  input(h.render(C,props),'Lifecycle reason').props.onChange({target:{value:'Approve reviewed hold A'}});
+  const newer={...props,vehicle:{...vehicle,lifecycleRevision:5,maintenanceHold:{id:'hold-b',reason:'New brakes'}}};
+  await button(h.render(C,newer),'Apply lifecycle change').props.onClick();
+  assert.equal(calls[0].expectedLifecycleRevision,4);assert.equal(calls[0].expectedHoldId,'hold-a');
+  assert.match(text(h.render(C,newer)),/Reviewed workshop hold/);assert.match(text(h.render(C,newer)),/Vehicle hold changed/);
+});
+
+test('service release refresh cannot silently rebind an open approval to a newer hold',async()=>{
+  let current=vehicle;const calls=[];const b=await board({...service,returnedFromService:true},{getVehicles:async()=>[current],changeVehicleLifecycleAdmin:async p=>{calls.push(p);throw Error('Vehicle hold changed');}});
+  button(b.render(),'Release vehicle').props.onClick();input(b.render(),'Release reason','textarea').props.onChange({target:{value:'Reviewed A'}});
+  current={...vehicle,lifecycleRevision:5,maintenanceHold:{id:'hold-b',reason:'New hold'}};
+  button(b.render(),'Refresh services').props.onClick();await b.h.settle();
+  await nodes(b.render(),n=>n.type==='form')[0].props.onSubmit({preventDefault(){}});
+  assert.equal(calls[0].expectedLifecycleRevision,4);assert.equal(calls[0].expectedHoldId,'hold-a');assert.match(text(b.render()),/Reviewed workshop hold/);
 });
