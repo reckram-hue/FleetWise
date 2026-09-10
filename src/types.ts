@@ -440,6 +440,7 @@ export enum DefectStatus {
 }
 
 export interface DefectReport {
+    defectRevision?: number;
     vehicleRegistrationSnapshot?: string | null;
     vehicleDisplayNameSnapshot?: string | null;
     sourceInspectionId?: string;

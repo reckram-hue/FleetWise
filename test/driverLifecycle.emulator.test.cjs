@@ -75,6 +75,32 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
   const charge = f => f.call('startChargingSession', { assignmentId: f.assignmentId, startOdometer: f.odo + 50,
     startChargePercent: 30, startPredictedRangeKm: 100, chargingLocationId: f.locationId, chargingType: 'COMPANY_AC' });
   const endCharge = (f, chargingSessionId) => f.call('endChargingSession', { chargingSessionId, endChargePercent: 80, endPredictedRangeKm: 300 });
+  async function newDriver() {
+    const driverId=id();await db.collection('users').doc(driverId).set({role:'driver',employmentStatus:'Active',isTestData:true,pinHash:await req('bcryptjs').hash('2468',4)});
+    const login=await api.driverLogin({driverId,pin:'2468',deviceId:'TEST-reuse'},{});
+    return (name,p)=>api[name]({driverId,sessionToken:login.sessionToken,...p},{});
+  }
+  test(`${backend}: new driver starts returned A while original shift continues B; current blockers remain protected`,async()=>{
+    const f=await fixture(),driver2=await newDriver();const start={vehicleId:f.vehicleId,startOdometer:f.odo+100,startChargePercent:40};
+    await expectCode(driver2('startShift',start));
+    await inspect(f,'PICKUP');const values=draft(f,{transitionReason:'VEHICLE_SWAP'});await inspect(f,'RETURN',values);await end(f,values);
+    const b=id();await db.collection('vehicles').doc(b).set({status:'Active',vehicleType:'EV',currentOdometer:1000,isTestData:true});
+    const next=await f.call('startVehicleAssignment',{shiftId:f.shiftId,vehicleId:b,startOdometer:1000,startChargePercent:80,startPredictedRangeKm:300,transitionReason:'VEHICLE_SWAP'});
+    for(const status of ['In Service','Repairs']) {await db.collection('vehicles').doc(f.vehicleId).update({status});await expectCode(driver2('startShift',start));}await db.collection('vehicles').doc(f.vehicleId).update({status:'Active'});
+    for(const field of ['activeAssignmentId','activeShiftId','activeChargingSessionId','openChargingEventId']) {await db.collection('vehicles').doc(f.vehicleId).update({[field]:'missing-stale'});await expectCode(driver2('startShift',start));await db.collection('vehicles').doc(f.vehicleId).update({[field]:FieldValue.delete()});}
+    await db.collection('shifts').doc(f.shiftId).update({activeAssignmentId:'missing-stale'});await expectCode(driver2('startShift',start));await db.collection('shifts').doc(f.shiftId).update({activeAssignmentId:next.assignmentId});
+    const orphan=db.collection('chargingSessions').doc(id());await orphan.set({vehicleId:f.vehicleId,status:'OPEN',isTestData:true});await expectCode(driver2('startShift',start));await orphan.update({status:'CLOSED'});
+    await orphan.update({lifecycleStatus:'OPEN'});await expectCode(driver2('startShift',start));await orphan.update({lifecycleStatus:'CLOSED'});
+    const orphanEvent=db.collection('chargingEvents').doc(id());await orphanEvent.set({vehicleId:f.vehicleId,status:'OPEN',isTestData:true});await expectCode(driver2('startShift',start));await orphanEvent.update({status:'CLOSED'});
+    const {shiftId}=await driver2('startShift',start);assert.ok(shiftId);assert.equal((await read('vehicles',f.vehicleId)).activeShiftId,shiftId);assert.equal((await read('vehicles',b)).activeAssignmentId,next.assignmentId);
+    const pickup=await driver2('startVehicleAssignment',{...start,shiftId,startPredictedRangeKm:150,transitionReason:'SHIFT_START'});assert.ok(pickup.assignmentId);
+  });
+  test(`${backend}: startShift preserves valid return-charging event until actual pickup`,async()=>{
+    const f=await fixture();await inspect(f,'PICKUP');const values=draft(f,{leftForCharging:true,chargingLocationId:f.locationId,transitionReason:'VEHICLE_SWAP'});await inspect(f,'RETURN',values);await end(f,values);
+    const eventId=(await read('vehicles',f.vehicleId)).openChargingEventId;assert.ok(eventId);const driver2=await newDriver(),start={vehicleId:f.vehicleId,startOdometer:f.odo+100,startChargePercent:40};
+    const {shiftId}=await driver2('startShift',start);assert.equal((await read('vehicles',f.vehicleId)).openChargingEventId,eventId);assert.equal((await read('chargingEvents',eventId)).lifecycleStatus,'OPEN');
+    await driver2('startVehicleAssignment',{...start,shiftId,startPredictedRangeKm:150,transitionReason:'SHIFT_START'});assert.equal((await read('chargingEvents',eventId)).lifecycleStatus,'CLOSED');assert.equal((await read('vehicles',f.vehicleId)).openChargingEventId,undefined);
+  });
 
   test(`${backend}: maintenance dispatch follows actual custody through start A, return A, same-shift pickup B`, async () => {
     const f=await fixture(), actor=id(), provider=id(), serviceId=id(), day=new Date().toISOString().slice(0,10);
@@ -140,6 +166,7 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
     const [one, two] = await Promise.all([f.call('reportDefectWithSession', payload), f.call('reportDefectWithSession', payload)]);
     assert.equal(one.defectId, two.defectId);
     const defect = await read('defects', one.defectId);
+    assert.equal(defect.defectRevision,0);
     for (const key of ['driverId', 'vehicleId', 'shiftId', 'assignmentId']) assert.equal(defect[key], f[key]);
     assert.equal(defect.sourceInspectionId, inspectionId); assert.equal(defect.photos, undefined);
     await expectCode(f.call('completeVehicleInspection', { inspectionId, hasDamage: false }));

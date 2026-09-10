@@ -29,6 +29,27 @@ test('completion starts actual odometer/cost blank and resolves only selected ex
   input(b.render(),'Completion notes','textarea').props.onChange({target:{value:'Completed actual work'}});
   await nodes(b.render(),n=>n.type==='form')[0].props.onSubmit({preventDefault(){}});
   assert.equal(calls.length,1);assert.equal(calls[0].odometer,1100);assert.equal(calls[0].actualCost,0);assert.deepEqual(calls[0].resolvedDefectIds,[]);
+  assert.deepEqual(calls[0].expectedDefectRevisions,{});
+});
+
+test('completion draft retains reviewed defect revisions and displayed evidence across refresh before FIRST submission',async()=>{
+  let current={id:'d',vehicleId:'v',status:'Open',urgency:'Critical',description:'Reviewed brake fault',defectRevision:7};const calls=[];
+  const b=await board(service,{getAllDefects:async()=>[current],completeServiceAdmin:async p=>{calls.push(p);throw Error('Selected defect changed');}});
+  button(b.render(),'Complete work').props.onClick();input(b.render(),'Reviewed brake fault').props.onChange({target:{checked:true}});
+  current={...current,defectRevision:9,description:'Later reopened brake fault'};button(b.render(),'Refresh services').props.onClick();await b.h.settle();
+  assert.match(text(b.render()),/Reviewed brake fault/);assert.ok(!text(b.render()).includes('Later reopened brake fault'));
+  input(b.render(),'Actual completion odometer').props.onChange({target:{value:'1100'}});input(b.render(),'Actual cost').props.onChange({target:{value:'10'}});input(b.render(),'Completion notes','textarea').props.onChange({target:{value:'Reviewed repair'}});
+  await nodes(b.render(),n=>n.type==='form')[0].props.onSubmit({preventDefault(){}});assert.deepEqual(calls[0].expectedDefectRevisions,{d:7});assert.match(text(b.render()),/Selected defect changed/);
+});
+
+for(const name of ['StatusUpdateModal','AssignDefectModal']) test(`${name} retains reviewed revision across parent refresh`,async()=>{
+  const calls=[];const h=harness({transitionDefectAdmin:async p=>{calls.push(p);}}),C=h.load('src/components/admin/ManageDefects.tsx')[name];
+  const defect={id:'d',vehicleId:'v',status:'Open',urgency:'Critical',description:'Brake fault',reportedDateTime:new Date(),defectRevision:4},props={defect,onClose(){},onSave(){}};
+  const tree=h.render(C,props);
+  if(name==='StatusUpdateModal') {nodes(tree,n=>n.type==='select')[0].props.onChange({target:{value:'Resolved'}});nodes(tree,n=>n.type==='textarea')[0].props.onChange({target:{value:'Reviewed original condition'}});}
+  else nodes(tree,n=>n.type==='input'&&n.props.type==='text')[0].props.onChange({target:{value:'TEST technician'}});
+  const updated={...props,defect:{...defect,defectRevision:6}};await nodes(h.render(C,updated),n=>n.type==='form')[0].props.onSubmit({preventDefault(){}});
+  assert.equal(calls[0].expectedDefectRevision,4);assert.equal(calls[0].expectedStatus,'Open');
 });
 test('failed release retains request identity for a safe retry and shows blocker error',async()=>{
   const calls=[];const b=await board({...service,returnedFromService:true},{changeVehicleLifecycleAdmin:async p=>{calls.push(p);throw Error('Another dispatched service requires completion');}});

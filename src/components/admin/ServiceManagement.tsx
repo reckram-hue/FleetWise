@@ -13,7 +13,7 @@ type Action = 'book' | 'dispatch' | 'complete' | 'release';
 type Form = { action: Action; requestId: string; serviceId: string; vehicleId: string; serviceType: string; dueDate: string;
   dueOdometer: string; bookedDate: string; bookedTime: string; serviceProviderId: string; notes: string; actualDate: string;
   odometer: string; cost: string; linked: string[]; resolved: string[]; clearManualHold: boolean; expectedRevision: number;
-  expectedLifecycleRevision: number; expectedHoldId: string | null; holdReason: string };
+  expectedLifecycleRevision: number; expectedHoldId: string | null; holdReason: string; reviewedDefects: DefectReport[] };
 const today = () => new Date().toISOString().slice(0, 10);
 export default function ServiceManagement({ onChanged }: { onChanged: () => void }) {
   const [services, setServices] = useState<ScheduledService[]>([]), [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -34,6 +34,7 @@ export default function ServiceManagement({ onChanged }: { onChanged: () => void
     setError(''); setNotice('');
     const vehicle = vehicles.find(v => v.id === s?.vehicleId);
     setForm({ action, requestId: crypto.randomUUID(), serviceId: s?.id || crypto.randomUUID(), vehicleId: s?.vehicleId || '',
+      reviewedDefects: defects.filter(d => d.vehicleId === s?.vehicleId).map(d => ({ ...d })),
       expectedLifecycleRevision: vehicle?.lifecycleRevision || 0, expectedHoldId: vehicle?.maintenanceHold?.id || null,
       holdReason: vehicle?.maintenanceHold?.reason || vehicle?.statusNotes || 'Legacy hold: review and confirm the current condition in vehicle lifecycle.',
       serviceType: s?.serviceType || '', dueDate: s?.dueDate || today(), dueOdometer: s ? String(s.dueOdometer) : '',
@@ -49,7 +50,8 @@ export default function ServiceManagement({ onChanged }: { onChanged: () => void
         bookedTime: form.bookedTime, serviceProviderId: form.serviceProviderId, notes: form.notes, linkedDefectIds: form.linked, expectedRevision: form.expectedRevision });
       if (form.action === 'dispatch') await api.dispatchServiceAdmin({ serviceId: form.serviceId, vehicleId: form.vehicleId, sentDate: form.actualDate });
       if (form.action === 'complete') await api.completeServiceAdmin({ serviceId: form.serviceId, vehicleId: form.vehicleId,
-        returnDate: form.actualDate, odometer: Number(form.odometer), actualCost: Number(form.cost), serviceNotes: form.notes, resolvedDefectIds: form.resolved });
+        returnDate: form.actualDate, odometer: Number(form.odometer), actualCost: Number(form.cost), serviceNotes: form.notes, resolvedDefectIds: form.resolved,
+        expectedDefectRevisions: Object.fromEntries(form.resolved.map(id => [id, form.reviewedDefects.find(d => d.id === id)?.defectRevision ?? 0])) });
       if (form.action === 'release') await api.changeVehicleLifecycleAdmin({ vehicleId: form.vehicleId, requestId: form.requestId,
         status: 'Active', notes: form.notes, clearManualHold: form.clearManualHold, releaseServiceId: form.serviceId,
         expectedLifecycleRevision: form.expectedLifecycleRevision, expectedHoldId: form.expectedHoldId });
@@ -90,7 +92,7 @@ export default function ServiceManagement({ onChanged }: { onChanged: () => void
         <label>Workshop<select required value={form.serviceProviderId} onChange={e => patch({ serviceProviderId: e.target.value })} className="block border p-2"><option value="">Select workshop</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
       </div> : <p>{label(form.vehicleId)}</p>}
       {(form.action === 'book' || form.action === 'complete') && <fieldset><legend>{form.action === 'book' ? 'Defects addressed by this service' : 'Explicitly resolve repaired defects'}</legend>
-        {defects.filter(d => d.vehicleId === form.vehicleId && !['Resolved','Duplicate'].includes(d.status) && (form.action === 'book' || form.linked.includes(d.id))).map(d => {
+        {(form.action === 'complete' ? form.reviewedDefects : defects).filter(d => d.vehicleId === form.vehicleId && !['Resolved','Duplicate'].includes(d.status) && (form.action === 'book' || form.linked.includes(d.id))).map(d => {
           const key = form.action === 'book' ? 'linked' : 'resolved'; return <label className="block" key={d.id}><input type="checkbox" checked={form[key].includes(d.id)} onChange={e => patch({ [key]: e.target.checked ? [...form[key], d.id] : form[key].filter(id => id !== d.id) })} /> {d.description} ({d.urgency})</label>;
         })}</fieldset>}
       {(form.action === 'dispatch' || form.action === 'complete') && <label className="block">Actual {form.action === 'dispatch' ? 'dispatch' : 'completion'} date<input required type="date" max={today()} value={form.actualDate} onChange={e => patch({ actualDate: e.target.value })} className="block border p-2" /></label>}

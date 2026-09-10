@@ -378,7 +378,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
 };
 
 // Status Update Modal Component
-const StatusUpdateModal = ({
+export const StatusUpdateModal = ({
     defect,
     onClose,
     onSave
@@ -388,6 +388,7 @@ const StatusUpdateModal = ({
     onSave: () => void;
 }) => {
     const [status, setStatus] = useState<DefectStatus>(defect.status);
+    const [reviewed] = useState({ status: defect.status, revision: defect.defectRevision ?? 0 });
     const [notes, setNotes] = useState('');
     const [requestId] = useState(() => crypto.randomUUID());
     const [duplicateOf, setDuplicateOf] = useState('');
@@ -397,11 +398,11 @@ const StatusUpdateModal = ({
         e.preventDefault();
         setIsSubmitting(true);
         try {
-            await api.transitionDefectAdmin({ defectId: defect.id, requestId, expectedStatus: defect.status, status, notes, ...(status === DefectStatus.Duplicate ? { duplicateOf } : {}) });
+            await api.transitionDefectAdmin({ defectId: defect.id, requestId, expectedStatus: reviewed.status, expectedDefectRevision: reviewed.revision, status, notes, ...(status === DefectStatus.Duplicate ? { duplicateOf } : {}) });
             onSave();
         } catch (error) {
             console.error('Failed to update defect status:', error);
-            alert('Error updating defect status.');
+            alert((error as Error).message || 'Error updating defect status.');
         } finally {
             setIsSubmitting(false);
         }
@@ -475,7 +476,7 @@ const StatusUpdateModal = ({
 };
 
 // Assignment Modal Component
-const AssignDefectModal = ({
+export const AssignDefectModal = ({
     defect,
     onClose,
     onSave
@@ -485,6 +486,7 @@ const AssignDefectModal = ({
     onSave: () => void;
 }) => {
     const [assignedTo, setAssignedTo] = useState('');
+    const [reviewed] = useState({ status: defect.status, revision: defect.defectRevision ?? 0 });
     const [estimatedCost, setEstimatedCost] = useState('');
     const [requestId] = useState(() => crypto.randomUUID());
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -499,7 +501,7 @@ const AssignDefectModal = ({
         setIsSubmitting(true);
         try {
             const cost = estimatedCost ? parseFloat(estimatedCost) : undefined;
-            await api.transitionDefectAdmin({ defectId: defect.id, requestId, expectedStatus: defect.status, status: DefectStatus.InProgress, assignedTo, notes: 'Assigned for repair: ' + assignedTo, ...(cost !== undefined ? { estimatedCost: cost } : {}) });
+            await api.transitionDefectAdmin({ defectId: defect.id, requestId, expectedStatus: reviewed.status, expectedDefectRevision: reviewed.revision, status: DefectStatus.InProgress, assignedTo, notes: 'Assigned for repair: ' + assignedTo, ...(cost !== undefined ? { estimatedCost: cost } : {}) });
             onSave();
         } catch (error) {
             console.error('Failed to assign defect:', error);

@@ -36,7 +36,7 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
     const defectIds = [];
     for (const urgency of linked) { const id = uid(); defectIds.push(id); await db.collection('defects').doc(id).set({ vehicleId, status: 'Open', urgency, description: 'Original statement', photos: ['unchanged-evidence'], isVisibleToDriver: true }); }
     const booking = { serviceId, vehicleId, serviceType: 'Actual service', dueDate: day, dueOdometer: 2000, bookedDate: day, bookedTime: '09:00', serviceProviderId: provider, notes: '', linkedDefectIds: defectIds };
-    const savedLifecycle = new Map();
+    const savedLifecycle = new Map(), savedDefects = new Map(), savedCompletions = new Map();
     const call = async (name,p) => {
       // Existing workflow tests open a fresh review per call. Concurrency tests
       // below supply explicit snapshots and bypass this convenience entirely.
@@ -44,8 +44,14 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
         const v = await get('vehicles',vehicleId);
         p = { ...p, ...(savedLifecycle.get(p.requestId) || { expectedLifecycleRevision:v.lifecycleRevision || 0, expectedHoldId:v.maintenanceHold?.id || null }) };
       }
+      // Legacy regression cases simulate freshly opened dialogs; freshness cases
+      // explicitly supply their reviewed versions and never use these defaults.
+      if(name==='transitionDefectAdmin' && p.expectedDefectRevision===undefined) p={...p,expectedDefectRevision:savedDefects.get(p.requestId) ?? (await get('defects',p.defectId))?.defectRevision ?? 0};
+      if(name==='completeServiceAdmin' && p.expectedDefectRevisions===undefined) p={...p,expectedDefectRevisions:savedCompletions.get(p.serviceId) || Object.fromEntries(await Promise.all(p.resolvedDefectIds.map(async id=>[id,(await get('defects',id))?.defectRevision ?? 0])))};
       const result = await api[name](p,{ auth: { uid: actor } });
       if(name === 'changeVehicleLifecycleAdmin') savedLifecycle.set(p.requestId,{expectedLifecycleRevision:p.expectedLifecycleRevision,expectedHoldId:p.expectedHoldId});
+      if(name==='transitionDefectAdmin')savedDefects.set(p.requestId,p.expectedDefectRevision);
+      if(name==='completeServiceAdmin')savedCompletions.set(p.serviceId,p.expectedDefectRevisions);
       return result;
     };
     await call('saveScheduledServiceAdmin',booking);
@@ -56,6 +62,59 @@ for (const backend of ['functions', 'functions-prod-jhb']) {
   }
   const run = (name, fn) => test(`${backend}: ${name}`, fn);
   const review = async f => { const v=await get('vehicles',f.vehicleId); return {expectedLifecycleRevision:v.lifecycleRevision || 0,expectedHoldId:v.maintenanceHold?.id || null}; };
+  run('stale FIRST completion cannot resolve a reopened Critical generation; fresh completion and replay remain safe',async()=>{
+    const f=await fixture({},['Critical']);const d=f.defectIds[0];await f.call('dispatchServiceAdmin',f.dispatch);
+    const stale={...f.complete,expectedDefectRevisions:{[d]:0}};
+    await f.call('transitionDefectAdmin',{defectId:d,requestId:uid(),expectedStatus:'Open',expectedDefectRevision:0,status:'Resolved',notes:'Initial repair'});
+    await f.call('transitionDefectAdmin',{defectId:d,requestId:uid(),expectedStatus:'Resolved',expectedDefectRevision:1,status:'Open',notes:'Brake failure returned'});
+    await deny(f.call('completeServiceAdmin',stale));assert.equal((await get('defects',d)).defectRevision,2);assert.equal((await get('defects',d)).status,'Open');
+    assert.equal((await db.collection('maintenanceRecords').where('vehicleId','==',f.vehicleId).get()).size,0);
+    await deny(f.call('changeVehicleLifecycleAdmin',f.release));
+    const fresh={...stale,expectedDefectRevisions:{[d]:2}};await f.call('completeServiceAdmin',fresh);await f.call('completeServiceAdmin',fresh);assert.equal((await get('defects',d)).defectRevision,3);
+    await f.call('transitionDefectAdmin',{defectId:d,requestId:uid(),expectedStatus:'Resolved',expectedDefectRevision:3,status:'Open',notes:'Independent subsequent failure'});
+    await f.call('completeServiceAdmin',fresh);assert.equal((await get('defects',d)).defectRevision,4);assert.equal((await get('defects',d)).status,'Open');await deny(f.call('changeVehicleLifecycleAdmin',f.release));
+  });
+  run('stale FIRST direct resolution rejects Open-Resolved-Open and missing reviewed revisions reject',async()=>{
+    const f=await fixture({},['Critical']);const d=f.defectIds[0],stale={defectId:d,requestId:uid(),expectedStatus:'Open',expectedDefectRevision:0,status:'Resolved',notes:'Original assessment'};
+    await f.call('transitionDefectAdmin',{...stale,requestId:uid()});await f.call('transitionDefectAdmin',{...stale,requestId:uid(),expectedStatus:'Resolved',expectedDefectRevision:1,status:'Open',notes:'New failure'});
+    await deny(f.call('transitionDefectAdmin',stale));const fresh={...stale,expectedDefectRevision:2};await f.call('transitionDefectAdmin',fresh);await f.call('transitionDefectAdmin',fresh);assert.equal((await get('defects',d)).defectRevision,3);
+    await f.call('transitionDefectAdmin',{...stale,requestId:uid(),expectedStatus:'Resolved',expectedDefectRevision:3,status:'Open',notes:'Reopened again'});await f.call('transitionDefectAdmin',fresh);assert.equal((await get('defects',d)).defectRevision,4);
+    const {expectedDefectRevision,...missing}=stale;await deny(api.transitionDefectAdmin(missing,{auth:{uid:f.actor}}),'invalid-argument');
+    await deny(api.completeServiceAdmin(f.complete,{auth:{uid:f.actor}}),'invalid-argument');
+    await deny(f.call('completeServiceAdmin',{...f.complete,expectedDefectRevisions:{}}),'invalid-argument');
+    await deny(f.call('completeServiceAdmin',{...f.complete,expectedDefectRevisions:{[d]:4,extra:0}}),'invalid-argument');
+  });
+  run('legacy revision zero advances for acknowledgement, assignment, resolution, duplicate and reopening without rewriting evidence',async()=>{
+    const f=await fixture(),d=uid(),original=uid();for(const key of [d,original])await db.collection('defects').doc(key).set({vehicleId:f.vehicleId,status:'Open',urgency:'Critical',description:'Original TEST statement',photos:['evidence']});
+    let expectedStatus='Open',expectedDefectRevision=0;
+    for(const status of ['Acknowledged','In Progress','Resolved','Open','Duplicate','Open']) {
+      const p={defectId:d,requestId:uid(),expectedStatus,expectedDefectRevision,status,notes:'Reviewed transition',...(status==='In Progress'?{assignedTo:'TEST technician'}:{}),...(status==='Duplicate'?{duplicateOf:original}:{})};
+      await f.call('transitionDefectAdmin',p);await f.call('transitionDefectAdmin',p);expectedStatus=status;expectedDefectRevision++;
+      const saved=await get('defects',d);assert.equal(saved.defectRevision,expectedDefectRevision);assert.equal(saved.description,'Original TEST statement');assert.deepEqual(saved.photos,['evidence']);
+    }
+    const history=await db.collection('defects').doc(d).collection('history').get();assert.equal(history.size,6);assert.deepEqual(history.docs.map(d=>d.data().defectRevision).sort(),[1,2,3,4,5,6]);
+    assert.equal((await get('defects',d)).duplicateOf,undefined);
+  });
+  run('scheduled completion accepts truthful older work and rejects impossible out-of-order chronology',async()=>{
+    const f=await fixture({lastServiceDate:'2024-01-01'});await f.call('dispatchServiceAdmin',{...f.dispatch,sentDate:'2025-01-01'});
+    const second={...f.booking,serviceId:uid()};await f.call('saveScheduledServiceAdmin',second);await f.call('dispatchServiceAdmin',{...f.dispatch,serviceId:second.serviceId,sentDate:'2025-01-01'});
+    const newer={...f.complete,returnDate:'2025-02-01',odometer:1500,expectedDefectRevisions:{}};
+    await f.call('completeServiceAdmin',newer);const before=await get('vehicles',f.vehicleId);assert.equal(before.lastServiceDate,'2025-02-01');
+    const older={...newer,serviceId:second.serviceId,returnDate:'2025-01-15',odometer:1200};
+    await deny(f.call('completeServiceAdmin',{...older,odometer:1600}));await deny(f.call('completeServiceAdmin',{...older,returnDate:'2099-01-01'}));
+    await f.call('completeServiceAdmin',older);await f.call('completeServiceAdmin',older);
+    const v=await get('vehicles',f.vehicleId);assert.equal(v.currentOdometer,1500);assert.equal(v.lastServiceOdometer,1500);assert.equal(v.lastServiceDate,'2025-02-01');
+    const history=await db.collection('maintenanceRecords').where('vehicleId','==',f.vehicleId).get();assert.equal(history.size,2);assert.deepEqual(history.docs.map(d=>({date:d.data().date,odometer:d.data().odometer})).sort((a,b)=>a.date.localeCompare(b.date)),[{date:'2025-01-15',odometer:1200},{date:'2025-02-01',odometer:1500}]);
+    assert.equal((await db.collection('costs').where('vehicleId','==',f.vehicleId).get()).size,0);await f.call('changeVehicleLifecycleAdmin',f.release);
+  });
+  run('backdated completion preserves undated legacy service state and can initialize absent service state',async()=>{
+    for(const baseline of [900,null]) {
+      const f=await fixture({lastServiceOdometer:baseline});await f.call('dispatchServiceAdmin',{...f.dispatch,sentDate:'2025-01-01'});
+      await f.call('completeServiceAdmin',{...f.complete,returnDate:'2025-02-01',odometer:1100,expectedDefectRevisions:{}});
+      const v=await get('vehicles',f.vehicleId);assert.equal(v.currentOdometer,1100);
+      assert.equal(v.lastServiceOdometer,baseline===null?1100:900);assert.equal(v.lastServiceDate,baseline===null?'2025-02-01':undefined);
+    }
+  });
   run('legacy completed service cannot own unrelated Repairs; explicit current legacy confirmation is safe',async()=>{
     const f=await fixture({status:'Repairs',statusNotes:'New brake failure'});
     await db.collection('scheduledServices').doc(f.serviceId).update({sentForService:true,returnedFromService:true,sentDate:'2020-01-01',returnDate:'2020-01-02'});

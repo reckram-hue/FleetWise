@@ -1,3 +1,4 @@
+import { assertVehicleIdle } from './vehicleCustody';
 import { createHash } from 'crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import * as functions from 'firebase-functions';
@@ -11,6 +12,8 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => Number.isFinite
 const odo = z.number().finite().nonnegative();
 const money = z.number().finite().nonnegative();
 const ids = z.array(id).max(40).default([]).transform(v => [...new Set(v)].sort());
+const revision = z.number().int().nonnegative();
+const reviewedDefects = z.record(id, revision).transform(v => Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))));
 const stamp = () => FieldValue.serverTimestamp();
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 function fail(message: string): never { throw new functions.https.HttpsError('failed-precondition', message); }
@@ -18,6 +21,11 @@ const unresolved = (d: Row) => !['Resolved', 'Duplicate'].includes(d.status);
 const disposed = (v: Row) => ['Sold', 'End of Life'].includes(v.status);
 const sent = (s: Row) => s.sentForService === true && s.returnedFromService !== true;
 const dto = (doc: FirebaseFirestore.DocumentSnapshot) => ({ ...doc.data(), id: doc.id });
+function defectRevision(d: Row): number {
+  const n = d.defectRevision === undefined ? 0 : d.defectRevision;
+  if (!Number.isSafeInteger(n) || n < 0) fail('Defect revision needs administrator review.');
+  return n;
+}
 
 /** Small maintenance-specific commands. No direct client writes can bypass these transitions. */
 export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
@@ -37,23 +45,7 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
     if (!doc.exists) fail('Vehicle no longer exists.');
     return { ref, data: doc.data()! };
   }
-  async function idle(tx: FirebaseFirestore.Transaction, vehicleId: string, v: Row) {
-    if (v.activeAssignmentId || v.activeShiftId || v.activeChargingSessionId || v.openChargingEventId) fail('Vehicle has custody or charging activity. Complete or recover that workflow first.');
-    const [assignments, shifts, sessions, events] = await Promise.all(['vehicleAssignments', 'shifts', 'chargingSessions', 'chargingEvents'].map(c => tx.get(db.collection(c).where('vehicleId', '==', vehicleId))));
-    if ([assignments, sessions, events].some(q => q.docs.some(d => ['ACTIVE', 'Active', 'OPEN'].includes(d.data().status) || d.data().lifecycleStatus === 'OPEN'))) fail('Vehicle has an open custody or charging record.');
-    for (const shift of shifts.docs.filter(d => d.data().status === 'Active')) {
-      // A shift's original vehicleId is historical after a return/swap. Require
-      // affirmative completed custody evidence before disregarding that anchor.
-      const returned = assignments.docs.some(a => a.data().shiftId === shift.id && a.data().driverId === shift.data().driverId && a.data().status === 'COMPLETED' && a.data().endedAt);
-      if (!returned) fail('Active legacy shift has no verified return for this vehicle.');
-      if (shift.data().activeAssignmentId) {
-        const a = (await tx.get(db.collection('vehicleAssignments').doc(shift.data().activeAssignmentId))).data();
-        if (!a || a.status !== 'ACTIVE' || a.shiftId !== shift.id || a.driverId !== shift.data().driverId || a.vehicleId === vehicleId) fail('Shift custody pointers are inconsistent.');
-        const other = (await tx.get(db.collection('vehicles').doc(a.vehicleId))).data();
-        if (!other || other.activeAssignmentId !== shift.data().activeAssignmentId || other.activeShiftId !== shift.id) fail('Current assignment vehicle pointers are inconsistent.');
-      }
-    }
-  }
+  const idle = (tx: FirebaseFirestore.Transaction, vehicleId: string, v: Row) => assertVehicleIdle(tx, db, vehicleId, v);
   async function related(tx: FirebaseFirestore.Transaction, vehicleId: string) {
     await tx.get(db.collection('vehicleMaintenanceLocks').doc(vehicleId));
     const [s, d] = await Promise.all(['scheduledServices', 'defects'].map(c => tx.get(db.collection(c).where('vehicleId', '==', vehicleId))));
@@ -90,17 +82,7 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       if (v[field] != null && (typeof v[field] !== 'number' || !Number.isFinite(v[field]) || reading < v[field])) fail('Actual odometer must not be lower than authoritative vehicle/service readings.');
     }
   }
-  async function historicalOdometer(tx: FirebaseFirestore.Transaction, vehicleId: string, reading: number) {
-    // Refuels do not advance currentOdometer. Check immutable historical captures too,
-    // including legacy records whose vehicle convenience reading was not maintained.
-    const records = await Promise.all(['vehicleAssignments', 'shifts', 'refuelRecords', 'maintenanceRecords', 'chargingSessions', 'chargingEvents']
-      .map(c => tx.get(db.collection(c).where('vehicleId', '==', vehicleId))));
-    for (const q of records) for (const d of q.docs) for (const field of ['odometer', 'startOdometer', 'endOdometer', 'returnOdometer', 'pickupOdometer']) {
-      const n = d.data()[field];
-      if (typeof n === 'number' && Number.isFinite(n) && n > reading) fail('Actual odometer is lower than an existing historical reading. Review the evidence before completing work.');
-    }
-  }
-  async function manualOdometer(tx: FirebaseFirestore.Transaction, vehicleId: string, v: Row, day: string, reading: number) {
+  async function maintenanceOdometer(tx: FirebaseFirestore.Transaction, vehicleId: string, v: Row, day: string, reading: number, completion = false) {
     const today = new Date().toISOString().slice(0, 10), historical = day < today;
     const eventDay = (value: any): string | null => {
       if (value?.toDate) value = value.toDate();
@@ -112,7 +94,7 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       return null;
     };
     for (const field of ['currentOdometer', 'lastServiceOdometer']) if (v[field] != null && (typeof v[field] !== 'number' || !Number.isFinite(v[field]) || v[field] < 0)) fail('Vehicle odometer baseline needs review.');
-    if (historical && (typeof v.currentOdometer !== 'number' || reading > v.currentOdometer)) fail('Historical maintenance cannot exceed the current odometer.');
+    if (historical && !completion && (typeof v.currentOdometer !== 'number' || reading > v.currentOdometer)) fail('Historical maintenance cannot exceed the current odometer.');
     if (!historical) validOdometer(v, reading);
     const collections = ['vehicleAssignments', 'shifts', 'refuelRecords', 'maintenanceRecords', 'chargingSessions', 'chargingEvents'];
     const records = await Promise.all(collections.map(c => tx.get(db.collection(c).where('vehicleId', '==', vehicleId))));
@@ -145,10 +127,12 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
     const serviceDay = eventDay(v.lastServiceDate);
     if (serviceDay && typeof v.lastServiceOdometer === 'number' &&
       ((serviceDay < day && v.lastServiceOdometer > reading) || (serviceDay > day && v.lastServiceOdometer < reading))) fail('Maintenance odometer contradicts the dated last-service baseline.');
-    const patch: Row = historical ? {} : { currentOdometer: Math.max(v.currentOdometer || 0, reading) };
+    const patch: Row = historical && !completion ? {} : { currentOdometer: Math.max(v.currentOdometer || 0, reading) };
     if (!newerService && !unknownService && (!serviceDay || serviceDay < day) && reading >= (v.lastServiceOdometer || 0)) {
-      // Without a dated baseline an older event must not reinterpret service state.
-      if (!historical || serviceDay) Object.assign(patch, { lastServiceOdometer: reading, lastServiceDate: day });
+      // A historical event cannot establish order against an undated existing
+      // service baseline. Completion may initialize entirely absent service state.
+      const noServiceBaseline = v.lastServiceDate == null && v.lastServiceOdometer == null;
+      if (!historical || serviceDay || (completion && noServiceBaseline)) Object.assign(patch, { lastServiceOdometer: reading, lastServiceDate: day });
     }
     return patch;
   }
@@ -221,7 +205,9 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
     return dto(await ref.get());
   });
   const completeServiceAdmin = wrap(z.object({ serviceId: id, vehicleId: id, returnDate: date, odometer: odo,
-    actualCost: money, serviceNotes: text, resolvedDefectIds: ids }).strict(), async (p, actor) => {
+    actualCost: money, serviceNotes: text, resolvedDefectIds: ids, expectedDefectRevisions: reviewedDefects }).strict().refine(
+      p => Object.keys(p.expectedDefectRevisions).length === p.resolvedDefectIds.length && p.resolvedDefectIds.every(d => Object.prototype.hasOwnProperty.call(p.expectedDefectRevisions, d)),
+      'Supply exactly one reviewed revision per selected defect.'), async (p, actor) => {
     const ref = db.collection('scheduledServices').doc(p.serviceId), fingerprint = hash(p);
     await db.runTransaction(async tx => {
       await authorize(tx, actor);
@@ -231,12 +217,12 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       const { ref: vr, data: v } = await vehicle(tx, p.vehicleId);
       if (!s.sentForService || s.returnedFromService || disposed(v) || !['In Service', 'Repairs'].includes(v.status)) fail('Vehicle must be unavailable under a dispatched service.');
       if (p.returnDate < s.sentDate || p.returnDate > new Date().toISOString().slice(0, 10)) fail('Completion date must be between dispatch and today.');
-      await idle(tx, p.vehicleId, v); validOdometer(v, p.odometer);
-      await historicalOdometer(tx, p.vehicleId, p.odometer);
+      await idle(tx, p.vehicleId, v);
+      const odometerPatch = await maintenanceOdometer(tx, p.vehicleId, v, p.returnDate, p.odometer, true);
       const linked = new Set(s.linkedDefectIds || []);
       if (p.resolvedDefectIds.some(d => !linked.has(d))) fail('Only explicitly linked defects may be resolved by this service.');
       const defects = await Promise.all(p.resolvedDefectIds.map(d => tx.get(db.collection('defects').doc(d))));
-      if (defects.some(d => !d.exists || d.data()!.vehicleId !== p.vehicleId || !unresolved(d.data()!))) fail('Selected defect changed or belongs to another vehicle. Reload before completion.');
+      if (defects.some(d => !d.exists || d.data()!.vehicleId !== p.vehicleId || !unresolved(d.data()!) || defectRevision(d.data()!) !== p.expectedDefectRevisions[d.id])) fail('Selected defect changed or belongs to another vehicle. Reload and review before completion.');
       const mr = db.collection('maintenanceRecords').doc(`service-${p.serviceId}`);
       if ((await tx.get(mr)).exists) fail('Maintenance history already exists without a matching completion. Review this record.');
       const isTestData = s.isTestData === true || v.isTestData === true;
@@ -252,11 +238,11 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
         actualCost: p.actualCost, completionOdometer: p.odometer, serviceNotes: p.serviceNotes, resolvedDefectIds: p.resolvedDefectIds,
         maintenanceRecordId: mr.id, completionFingerprint: fingerprint, isTestData, updatedAt: stamp() });
       for (const d of defects) {
-        tx.update(d.ref, { status: 'Resolved', resolvedBy: actor, resolvedDateTime: stamp(), resolutionNotes: p.serviceNotes,
+        tx.update(d.ref, { status: 'Resolved', defectRevision: defectRevision(d.data()!) + 1, resolvedBy: actor, resolvedDateTime: stamp(), resolutionNotes: p.serviceNotes,
           resolvedByServiceId: p.serviceId, maintenanceRecordId: mr.id, updatedAt: stamp() });
-        audit(tx, d.ref, 'Resolved', actor, { from: d.data()!.status, serviceId: p.serviceId, maintenanceRecordId: mr.id, notes: p.serviceNotes });
+        audit(tx, d.ref, 'Resolved', actor, { from: d.data()!.status, previousDefectRevision: defectRevision(d.data()!), defectRevision: defectRevision(d.data()!) + 1, serviceId: p.serviceId, maintenanceRecordId: mr.id, notes: p.serviceNotes });
       }
-      advance(tx, vr, { currentOdometer: p.odometer, lastServiceOdometer: p.odometer, lastServiceDate: p.returnDate,
+      advance(tx, vr, { ...odometerPatch,
         maintenanceHold: hold, manualMaintenanceHold: v.manualMaintenanceHold === true || hold.source !== 'SERVICE', lifecycleRevision: (v.lifecycleRevision || 0) + 1 });
       audit(tx, ref, 'WORK_COMPLETED', actor, { maintenanceRecordId: mr.id, resolvedDefectIds: p.resolvedDefectIds,
         currentHoldId: hold.id, serviceHoldId: s.holdId || hold.id, lifecycleRevision: (v.lifecycleRevision || 0) + 1 });
@@ -308,7 +294,7 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       const r = await related(tx, p.vehicleId);
       if (disposed(v) || r.services.some(d => sent(d.data()) || (d.data().holdId && d.data().holdId === v.maintenanceHold?.id && !d.data().releasedAt))) fail('Use the existing service completion workflow for this vehicle.');
       if (p.date > new Date().toISOString().slice(0, 10)) fail('Maintenance date cannot be in the future.');
-      const odometerPatch = await manualOdometer(tx, p.vehicleId, v, p.date, p.odometer);
+      const odometerPatch = await maintenanceOdometer(tx, p.vehicleId, v, p.date, p.odometer);
       const { requestId, ...record } = p;
       tx.create(mr, { ...record, source: 'MANUAL', isTestData: v.isTestData === true, createdBy: actor, createdAt: stamp() });
       advance(tx, ref, odometerPatch);
@@ -317,13 +303,14 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
     return dto(await mr.get());
   });
   const transitionDefectAdmin = wrap(z.object({ defectId: id, requestId: id, expectedStatus: z.enum(['Open', 'Acknowledged', 'In Progress', 'Resolved', 'Duplicate']),
+    expectedDefectRevision: revision,
     status: z.enum(['Open', 'Acknowledged', 'In Progress', 'Resolved', 'Duplicate']), notes: text,
     assignedTo: text.optional(), estimatedCost: money.optional(), duplicateOf: id.optional() }).strict(), async (p, actor) => {
     const ref = db.collection('defects').doc(p.defectId);
     await db.runTransaction(async tx => {
       await authorize(tx, actor);
       const op = await operation(tx, 'DEFECT', p.defectId, p.requestId, p, actor); if (op.saved) return;
-      const d = (await tx.get(ref)).data(); if (!d || d.status !== p.expectedStatus) fail('Defect changed. Reload before changing its status.');
+      const d = (await tx.get(ref)).data(); if (!d || d.status !== p.expectedStatus || defectRevision(d) !== p.expectedDefectRevision) fail('Defect changed. Reload and review before changing its status.');
       const { ref: vr } = await vehicle(tx, d.vehicleId);
       if (d.status === 'Duplicate' && p.status === 'Resolved') fail('Resolve the effective original, or reopen this report before resolving it independently.');
       if (p.status === 'Duplicate') {
@@ -336,7 +323,7 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       }
       if (p.status === 'In Progress' && !(p.assignedTo || d.assignedTo)) fail('An assignee is required.');
       const reopening = ['Resolved', 'Duplicate'].includes(d.status) && unresolved({ status: p.status });
-      const patch: Row = { status: p.status, updatedAt: stamp(), isVisibleToDriver: p.status !== 'Duplicate' };
+      const patch: Row = { status: p.status, defectRevision: defectRevision(d) + 1, updatedAt: stamp(), isVisibleToDriver: p.status !== 'Duplicate' };
       if (p.assignedTo) patch.assignedTo = p.assignedTo;
       if (p.estimatedCost !== undefined) patch.estimatedCost = p.estimatedCost;
       if (p.status === 'Acknowledged') Object.assign(patch, { acknowledgedBy: actor, acknowledgedDateTime: stamp() });
@@ -345,6 +332,7 @@ export function createMaintenanceHandlers({ db, requireAdmin }: Deps) {
       if (reopening) for (const field of ['resolvedBy', 'resolvedDateTime', 'resolutionNotes', 'resolvedByServiceId', 'maintenanceRecordId', 'duplicateOf']) patch[field] = FieldValue.delete();
       tx.update(ref, patch);
       audit(tx, ref, reopening ? 'REOPENED' : p.status, actor, { from: d.status, to: p.status, notes: p.notes, previousServiceId: d.resolvedByServiceId || null,
+        previousDefectRevision: defectRevision(d), defectRevision: defectRevision(d) + 1,
         ...(p.status === 'Duplicate' ? { duplicateOf: p.duplicateOf, originalUrgency: d.urgency || null } : {}) });
       advance(tx, vr); saveOperation(tx, op, actor);
     });

@@ -71,7 +71,7 @@ describe('Johannesburg production port invariants', () => {
       return result;
     }
     const a = bodies(source), b = bodies(mirrored);
-    for (const name of ['startVehicleAssignment', 'endVehicleAssignment', 'endShiftWithSession', 'startChargingSession', 'endChargingSession', 'logRefuelWithSession',
+    for (const name of ['startShift', 'reportDefectWithSession', 'startVehicleAssignment', 'endVehicleAssignment', 'endShiftWithSession', 'startChargingSession', 'endChargingSession', 'logRefuelWithSession',
       'createVehicleInspection', 'uploadInspectionPhoto', 'completeVehicleInspection', 'getDriverStatsWithSession',
       'getLeaderboard', 'recoverReturnChargingEvent']) {
       assert.ok(a.has(name), name); assert.equal(a.get(name), b.get(name), name);
@@ -86,7 +86,7 @@ describe('Johannesburg production port invariants', () => {
 
   test('economy engine, read API and idempotent capture remain identical across backends', () => {
     const read = path => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
-    for (const name of ['economyMetrics.ts', 'economyApi.ts', 'evidenceReadiness.ts', 'refuelCapture.ts', 'maintenance.ts']) {
+    for (const name of ['economyMetrics.ts', 'economyApi.ts', 'evidenceReadiness.ts', 'refuelCapture.ts', 'maintenance.ts', 'vehicleCustody.ts']) {
       assert.equal(read(join(__dirname, '..', 'src', name)), read(join(__dirname, '..', '..', 'functions', 'src', name)), name);
     }
   });

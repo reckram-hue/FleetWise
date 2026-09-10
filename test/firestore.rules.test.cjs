@@ -171,6 +171,7 @@ describe('FleetWise canonical Firestore rules', () => {
       await assertFails(activeAdmin().collection(collection).doc('service-1').delete());
     }
     await assertFails(activeAdmin().collection('defects').doc('defect-1').delete());
+    await assertFails(activeAdmin().collection('defects').doc('defect-1').update({defectRevision:99}));
     await assertFails(activeAdmin().collection('vehicles').doc('vehicle-1').delete());
     await assertFails(activeAdmin().collection('vehicles').doc('vehicle-1').collection('history').doc('fake').set({to:'Active'}));
   });

@@ -1,6 +1,6 @@
 # Maintenance and availability integrity
 
-This document describes the maintenance candidate plus its release-blocker remediation, based on commit `522c7adb184a82a19f516b932606c1dfbd9f3e74` on `fleetwise-v2`. Validation below is local and synthetic. No production verification, push, deployment or production data change is claimed.
+This document describes the maintenance candidate and final release remediation, starting from commit `a721b49f2d8d34e0f78caa647e7387b39c164bd4` on `fleetwise-v2`. Validation below is local and synthetic. No production verification, push, deployment or production data change is claimed.
 
 ## Scope and operations
 
@@ -40,6 +40,12 @@ Legacy dispatched work can still be completed, obtaining an explicit conservativ
 
 ## Effective duplicate safety
 
+Every newly reported defect starts with server-owned `defectRevision: 0`, including inspection-linked reports. Missing revisions on legacy defects are read as zero without rewriting old documents. Invalid stored revisions fail for review. Every authoritative direct transition (acknowledgement, assignment/In Progress, resolution, duplicate, reopen, or a same-status lifecycle update) and completion-driven resolution increments the revision once. History records previous/new revisions; original evidence remains unchanged.
+
+`transitionDefectAdmin` requires both `expectedStatus` and `expectedDefectRevision`. `completeServiceAdmin` requires `expectedDefectRevisions`, with exactly one ID-to-revision entry per selected `resolvedDefectIds` and an empty object when none are selected. Comparisons occur inside the transaction. Thus an approval prepared at Open/revision N rejects after Open -> Resolved -> Open/revision N+2. Status equality alone grants no authority. Successful operation receipts/completion fingerprints are checked before current-state comparisons: identical saved replay returns without resolving a reopened defect or advancing its revision again. Changed replay details reject.
+
+Completion and direct-action dialogs capture the reviewed revision when opened. Completion retains the displayed defect evidence and selection context across refresh; status/assignment dialogs retain their reviewed status/revision. A refresh cannot silently upgrade an old approval. After a stale rejection, close/reopen and review again. Clients omitting revision expectations fail closed; no automatic fresh-revision retry is permitted.
+
 Release evaluates every Critical report and every unreleased dispatched-service link through its Duplicate chain to the effective original. An unresolved original blocks release even when its own raw severity is Low. A set of effective original IDs avoids counting the same issue repeatedly. Resolving that original resolves the effective condition; reopening it restores blocking.
 
 Original severity, description, photos and inspection evidence are preserved. Duplicate relationships and actor/reason are audited. Targets must be outstanding non-Duplicate reports on the same vehicle and cannot be self. Chains can arise when an original is later deduplicated; the outstanding-target rule prevents new cycles, including concurrent attempts through transactional reads. Existing relevant cycles, missing originals and cross-vehicle targets fail closed at release.
@@ -52,9 +58,11 @@ Maintenance never clears or fabricates custody pointers. Any vehicle `activeAssi
 
 An Active shift's original `vehicleId` is historical after a valid return/swap. It is ignored only when that vehicle has a matching COMPLETED assignment with an end timestamp for the same shift/driver. If the shift has a current assignment pointer, it must resolve to an ACTIVE assignment for the same shift/driver on another vehicle, and that vehicle's assignment/shift pointers must agree. Missing, stale or contradictory relationships reject conservatively. An Active legacy shift without affirmative return evidence still blocks.
 
-This allows start A -> complete pickup/return inspections -> return A -> same-shift pickup B -> maintenance dispatch A. The actual driver and inspection handlers are used in the emulator regression. Held A, a stale A pointer and a missing current assignment are rejected; B remains assigned after A dispatch. Existing return, swap, charging and recovery behavior is unchanged.
+This allows start A -> complete pickup/return inspections -> return A -> same-shift pickup B -> maintenance dispatch A, or Driver 2 starting a new shift with A. `startShift` now uses this shared current-custody guard inside its transaction instead of rejecting every Active shift with historical `vehicleId: A`. Driver-level collision protection and fresh Active vehicle status checks remain in place. Held A, In Service/Repairs, stale A pointers, a missing current assignment, and orphan open activity reject. B remains assigned when A is reused.
 
-## Date-aware manual odometers
+For `startShift` only, a matching single OPEN return-for-charging event may remain on a returned vehicle. Its vehicle query, pointer, lifecycle state and organization must agree. Starting the shift reserves custody but does not close the event; the existing actual assignment pickup closes it. Active charging sessions and orphan/inconsistent events still block. Both `status` and `lifecycleStatus` open markers remain conservative blockers. Maintenance retains its stricter rule that every open return-charging event blocks.
+
+## Shared maintenance chronology
 
 Manual maintenance uses its supplied business date, with UTC date boundaries matching existing commands. Future dates reject. `currentOdometer` and `lastServiceOdometer` must be finite nonnegative baselines when present.
 
@@ -79,13 +87,15 @@ Date-only maintenance does not claim intraday order. Same-day historical capture
 
 `lastServiceDate` is stored with new service-state evidence. A historical entry can advance last-service state only if the existing vehicle baseline is dated, is strictly older, no canonical same-day/newer or undated service exists, and the reading does not decrease. A newer, same-day or undated baseline is preserved conservatively. Current-day records use the same no-rollback/no-newer-service conditions but can establish a previously undated baseline. Older canonical records remain visible without changing newer convenience state.
 
-Completion remains a current unavailable-service operation requiring actual odometer at least existing current/service/historical readings. It is not a historical import. Both completion and manual records retain deterministic replay identity, so retries create one maintenance record and no duplicate cost.
+Scheduled completion now uses the same date-aware evidence validator, with its actual completion date constrained between dispatch and today. Completing newer work at 1,500 km on February 1 and then older work at 1,200 km on January 15 is accepted when other evidence permits; an older 1,600 km completion rejects. Later known lower readings supply an upper bound, even when today's numerical maximum is higher. Canonical records keep the supplied factual dates and odometers.
+
+Unlike historical manual insertion, a dispatched service can establish a reading above an outdated current convenience value when dated evidence permits it. Completion writes `currentOdometer = max(existing, actual)` and never rolls it back. It updates last-service state only with a strictly later service date, no same-day/newer or undated canonical service, and no odometer decrease. Backdated completion preserves an existing undated vehicle service baseline because its order is unknown; it may initialize entirely absent service state. Current-day completion follows the same rules as current-day manual evidence. Existing dated newer/same-day state is retained. Both completion and manual records retain deterministic replay identity, so retries create one maintenance record and no duplicate cost.
 
 ## Rules and field protection
 
 Vehicle descriptive writes retain the existing explicit client and Firestore allow-lists. `maintenanceHold`, nested hold fields, `lifecycleRevision` and `lastServiceDate` are excluded, including at creation. Rules tests prove direct admin injection and stale-snapshot replacement fail while permitted descriptive edits preserve server state. No rules text change was needed.
 
-Direct writes to defects, scheduled services and maintenance records remain denied. Histories, operation receipts and maintenance lock documents remain server-only. Active admin authorization is rechecked inside every transaction. Vehicle transactions serialize with pickup/return; the separate `vehicleMaintenanceLocks` document serializes blocker changes without adding a busy counter to the economics vehicle fingerprint.
+Direct writes to defects (including revision injection), scheduled services and maintenance records remain denied. Histories, operation receipts and maintenance lock documents remain server-only. Active admin authorization is rechecked inside every transaction. Vehicle transactions serialize with pickup/return; the separate `vehicleMaintenanceLocks` document serializes blocker changes without adding a busy counter to the economics vehicle fingerprint.
 
 ## Validation commands and results (2026-09-10)
 
@@ -105,35 +115,55 @@ Both maintained backend compiles, frontend typecheck and production build pass. 
 Real emulator startup (installed Java and cached official jar; loopback only):
 
 ```powershell
-& 'C:\Program Files\Eclipse Adoptium\jdk-21.0.12.8-hotspot\bin\java.exe' -jar 'C:\Users\User\.cache\firebase\emulators\cloud-firestore-emulator-v1.20.2.jar' --host 127.0.0.1 --port 8090 --project_id demo-fleetwise-maintenance
-$env:FIRESTORE_EMULATOR_HOST='127.0.0.1:8090'
-node --test test/maintenance.emulator.test.cjs test/firestore.rules.test.cjs test/driverLifecycle.emulator.test.cjs test/accidentReporting.emulator.test.cjs test/inspectionHistory.emulator.test.cjs test/evidenceReview.emulator.test.cjs
+& 'C:\Program Files\Eclipse Adoptium\jdk-21.0.12.8-hotspot\bin\java.exe' -Xmx512m -jar 'C:\Users\User\.cache\firebase\emulators\cloud-firestore-emulator-v1.20.2.jar' --host 127.0.0.1 --port 8093 --project_id demo-fleetwise-maintenance
+$env:FIRESTORE_EMULATOR_HOST='127.0.0.1:8093'
+node --test --test-concurrency=1 test/maintenance.emulator.test.cjs test/driverLifecycle.emulator.test.cjs test/firestore.rules.test.cjs test/accidentReporting.emulator.test.cjs
 ```
 
-Final result: **193 passed, 0 failed, 0 cancelled, 0 skipped**. This includes all five counterexamples, exact stale first submission, concurrent replacement/release, same-hold revision changes, replay after newer holds, legacy adoption, duplicate chains/cycles/reopening, real return/swap, charging, chronology and rules. Tests call actual compiled handlers with real Firestore transactions. Auth/Storage cloud effects are disabled or replaced with in-memory evidence; this does not claim deployed transport verification.
+Final result: **190 passed, 0 failed, 0 cancelled, 0 skipped** (268,673.2869 ms). The command includes the complete maintenance, driver lifecycle, rules and accident suites, including 14 new backend cases across both maintained trees. Coverage includes stale first completion/direct resolution after Open -> Resolved -> Open, successful replay after reopen, explicit missing/mismatched revision rejection, legacy lifecycle progression, ordered service history, undated baseline preservation, real second-driver reuse after swap, charging and return-charging. Tests call actual compiled handlers with real Firestore transactions. Auth/Storage cloud effects are disabled or replaced with in-memory evidence; this does not claim deployed transport verification.
 
-The earlier focused command (`node --test test/maintenance.emulator.test.cjs test/driverLifecycle.emulator.test.cjs test/firestore.rules.test.cjs`) passed 106 handler tests, but cancelled 36 rules tests because rules setup fetch failed during emulator startup. It exited nonzero and was not accepted as complete. The ready-emulator rules-only rerun passed 36/36, and the final full run above passed all suites. An additional dated baseline chronology check and concurrent hold test were added before the final full run.
+Two broader six-file runs (also including `test/inspectionHistory.emulator.test.cjs` and `test/evidenceReview.emulator.test.cjs`) each reported **204 passed / 1 failed** before the final legacy-baseline regression was added. The first failed concurrent maintenance replay with emulator `INVALID_ARGUMENT: Transaction is invalid or closed`; that exact case then passed **2/2** in isolation. The second used `--test-concurrency=1`: all maintenance/driver/rules checks passed, but the concurrent accident draft test failed with an internal operation error. Neither nonzero run was treated as a clean gate. Inspection-history and evidence-review checks passed **17/17** in those runs. The final four-file rerun retains concurrency inside the race tests while running test files sequentially.
 
 ```powershell
 node --test test/maintenanceUx.test.cjs test/releaseReadiness.test.cjs test/postCutoverUx.test.cjs test/driverDefectUx.test.cjs test/economyUx.test.cjs test/economyMetrics.test.cjs test/evidenceReadiness.test.cjs test/fleetScenario.test.cjs test/fleetScenarioUx.test.cjs test/adminChargingSettings.test.cjs functions-prod-jhb/test/portParity.test.cjs functions-prod-jhb/test/chargingSession.test.cjs functions-prod-jhb/test/adminAuthorization.test.cjs functions/test/adminAuthorization.test.cjs
 ```
 
-Result: **300 passed, 0 failed**. Focused UI/parity command `node --test test/maintenanceUx.test.cjs functions-prod-jhb/test/portParity.test.cjs` passes **14/14**. The UI tests prove both approval contexts retain hold identity/revision across refresh/rerender before first submission and retain request identity on failure. Canonical history reload remains covered.
+Result: **303 passed, 0 failed, 0 skipped**. Focused UI/parity command `node --test test/maintenanceUx.test.cjs functions-prod-jhb/test/portParity.test.cjs` passes **17/17**, including a rerun after final backend edits. Three new UI cases prove the completion, direct status and assignment dialogs retain reviewed defect revisions across refresh/rerender before first submission. Existing hold approval freshness, canonical history reload and retry identity remain covered. Parity checks now include `startShift`, `reportDefectWithSession` and the shared custody helper.
 
 ## Self-QA and second adversarial pass
 
-Self-review added protection against resolving the duplicate itself to erase inherited Critical blocking, dated last-service bounds without canonical history, correct charging pickup `closedAt` chronology, preservation of assignment-aware shift attribution, and audit hold/revision details. Blank EOF whitespace was corrected. The rules startup failure was rerun to completion; no package failure was accepted.
+Self-review corrected a TypeScript narrowing error in the extracted custody helper, retained both legacy open-state markers (`status` and `lifecycleStatus`), and added explicit orphan-marker checks. The second review preserved undated legacy last-service baselines on backdated completion, with a regression proving both preservation and initialization of absent state. The complete diff was reviewed for missed revision paths, replay writes, date-neighbor errors, pointer bypasses, frontend payload mismatch and legacy dead ends. Original descriptions/photos, prior history, duplicate-root safety, hold ownership and explicit release remain intact.
 
-The second pass attempted stale first submissions, replay after a newer hold, refreshed release through an old service, same-hold revision changes, concurrent new hold/release, Critical-to-Low chains, direct duplicate resolution, cycles/missing originals, reopening after resolution, missing/stale custody pointers, impossible historical neighbors, absent dates and service-state rollback. Final emulator and UI results support the stated invariants. Existing completion retries still produce one record, and one service cannot clear another unfinished service or unresolved linked/Critical condition.
+The second pass exercised all 13 requested invariants: stale completion and direct requests reject; fresh reviewed actions work; duplicate/reopen revisions progress; legacy defects adopt revisions; impossible history rejects while plausible older work records; date/current odometer state cannot roll back; returned A can be reused while Shift 1 holds B; held/inconsistent A rejects; maintenance dispatch/completion/release and both charging paths remain intact. Successful saved replay after a later reopen does not resolve that new generation. Existing hold and Critical-root release blockers remain covered.
 
-Local browser QA used the dedicated `demo-fleetwise-maintenance-preview` fixture at `http://127.0.0.1:5187/?screen=admin&maintenance=1`. It dispatched the TEST vehicle, completed at 1,100 km / R123.45 with explicit repaired-link selection, and opened the hold-specific release form. A second real local handler call created newer brake Hold B. First submission of the old approval, even with manual confirmation checked, visibly rejected as stale. Vehicle Management showed Repairs and the current brake reason. Fresh explicit review of Hold B released successfully; the vehicle showed Active at 1,100 km and canonical history retained the recorded service. Desktop feedback layout was inspected. These are local synthetic checks, not production or real-handset certification.
+Local browser QA used the dedicated `demo-fleetwise-maintenance-preview` fixture at `http://127.0.0.1:5187/?screen=admin&maintenance=1`. After dispatch, a completion draft selected a legacy revision-zero linked defect. Independent real handler calls resolved it at revision 1 and reopened it at revision 2. The draft's first submission rejected with the stale-review message. Cancel/refresh/reopen enabled a fresh completion at 1,100 km / R123.45, advancing the defect once to revision 3 and showing Work Completed / Awaiting Release. Explicit release then succeeded. Local readback confirmed Active, current/last-service odometer 1,100, defect Resolved/revision 3 and one canonical record. The form layout was inspected. These are local synthetic checks, not production or real-handset certification.
 
 ## Future deployment and migration
 
-No Firebase configuration, indexes, dependencies, Storage rules or function exports change in this remediation. Shared helper changes affect five existing maintenance callables: dispatch, completion, lifecycle, manual history and defect transition. Booking code is unchanged.
+The remediation changes these 15 files (no generated build output is committed):
+
+```text
+docs/maintenance-availability-integrity.md
+functions-prod-jhb/src/index.ts
+functions-prod-jhb/src/maintenance.ts
+functions-prod-jhb/src/vehicleCustody.ts
+functions-prod-jhb/test/portParity.test.cjs
+functions/src/index.ts
+functions/src/maintenance.ts
+functions/src/vehicleCustody.ts
+src/components/admin/ManageDefects.tsx
+src/components/admin/ServiceManagement.tsx
+src/types.ts
+test/driverLifecycle.emulator.test.cjs
+test/firestore.rules.test.cjs
+test/maintenance.emulator.test.cjs
+test/maintenanceUx.test.cjs
+```
+
+No Firebase configuration, indexes, dependencies, Storage rules or function exports change in this remediation. Shared helper changes affect five existing maintenance callables: dispatch, completion, lifecycle, manual history and defect transition. `startShift` adopts current-custody checks and `reportDefectWithSession` initializes the revision. Booking code is unchanged. No additional function is added to the expected deployment manifest.
 
 A future coordinated release of the entire candidate still needs all six maintenance callables plus the candidate's changed existing `startShift` and `reportDefectWithSession`, the frontend and the candidate's protected Firestore rules. Use the Johannesburg `functions-prod-jhb` codebase/configuration (`africa-south1`, 256 MiB, no warm instances). Do not deploy the isolated benchmark or default-region configuration by mistake.
 
-Deploy the updated callables before enabling the matching frontend and rules, then require client reload. Previous lifecycle payloads without expected hold/revision fail closed and cannot be kept as a fallback. Legacy data remains safe through explicit reviewed transitions; no destructive migration or historical rewrite is required. No new composite index is required by these single-field vehicle queries.
+Use a coordinated administrative write freeze for a separately authorized rollout: deploy/verify the matching callables and protected rules before reopening admin writes with the matching frontend, then require client reload. A frontend preview against a shared production backend is not an isolated staging environment. Previous lifecycle or defect payloads without reviewed expectations fail closed and cannot be kept as a fallback. Legacy data remains safe through explicit reviewed transitions; no destructive migration or historical rewrite is required. No new composite index is required by these single-field vehicle queries.
 
 After a separately authorized rollout, the owner must verify authenticated callable transport, deployed rules, designated TEST workflows and actual handset layout. Telematics, historical bulk imports, cost accounting redesign, downtime dashboards, audit viewers and production rollout remain outside this remediation.

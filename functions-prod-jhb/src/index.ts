@@ -1,3 +1,4 @@
+import { assertVehicleIdle } from './vehicleCustody';
 import { createMaintenanceHandlers } from './maintenance';
 import { createDefectEvidenceHandler } from './defectEvidence';
 import { vehicleIdentitySnapshot } from './vehicleIdentity';
@@ -1920,26 +1921,15 @@ export const startShift = onMeasuredCall('startShift', async (data, context, per
       }
     }
 
-    // Legacy shift-collision detection: scans by driverId/vehicleId for docs
-    // that predate the activeShiftId pointer field. Single-field queries — no
-    // composite index required.
-    const [driverShifts, vehicleShifts] = await perf.phase('legacyShiftQueries', () => Promise.all([
-      db.collection('shifts').where('driverId', '==', driverId).get(),
-      db.collection('shifts').where('vehicleId', '==', vehicleId).get(),
-    ]));
+    // Legacy driver collision detection. Vehicle custody is checked transactionally
+    // below, where a returned original vehicle is distinguished from a held one.
+    const driverShifts = await perf.phase('legacyShiftQueries', () => db.collection('shifts').where('driverId', '==', driverId).get());
     if (driverShifts.docs.some(d => d.data().status === 'Active')) {
       throw new functions.https.HttpsError(
         'failed-precondition',
         'Driver already has an active shift. Please end your current shift first.'
       );
     }
-    if (vehicleShifts.docs.some(d => d.data().status === 'Active')) {
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        'This vehicle is already in use by another driver. Please select a different vehicle.'
-      );
-    }
-
     // Create shift document in a transaction so pointer updates are atomic.
     const shiftRef = db.collection('shifts').doc();
     const shiftId = shiftRef.id;
@@ -1961,6 +1951,8 @@ export const startShift = onMeasuredCall('startShift', async (data, context, per
       if (txVehicleDoc.data()?.status !== 'Active' || txVehicleDoc.data()?.activeAssignmentId || txVehicleDoc.data()?.activeChargingSessionId) {
         throw new functions.https.HttpsError('failed-precondition', 'Vehicle is unavailable.');
       }
+
+      await assertVehicleIdle(transaction, db, vehicleId, txVehicleDoc.data()!, true);
 
       // Odometer continuity & discrepancy check
       const latestStoredOdometer = txVehicleDoc.data()?.currentOdometer;
@@ -2091,6 +2083,7 @@ export const reportDefectWithSession = onProdCall(async (data, context) => {
       description,
       urgency,
       status: 'Open',
+      defectRevision: 0,
       isVisibleToDriver: true,
       // Test-data isolation: inherited from either party (see startShift).
       isTestData: driverIsTestData || vehicleData.isTestData === true,
