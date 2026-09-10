@@ -31,6 +31,7 @@ export const callFunction = async () => { throw Error('Cloud access is disabled 
 export const getDriverSession = () => ({ driverId: driver.id, sessionToken: 'local-fixture' });
 export const clearDriverSession = () => {}; export const isSessionLocallyExpired = () => false;
 export default new Proxy({ getVehicles: async () => [vehicle], getUsers: async () => [driver], getActiveDefects: async () => [],
+  listChargingLocationsAdmin: async () => [{ id: 'test-charger', name: 'TEST company charger', active: true, tariffMethod: 'PER_KWH', tariffRate: 2.5 }],
   getScheduledServices: async () => [], getServicesNeedingReminders: async () => [], getVehiclesWithExpiredLicenses: async () => [],
   getVehicleDefectsForSession: async () => [], reportDefectWithSession: async () => ({ id: 'fixture-defect' }),
 }, { get: (target, key) => (target as any)[key] || (() => { throw Error('Unimplemented local fixture operation: ' + String(key)); }) });

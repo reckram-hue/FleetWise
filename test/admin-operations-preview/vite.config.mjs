@@ -9,6 +9,8 @@ const { attachReadiness } = require('../../functions-prod-jhb/lib/evidenceReadin
 const reviewFixtures = new Map();
 function syntheticReport(period, includeTest) {
   const data = fixture('ICE'), ev = fixture('EV');
+  data.vehicles[0].registration = 'TEST ICE'; data.vehicles[0].isTestData = true;
+  ev.vehicles[0].registration = 'TEST EV'; ev.vehicles[0].isTestData = true;
   ev.vehicles[0].id = 'ev'; ev.assignments.forEach(a => { a.vehicleId = 'ev'; });
   data.vehicles.push(...ev.vehicles, { id: 'qa', registration: 'SYNTHETIC TEST', vehicleType: 'ICE', isTestData: true });
   data.assignments.push(...ev.assignments);

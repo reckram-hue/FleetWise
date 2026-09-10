@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import type { Vehicle } from '../../types';
 import { economyApi, EconomyReport } from '../../services/economyApi';
 import { formatEconomyStatus, formatEconomyReason } from '../../lib/economyPresentation';
 import VehicleEvidencePanel from './VehicleEvidencePanel';
+import EVReplacementScenario from './EVReplacementScenario';
+import { UserContext } from '../../contexts/UserContext';
+import { scenarioAdminAllowed } from '../../lib/fleetScenario';
 
 const number = (v: number | null, decimals = 1) => v === null ? formatEconomyStatus('INSUFFICIENT_DATA') : v.toLocaleString('en-ZA', { maximumFractionDigits: decimals, minimumFractionDigits: decimals });
 const percentage = (v: number | null) => typeof v === 'number' && Number.isFinite(v) ? `${number(v)}%` : formatEconomyStatus('INSUFFICIENT_DATA');
@@ -11,10 +14,12 @@ const amount = (v: number | null) => v === null ? formatEconomyStatus('INSUFFICI
 const control = 'min-h-11 rounded border border-gray-300 bg-white px-3 py-2';
 
 export default function FuelEconomyMonitor(_props: { vehicles: Vehicle[] }) {
+    const { currentUser } = useContext(UserContext);
+    const [scenarioVehicleId, setScenarioVehicleId] = useState<string | null>(null);
     const [period, setPeriod] = useState<'30' | '90' | 'ALL'>('90'), [includeTest, setIncludeTest] = useState(false);
     const [report, setReport] = useState<EconomyReport | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(true), [retry, setRetry] = useState(0);
     useEffect(() => {
-        let cancelled = false; setBusy(true); setError(''); setReport(null);
+        let cancelled = false; setBusy(true); setError(''); setReport(null); setScenarioVehicleId(null);
         economyApi.get(period, includeTest).then(data => { if (!cancelled) setReport(data); })
             .catch(() => { if (!cancelled) setError('Economy data could not load. Retry or contact support. No partial totals are shown.'); })
             .finally(() => { if (!cancelled) setBusy(false); });
@@ -32,6 +37,7 @@ export default function FuelEconomyMonitor(_props: { vehicles: Vehicle[] }) {
         {busy && <p role="status">Loading observed economy…</p>}
         {error && <div role="alert"><p>{error}</p><button className={control} onClick={() => setRetry(n => n + 1)}>Retry economy</button></div>}
         {report && <>
+            {scenarioVehicleId && scenarioAdminAllowed(currentUser) && report.vehicles.some(v => v.vehicleId === scenarioVehicleId && v.powertrain === 'ICE') && <EVReplacementScenario key={`${scenarioVehicleId}-${report.updatedAt}`} report={report} source={report.vehicles.find(v => v.vehicleId === scenarioVehicleId)!} catalogue={_props.vehicles} onClose={() => setScenarioVehicleId(null)} />}
             <p className="text-sm text-gray-600">Calculated {new Date(report.updatedAt).toLocaleString()}. Whole intervals only; boundary-crossing intervals are excluded. Eligible samples have limited data; no confidence rating is assigned.</p>
             <p className="text-lg font-semibold">Total eligible EV/ICE distance: {number(report.fleet.totalEligibleKm)} km</p>
             <p>{report.fleet.distanceSampleCount} qualifying assignment intervals · {report.fleet.unknownAssignments} unknown/invalid intervals excluded; their distance is unknown. {report.fleet.excludedPowertrainAssignments} intervals excluded from EV/ICE totals because powertrain is unavailable.</p>
@@ -69,6 +75,7 @@ export default function FuelEconomyMonitor(_props: { vehicles: Vehicle[] }) {
                     </div>)}
                 </details>
                 {v.readiness && <VehicleEvidencePanel key={`${v.vehicleId}-${v.readiness.consumption.fingerprint}`} vehicle={v} period={period} includeTest={includeTest} onSaved={() => setRetry(n => n + 1)} />}
+                {v.powertrain === 'ICE' && scenarioAdminAllowed(currentUser) && <button className={control} onClick={() => { setScenarioVehicleId(v.vehicleId); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Compare with EV</button>}
                 </th>
                 <td className="p-3 align-top">{v.powertrain}</td>
                 <td className="p-3 align-top"><p>{number(v.distanceSampleCount ? v.distanceKm : null)} km</p><p>{v.distanceProvenance === 'INSUFFICIENT_DATA' ? 'No usable driving data yet' : formatEconomyStatus(v.distanceProvenance)}</p><p>{v.distanceSampleCount} qualifying intervals</p><p>{v.unknownAssignments} unknown/invalid intervals</p></td>

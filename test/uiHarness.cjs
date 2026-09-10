@@ -14,7 +14,7 @@ function harness(overrides = {}) {
     getAdminUsers: async () => [], getVehicles: async () => [], getUsers: async () => [], getActiveDefects: async () => [],
     listChargingLocationsAdmin: async () => [], ...overrides };
   const hooks = { ...React, useContext: () => ({ currentUser: overrides.currentUser || { id: 'driver' }, setCurrentUser: overrides.setCurrentUser || (() => {}) }), useRef(initial) { const i = cursor++; return current.state[i] ||= { current: initial }; }, useState(initial) {
-    const instance = current, i = cursor++; if (!(i in instance.state)) instance.state[i] = initial;
+    const instance = current, i = cursor++; if (!(i in instance.state)) instance.state[i] = typeof initial === 'function' ? initial() : initial;
     return [instance.state[i], next => instance.state[i] = typeof next === 'function' ? next(instance.state[i]) : next];
   }, useEffect(callback, deps) {
     const i = cursor++, old = current.deps[i];
@@ -43,7 +43,7 @@ function harness(overrides = {}) {
       if (name.startsWith('.')) {
         const base = path.resolve(path.dirname(filename), name);
         if (name.endsWith('/types')) return load(base + '.ts');
-        if (realFiles.includes(path.basename(name))) return load(base + (fs.existsSync(base + '.tsx') ? '.tsx' : '.ts'));
+        if (realFiles.includes(path.basename(name)) || ['fleetScenario', 'EVReplacementScenario'].includes(path.basename(name))) return load(base + (fs.existsSync(base + '.tsx') ? '.tsx' : '.ts'));
         return function OtherAdminView() { return null; };
       }
       return req(name);
