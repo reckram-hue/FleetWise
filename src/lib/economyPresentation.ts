@@ -15,6 +15,19 @@ const statusLabels = new Map<string, string>([
 export const formatEconomyStatus = (status: string | null | undefined): string =>
     statusLabels.get(status ?? 'UNKNOWN') ?? 'Not available';
 
+export const formatEvidencePercentage = (value: unknown): string =>
+    typeof value === 'number' && Number.isFinite(value)
+        ? `${value.toLocaleString('en-ZA', { maximumFractionDigits: 1 })}%`
+        : 'Not available';
+
+// The API supplies display text. Normalize coverage presentation without changing its trigger.
+export const formatEvidenceReason = (reason: string): string => {
+    const coverage = /^Coverage of eligible recorded distance: (.*?)% \/ (\d+(?:\.\d+)?)%$/.exec(reason);
+    if (!coverage) return reason;
+    const value = /^\d+(?:\.\d+)?$/.test(coverage[1]) ? Number(coverage[1]) : null;
+    return `Coverage of eligible recorded distance: ${formatEvidencePercentage(value)} / ${coverage[2]}%`;
+};
+
 // Keep diagnostic identifiers out of user-facing copy, including future unknown codes.
 const reasonLabels = new Map<string, string>([
     ['REFUEL_DATE_UNKNOWN_CANNOT_BOUND_INTERVALS', 'Missing refuel dates prevent a reliable interval'],

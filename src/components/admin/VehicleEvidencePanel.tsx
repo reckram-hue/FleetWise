@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { economyApi, EconomyReport } from '../../services/economyApi';
-import { formatEconomyStatus } from '../../lib/economyPresentation';
+import { formatEconomyStatus, formatEvidencePercentage, formatEvidenceReason } from '../../lib/economyPresentation';
 
 type Vehicle = EconomyReport['vehicles'][number];
 const n = (value: number | null) => value === null ? 'Not available' : value.toLocaleString('en-ZA', { maximumFractionDigits: 1 });
@@ -41,15 +41,15 @@ export default function VehicleEvidencePanel({ vehicle, period, includeTest, onS
                 <option value="consumption">{vehicle.powertrain === 'ICE' ? 'ICE consumption evidence' : 'EV consumption evidence'}</option><option value="cost">Whole-period operating cost evidence</option>
             </select></label>
             <p>Eligible distance: {n(d.D)} km · Consumption coverage: {n(d.E)} km · Cost coverage: {n(d.C)} km</p>
-            <p>Selected-purpose coverage: {n(d.coveragePercent)}{d.coveragePercent === null ? '' : '%'} of eligible recorded distance · {d.sampleCount} valid {vehicle.powertrain === 'ICE' ? 'cycles' : 'intervals'}</p>
+            <p>Selected-purpose coverage: {formatEvidencePercentage(d.coveragePercent)} of eligible recorded distance · {d.sampleCount} valid {vehicle.powertrain === 'ICE' ? 'cycles' : 'intervals'}</p>
             <p>Observation span: {n(d.spanDays)} days · {d.operatingDays} recorded activity days · {d.distinctWeeks} distinct weeks</p>
             <p>First observation: {d.firstObservation || 'Not available'} · Latest: {d.latestObservation || 'Not available'}</p>
-            <p>Provenance: {formatEconomyStatus(d.provenance)}{vehicle.powertrain === 'EV' && ` · Usable-capacity evidence: ${n(d.capacityEvidencePercent)}${d.capacityEvidencePercent === null ? '' : '%'}`}</p>
+            <p>Provenance: {formatEconomyStatus(d.provenance)}{vehicle.powertrain === 'EV' && ` · Usable-capacity evidence: ${formatEvidencePercentage(d.capacityEvidencePercent)}`}</p>
             <p>{d.unknownAssignments} unknown/invalid assignments · {d.excludedReturnEvents} return-charging events excluded</p>
             {d.excludedEnergyAssignments !== null && <p>{d.excludedEnergyAssignments} otherwise eligible assignments have no qualifying battery-energy balance.</p>}
             {d.influence && <p>Largest leave-one-interval-out rate change: {n(d.influence.maxChangePercent)}%. Review sensitivity; no valid records were removed.</p>}
             <h4 className="font-semibold">Hard data gates</h4>{d.hard.length ? <ul className="list-disc pl-5">{d.hard.map(r => <li key={r}>{r}</li>)}</ul> : <p>No detected hard data failures. Reviewer confirmations are assessed separately.</p>}
-            <h4 className="font-semibold">Soft review triggers</h4>{d.soft.length ? <ul className="list-disc pl-5">{d.soft.map(r => <li key={r}>{r}</li>)}</ul> : <p>All provisional soft triggers met.</p>}
+            <h4 className="font-semibold">Soft review triggers</h4>{d.soft.length ? <ul className="list-disc pl-5">{d.soft.map(r => <li key={r}>{formatEvidenceReason(r)}</li>)}</ul> : <p>All provisional soft triggers met.</p>}
             {d.confirmation.map(r => <p key={r}>{r}</p>)}
             {d.review && <div className="border-t pt-2"><p>{d.review.current ? 'Current review' : 'Stale review'} · Reviewer: {d.review.reviewedBy} · {d.review.reviewedAt} · Method {d.review.methodologyVersion}</p><p>{d.review.notes}</p>{d.review.softOverrideReason && <p>Soft-trigger exception: {d.review.softOverrideReason}</p>}</div>}
             <p>Review scope: {period === 'ALL' ? 'All eligible history' : `Last ${period} days`} · UTC scope date {d.scopeDay} · Method {d.methodologyVersion}{includeTest ? ' · QA selection' : ''}. Reviews expire when the UTC date, method, scope or evidence changes.</p>

@@ -5,6 +5,42 @@ const { fixture, now } = require('./evidenceFixtures.cjs');
 const { calculateEconomy } = require('../functions-prod-jhb/lib/economyMetrics');
 const { attachReadiness } = require('../functions-prod-jhb/lib/evidenceReadiness');
 const vehicle = (powertrain = 'ICE') => { const input = fixture(powertrain); return attachReadiness(calculateEconomy(input, { now, period: '90', includeTest: false }), input, [], now).vehicles[0]; };
+for (const [value, expected] of [[74, '74%'], [0, '0%'], [null, 'Not available'], [undefined, 'Not available'], [NaN, 'Not available'], [Infinity, 'Not available'], ['unavailable', 'Not available']]) {
+  test(`coverage presentation preserves numeric values and rejects ${String(value)}`, () => {
+    const h = harness(), C = h.load('src/components/admin/VehicleEvidencePanel.tsx').default, v = vehicle('EV');
+    const rawReason = `Coverage of eligible recorded distance: ${value ?? 'unavailable'}% / 90%`;
+    for (const d of Object.values(v.readiness)) Object.assign(d, { coveragePercent: value, capacityEvidencePercent: value, soft: [rawReason] });
+    const before = structuredClone(v);
+    const render = () => h.render(C, { vehicle: v, period: '90', includeTest: false, onSaved() {} });
+    for (const purpose of ['consumption', 'cost']) {
+      nodes(render(), n => n.type === 'select')[0].props.onChange({ target: { value: purpose } });
+      const words = text(render());
+      assert.ok(words.includes(`Selected-purpose coverage: ${expected} of eligible recorded distance`));
+      assert.ok(words.includes(`Usable-capacity evidence: ${expected}`));
+      assert.ok(words.includes(`Coverage of eligible recorded distance: ${expected} / 90%`));
+      assert.doesNotMatch(words, /unavailable%|Not available%|NaN%|Infinity%/i);
+      if (expected === 'Not available') assert.doesNotMatch(words, /coverage: 0%|distance: 0%|evidence: 0%/i);
+    }
+    assert.deepEqual(v, before, 'presentation must not mutate readiness evidence or calculations');
+  });
+}
+
+test('actual unavailable backend coverage is presented cleanly without changing readiness results', () => {
+  const input = fixture(); input.assignments = []; input.refuels = [];
+  const v = attachReadiness(calculateEconomy(input, { now, period: '90', includeTest: false }), input, [], now).vehicles[0];
+  const before = structuredClone(v);
+  assert.equal(v.readiness.consumption.state, 'INSUFFICIENT_DATA');
+  assert.ok(v.readiness.consumption.soft.includes('Coverage of eligible recorded distance: unavailable% / 90%'));
+  const h = harness(), C = h.load('src/components/admin/VehicleEvidencePanel.tsx').default;
+  const words = text(h.render(C, { vehicle: v, period: '90', includeTest: false, onSaved() {} }));
+  assert.match(words, /Coverage of eligible recorded distance: Not available \/ 90%/);
+  assert.doesNotMatch(words, /unavailable%/i);
+  assert.deepEqual(v, before);
+  const { formatEvidenceReason } = h.load('src/lib/economyPresentation.ts');
+  assert.equal(formatEvidenceReason('Valid full-to-full cycles: 0 / 6'), 'Valid full-to-full cycles: 0 / 6');
+  assert.equal(formatEvidenceReason('Coverage of eligible recorded distance: unavailable% / 85%'), 'Coverage of eligible recorded distance: Not available / 85%');
+});
+
 for (const state of ['LIMITED_EVIDENCE', 'SUFFICIENT_FOR_ANALYSIS']) test(`evidence UI factual variance and ${state} presentation`, () => {
   const h = harness(), C = h.load('src/components/admin/VehicleEvidencePanel.tsx').default, v = vehicle(); v.readiness.consumption.state = state;
   const tree = h.render(C, { vehicle: v, period: '90', includeTest: false, onSaved() {} }), words = text(tree);
