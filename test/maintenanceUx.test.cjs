@@ -18,11 +18,11 @@ test('service board excludes TEST initially and completion is awaiting release r
   h.render(C,props);await h.settle();let tree=h.render(C,props);assert.ok(!text(tree).includes('TEST SERVICE'));
   input(tree,'Include TEST services').props.onChange({target:{checked:true}});tree=h.render(C,props);
   assert.match(text(tree),/TEST SERVICE — TEST/);assert.match(text(tree),/Work Completed \/ Awaiting Release/);
-  assert.ok(button(tree,'Release vehicle'));assert.ok(!button(tree,'Complete work'));assert.ok(!text(tree).includes('In Service'));
+  assert.ok(button(tree,'Release vehicle'));assert.ok(!button(tree,'Record completed work'));assert.ok(!text(tree).includes('In Service'));
 });
 test('completion starts actual odometer/cost blank and resolves only selected explicit links',async()=>{
   const calls=[];const b=await board(service,{completeServiceAdmin:async p=>{calls.push(p);}});
-  button(b.render(),'Complete work').props.onClick(); let tree=b.render();
+  button(b.render(),'Record completed work').props.onClick(); let tree=b.render();
   assert.equal(input(tree,'Actual completion odometer').props.value,''); assert.equal(input(tree,'Actual cost').props.value,'');
   input(tree,'Actual completion odometer').props.onChange({target:{value:'1100'}});
   input(b.render(),'Actual cost').props.onChange({target:{value:'0'}});
@@ -35,7 +35,7 @@ test('completion starts actual odometer/cost blank and resolves only selected ex
 test('completion draft retains reviewed defect revisions and displayed evidence across refresh before FIRST submission',async()=>{
   let current={id:'d',vehicleId:'v',status:'Open',urgency:'Critical',description:'Reviewed brake fault',defectRevision:7};const calls=[];
   const b=await board(service,{getAllDefects:async()=>[current],completeServiceAdmin:async p=>{calls.push(p);throw Error('Selected defect changed');}});
-  button(b.render(),'Complete work').props.onClick();input(b.render(),'Reviewed brake fault').props.onChange({target:{checked:true}});
+  button(b.render(),'Record completed work').props.onClick();input(b.render(),'Reviewed brake fault').props.onChange({target:{checked:true}});
   current={...current,defectRevision:9,description:'Later reopened brake fault'};button(b.render(),'Refresh services').props.onClick();await b.h.settle();
   assert.match(text(b.render()),/Reviewed brake fault/);assert.ok(!text(b.render()).includes('Later reopened brake fault'));
   input(b.render(),'Actual completion odometer').props.onChange({target:{value:'1100'}});input(b.render(),'Actual cost').props.onChange({target:{value:'10'}});input(b.render(),'Completion notes','textarea').props.onChange({target:{value:'Reviewed repair'}});
@@ -55,7 +55,7 @@ test('failed release retains request identity for a safe retry and shows blocker
   const calls=[];const b=await board({...service,returnedFromService:true},{changeVehicleLifecycleAdmin:async p=>{calls.push(p);throw Error('Another dispatched service requires completion');}});
   button(b.render(),'Release vehicle').props.onClick();input(b.render(),'Release reason','textarea').props.onChange({target:{value:'Checked vehicle'}});
   await nodes(b.render(),n=>n.type==='form')[0].props.onSubmit({preventDefault(){}});
-  assert.match(text(b.render()),/Another dispatched service/);
+  assert.match(text(nodes(b.render(), n => n.type === 'form')[0]),/Another dispatched service/);
   await nodes(b.render(),n=>n.type==='form')[0].props.onSubmit({preventDefault(){}});
   assert.equal(calls[0].requestId,calls[1].requestId);assert.equal(calls[0].clearManualHold,false);
   assert.equal(calls[0].expectedLifecycleRevision,4);assert.equal(calls[0].expectedHoldId,'hold-a');assert.equal(calls[0].releaseServiceId,'s');

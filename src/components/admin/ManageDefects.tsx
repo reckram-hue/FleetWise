@@ -11,9 +11,10 @@ import { AlertTriangle, Edit, CheckCircle, X, User as UserIcon, Car, Calendar, D
 interface ManageDefectsProps {
     onBack: () => void;
     selectedDefectId?: string;
+    onOpenMaintenance?: (vehicleId: string) => void;
 }
 
-const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId }) => {
+const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId, onOpenMaintenance }) => {
     const [defects, setDefects] = useState<DefectReport[]>([]);
     const [users, setUsers] = useState<User[]>([]);
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -336,6 +337,10 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId 
                     <p>{getDriverName(selectedDefect.driverId)} · {selectedDefect.category} · {selectedDefect.urgency} · {selectedDefect.status}</p>
                     <p>{selectedDefect.reportedDateTime.toLocaleString()}</p><p>{selectedDefect.description}</p>
                     <p>{selectedDefect.location}</p><p>{selectedDefect.notes}</p>
+                    {onOpenMaintenance && <div className="border rounded p-3 bg-blue-50">
+                        <button className="text-blue-800 underline min-h-11 font-semibold" onClick={() => onOpenMaintenance(selectedDefect.vehicleId)}>Plan service / repair</button>
+                        <p className="text-sm">Open this vehicle in Maintenance &amp; Service. Review its bookings and select this defect when scheduling work.</p>
+                    </div>}
                     <h3 className="font-bold">Evidence / Photos</h3>
                     {!selectedDefect.photos?.length && <p>No photos provided.</p>}
                     {selectedDefect.photos?.map((_, index) => <EvidencePhoto key={selectedDefect.id + index} caption={'Defect evidence ' + (index + 1)} load={() => api.getDefectPhotoAdmin(selectedDefect.id, index)} />)}

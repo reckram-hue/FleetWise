@@ -26,6 +26,8 @@ const AdminDashboard: React.FC = () => {
     const [activeDefectsCount, setActiveDefectsCount] = useState(0);
     const [selectedDefectId, setSelectedDefectId] = useState<string | null>(null);
     const [refreshTrigger, setRefreshTrigger] = useState(0);
+    const [maintenanceVehicleId, setMaintenanceVehicleId] = useState<string | undefined>();
+    const openMaintenance = (vehicleId?: string) => { setMaintenanceVehicleId(vehicleId); setView('maintenance'); };
 
     useEffect(() => {
         // Fetch vehicle data
@@ -88,7 +90,20 @@ const AdminDashboard: React.FC = () => {
     }
 
     if (view === 'vehicles') {
-        return <ManageVehicles onBack={() => setView('dashboard')} />;
+        return <ManageVehicles onBack={() => setView('dashboard')} onOpenMaintenance={openMaintenance} />;
+    }
+
+    if (view === 'maintenance') {
+        return <div className="min-h-screen bg-gray-100">
+            <Header title="Maintenance & Service" onBack={() => setView('dashboard')} />
+            <main className="max-w-7xl mx-auto p-4 sm:p-6 space-y-4">
+                <div className="flex flex-wrap gap-4">
+                    <button className="underline min-h-11" onClick={() => setView('service-providers')}>Workshops / service providers</button>
+                    <button className="underline min-h-11" onClick={() => { setSelectedDefectId(null); setView('defects'); }}>Manage defects</button>
+                </div>
+                <ServiceManagement initialVehicleId={maintenanceVehicleId} onChanged={() => setRefreshTrigger(v => v + 1)} />
+            </main>
+        </div>;
     }
 
     if (view === 'reports') {
@@ -111,6 +126,7 @@ const AdminDashboard: React.FC = () => {
                     setSelectedDefectId(null);
                 }}
                 selectedDefectId={selectedDefectId || undefined}
+                onOpenMaintenance={openMaintenance}
             />
         );
     }
@@ -130,7 +146,43 @@ const AdminDashboard: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-100">
       <Header title="Admin Dashboard" />
-      <main className="max-w-7xl mx-auto p-6 space-y-6">
+      <main className="max-w-7xl mx-auto p-4 sm:p-6 space-y-6">
+        <nav aria-label="Admin navigation" className="grid grid-cols-2 sm:flex sm:flex-wrap gap-3">
+            <button onClick={() => openMaintenance()} className="col-span-2 bg-blue-700 text-white text-left font-bold py-3 px-6 rounded-lg hover:bg-blue-800 shadow-lg">
+                <Wrench className="h-5 w-5 mr-2 inline" />Maintenance &amp; Service
+                <span className="block text-sm font-normal mt-1">Bookings, workshop returns &amp; history</span>
+            </button>
+            <button onClick={() => { setSelectedDefectId(null); setView('defects'); }} className="bg-amber-700 text-white font-bold py-3 px-6 rounded-lg hover:bg-amber-800 transition duration-300 shadow-lg">
+                <Wrench className="h-5 w-5 mr-2 inline" />Manage Defects
+            </button>
+            <button onClick={() => setView('inspections')} className="bg-teal-700 text-white font-bold py-3 px-6 rounded-lg hover:bg-teal-800 transition duration-300 shadow-lg">
+                <FileText className="h-5 w-5 mr-2 inline" />Inspection History
+            </button>
+            <button onClick={() => setView('drivers')} className="bg-indigo-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-indigo-600 transition duration-300 shadow-lg">
+                <Users className="h-5 w-5 mr-2 inline" />
+                Drivers
+            </button>
+            <button onClick={() => setView('vehicles')} className="bg-cyan-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-cyan-600 transition duration-300 shadow-lg">
+                <Truck className="h-5 w-5 mr-2 inline" />
+                Vehicles
+            </button>
+            <button onClick={() => setView('service-providers')} className="bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600 transition duration-300 shadow-lg">
+                <Wrench className="h-5 w-5 mr-2 inline" />
+                Service Providers
+            </button>
+            <button onClick={() => setView('reports')} className="bg-purple-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-purple-600 transition duration-300 shadow-lg">
+                <AlertTriangle className="h-5 w-5 mr-2 inline" />
+                Reports
+            </button>
+            <button onClick={() => setView('telegram')} className="bg-blue-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-blue-600 transition duration-300 shadow-lg">
+                <MessageCircle className="h-5 w-5 mr-2 inline" />
+                Telegram
+            </button>
+            <button onClick={() => setView('settings')} className="bg-gray-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-gray-700 transition duration-300 shadow-lg">
+                <SettingsIcon className="h-5 w-5 mr-2 inline" />
+                Settings
+            </button>
+        </nav>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <StatCard title="Total Vehicles" value={`${activeVehicles}/${totalVehicles}`} icon={<Truck className="h-8 w-8 text-cyan-500"/>} />
             <StatCard
@@ -176,40 +228,6 @@ const AdminDashboard: React.FC = () => {
                 isAlert={driversNeedingLicense > 0}
             />
         </div>
-        
-        <div className="flex flex-wrap gap-6">
-            <button onClick={() => { setSelectedDefectId(null); setView('defects'); }} className="bg-amber-700 text-white font-bold py-3 px-6 rounded-lg hover:bg-amber-800 transition duration-300 shadow-lg">
-                <Wrench className="h-5 w-5 mr-2 inline" />Manage Defects
-            </button>
-            <button onClick={() => setView('inspections')} className="bg-teal-700 text-white font-bold py-3 px-6 rounded-lg hover:bg-teal-800 transition duration-300 shadow-lg">
-                <FileText className="h-5 w-5 mr-2 inline" />Inspection History
-            </button>
-            <button onClick={() => setView('drivers')} className="bg-indigo-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-indigo-600 transition duration-300 shadow-lg">
-                <Users className="h-5 w-5 mr-2 inline" />
-                Drivers
-            </button>
-            <button onClick={() => setView('vehicles')} className="bg-cyan-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-cyan-600 transition duration-300 shadow-lg">
-                <Truck className="h-5 w-5 mr-2 inline" />
-                Vehicles
-            </button>
-            <button onClick={() => setView('service-providers')} className="bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600 transition duration-300 shadow-lg">
-                <Wrench className="h-5 w-5 mr-2 inline" />
-                Service Providers
-            </button>
-            <button onClick={() => setView('reports')} className="bg-purple-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-purple-600 transition duration-300 shadow-lg">
-                <AlertTriangle className="h-5 w-5 mr-2 inline" />
-                Reports
-            </button>
-            <button onClick={() => setView('telegram')} className="bg-blue-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-blue-600 transition duration-300 shadow-lg">
-                <MessageCircle className="h-5 w-5 mr-2 inline" />
-                Telegram
-            </button>
-            <button onClick={() => setView('settings')} className="bg-gray-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-gray-700 transition duration-300 shadow-lg">
-                <SettingsIcon className="h-5 w-5 mr-2 inline" />
-                Settings
-            </button>
-        </div>
-
 
         <div className="grid grid-cols-1 gap-6">
           <CriticalDefects onDefectClick={(defectId) => {
@@ -217,8 +235,6 @@ const AdminDashboard: React.FC = () => {
             setView('defects');
           }} />
         </div>
-
-        <ServiceManagement onChanged={() => setRefreshTrigger(v => v + 1)} />
 
         <LicenseRenewalAlerts onLicenseUpdated={() => setRefreshTrigger(prev => prev + 1)} />
 

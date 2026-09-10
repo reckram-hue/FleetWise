@@ -1,3 +1,4 @@
+import { formatVehicleIdentity } from '../../lib/vehicleIdentity';
 import VehicleLifecycleActions from './VehicleLifecycleActions';
 import React, { useState, useEffect, useRef } from 'react';
 import { Vehicle, VehicleType, VehicleStatus, MaintenanceRecord, BodyStyle, FuelType, ServiceProvider } from '../../types';
@@ -137,11 +138,11 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onC
     const isPotentiallyFreeService = vehicle.freeServicesUntilKm && (vehicle.currentOdometer || 0) <= vehicle.freeServicesUntilKm;
 
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
-            <Card className="w-full max-w-4xl max-h-[90vh] flex flex-col">
+        <div role="dialog" aria-modal="true" aria-label="Maintenance history" className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
+            <Card className="w-full max-w-4xl max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-xl font-bold">Maintenance Log: {vehicle.make} {vehicle.model} ({vehicle.registration})</h3>
-                    <button onClick={onClose} className="p-1 rounded-full hover:bg-gray-200"><X size={20} /></button>
+                    <div><h3 className="text-xl font-bold">Maintenance history — {formatVehicleIdentity(vehicle).primary}</h3><p className="text-sm text-gray-600">{formatVehicleIdentity(vehicle).secondary}</p></div>
+                    <button aria-label="Close maintenance history" onClick={onClose} className="p-3 shrink-0 rounded-full hover:bg-gray-200"><X size={20} /></button>
                 </div>
 
                 {isPotentiallyFreeService && (
@@ -151,17 +152,18 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onC
                     </div>
                 )}
 
-                <div className="mb-6 p-4 border rounded-lg bg-gray-50">
-                    <h4 className="text-lg font-semibold mb-3">Add New Record</h4>
+                <details className="mb-6 p-4 border rounded-lg bg-gray-50">
+                    <summary className="text-lg font-semibold cursor-pointer">Record past maintenance</summary>
+                    <p className="text-sm my-3">For a current booking, use Record completed work in Maintenance &amp; Service. Use this form for other past work.</p>
                     <form onSubmit={handleRecordSubmit} className="space-y-3">
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <input type="date" name="date" value={newRecord.date} onChange={handleRecordChange} className="p-2 border rounded" required />
-                            <input name="serviceType" value={newRecord.serviceType} onChange={handleRecordChange} placeholder="Service Type (e.g., Oil Change)" className="p-2 border rounded" required />
-                            <input type="number" name="odometer" aria-label="Actual maintenance odometer (km)" min="0" step="any" value={newRecord.odometer} onChange={handleRecordChange} placeholder="Odometer (km)" className="p-2 border rounded" required />
+                            <input aria-label="Maintenance date" type="date" name="date" value={newRecord.date} onChange={handleRecordChange} className="p-2 border rounded min-w-0 w-full" required />
+                            <input aria-label="Maintenance service type" name="serviceType" value={newRecord.serviceType} onChange={handleRecordChange} placeholder="Service Type (e.g., Oil Change)" className="p-2 border rounded min-w-0 w-full" required />
+                            <input type="number" name="odometer" aria-label="Actual maintenance odometer (km)" min="0" step="any" value={newRecord.odometer} onChange={handleRecordChange} placeholder="Odometer (km)" className="p-2 border rounded min-w-0 w-full" required />
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <input type="number" name="cost" aria-label="Actual maintenance cost (R)" min="0" step="0.01" value={newRecord.cost} onChange={handleRecordChange} placeholder="Cost (R)" className="p-2 border rounded col-span-1" required />
-                            <textarea name="notes" value={newRecord.notes || ''} onChange={handleRecordChange} placeholder="Work completed / notes" required className="p-2 border rounded md:col-span-2" rows={1}></textarea>
+                            <input type="number" name="cost" aria-label="Actual maintenance cost (R)" min="0" step="0.01" value={newRecord.cost} onChange={handleRecordChange} placeholder="Cost (R)" className="p-2 border rounded col-span-1 min-w-0 w-full" required />
+                            <textarea aria-label="Maintenance work notes" name="notes" value={newRecord.notes || ''} onChange={handleRecordChange} placeholder="Work completed / notes" required className="p-2 border rounded md:col-span-2 min-w-0 w-full" rows={1}></textarea>
                         </div>
                         <div className="flex justify-end">
                             <button type="submit" disabled={isSubmitting} className="bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600 transition disabled:bg-gray-400">
@@ -169,7 +171,7 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onC
                             </button>
                         </div>
                     </form>
-                </div>
+                </details>
 
                 <div className="flex-grow overflow-y-auto">
                     <h4 className="text-lg font-semibold mb-2">History{vehicle.isTestData ? ' — TEST' : ''}</h4>
@@ -179,29 +181,12 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onC
                     {(!historyLoading && records.length === 0) ? (
                         <p className="text-gray-500">No maintenance records found.</p>
                     ) : (
-                        <div className="overflow-x-auto border rounded-lg">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                    <tr>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Odometer</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cost</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Notes</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {records.map(record => (
-                                        <tr key={record.id}>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm">{record.date}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm font-medium">{record.serviceType}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm">{record.odometer.toLocaleString()} km</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm">R {record.cost.toLocaleString()}</td>
-                                            <td className="px-4 py-2 text-sm text-gray-600">{record.notes}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                        <div className="space-y-3">
+                            {records.map(record => <article key={record.id} className="border rounded-lg p-3 break-words">
+                                <div className="flex flex-wrap justify-between gap-2"><h5 className="font-semibold">{record.serviceType}</h5><p>{record.date}</p></div>
+                                <p className="text-sm my-1">{record.odometer.toLocaleString()} km · R {record.cost.toLocaleString()}</p>
+                                <p className="text-sm text-gray-600 whitespace-pre-wrap">{record.notes}</p>
+                            </article>)}
                         </div>
                     )}
                 </div>
@@ -351,10 +336,11 @@ const QRModal: React.FC<QRModalProps> = ({ vehicle, onClose }) => {
 
 
 interface ManageVehiclesProps {
+    onOpenMaintenance?: (vehicleId?: string) => void;
     onBack: () => void;
 }
 
-const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
+const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack, onOpenMaintenance }) => {
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
@@ -891,6 +877,10 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                 <input type="number" name="currentOdometer" value={selectedVehicle.currentOdometer || ''} onChange={handleFormChange} className="mt-1 p-2 border rounded w-full" required disabled={isEditing || !isEditMode} />
                             </div>
 
+                            {isEditing && 'id' in selectedVehicle && selectedVehicle.id && <div className="md:col-span-2 flex flex-wrap gap-3">
+                                <button type="button" className="underline min-h-11" onClick={() => handleMaintenanceClick(selectedVehicle as Vehicle)}>Maintenance history</button>
+                                {onOpenMaintenance && <button type="button" className="text-blue-800 border border-blue-700 rounded px-3 min-h-11" onClick={() => onOpenMaintenance(selectedVehicle.id)}>Maintenance &amp; Service</button>}
+                            </div>}
                             {isEditing && 'id' in selectedVehicle && selectedVehicle.id && <div className="md:col-span-2"><VehicleLifecycleActions key={selectedVehicle.id} vehicle={selectedVehicle as Vehicle} onSaved={() => { closeForm(); fetchVehicles(); }} /></div>}
                             {/* Service Information - Available for all vehicle types */}
                             <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1447,6 +1437,12 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                                         {vehicle.registration}
                                                         <ChevronDown size={16} />
                                                     </button>
+                                                    <div className="flex gap-3">
+                                                        <button onClick={() => handleMaintenanceClick(vehicle)} className="text-green-700 hover:text-green-900 min-h-11" aria-label={`Maintenance history for ${formatVehicleIdentity(vehicle).primary}`} title="Maintenance history">
+                                                            <Wrench size={16} className="inline mr-1" />History
+                                                        </button>
+                                                        {onOpenMaintenance && <button className="text-blue-800 underline min-h-11" aria-label={`Maintenance & Service for ${formatVehicleIdentity(vehicle).primary}`} onClick={() => onOpenMaintenance(vehicle.id)}>Service</button>}
+                                                    </div>
                                                 </td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                                     {vehicle.alias || '-'}
@@ -1475,9 +1471,6 @@ const ManageVehicles: React.FC<ManageVehiclesProps> = ({ onBack }) => {
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                                                     <button onClick={() => handleEditClick(vehicle)} className="text-blue-600 hover:text-blue-900" title="Edit">
                                                         <Edit size={16} />
-                                                    </button>
-                                                    <button onClick={() => handleMaintenanceClick(vehicle)} className="text-green-600 hover:text-green-900" title="Maintenance">
-                                                        <Wrench size={16} />
                                                     </button>
                                                     <button onClick={() => handleQRClick(vehicle)} className="text-purple-600 hover:text-purple-900" title="QR Code">
                                                         <QrCode size={16} />
