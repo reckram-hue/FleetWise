@@ -21,7 +21,7 @@ function harness(overrides = {}) {
     if (!old || !deps || deps.some((v, j) => !Object.is(v, old[j]))) current.effects.push(callback);
     current.deps[i] = deps;
   } };
-  const realFiles = ['economyPresentation', 'FuelEconomyMonitor', 'LogRefuelForm', 'AdminDashboard', 'InspectionHistory', 'successNotice', 'SuccessNotice', 'ActiveShift','App','vehicleIdentity', 'EvidencePhoto', 'defectVisibility', 'elapsedTime', 'fuelEconomy', 'adminSession', 'AdminLogin', 'ManageDefects', 'TelegramDrivers', 'AccidentReportEntry', 'AccidentReportDetails'];
+  const realFiles = ['VehicleEvidencePanel', 'economyPresentation', 'FuelEconomyMonitor', 'LogRefuelForm', 'AdminDashboard', 'InspectionHistory', 'successNotice', 'SuccessNotice', 'ActiveShift','App','vehicleIdentity', 'EvidencePhoto', 'defectVisibility', 'elapsedTime', 'fuelEconomy', 'adminSession', 'AdminLogin', 'ManageDefects', 'TelegramDrivers', 'AccidentReportEntry', 'AccidentReportDetails'];
   function load(filename) {
     filename = path.resolve(filename); if (cache.has(filename)) return cache.get(filename).exports;
     const mod = new Module(filename, module); cache.set(filename, mod); const req = Module.createRequire(filename);

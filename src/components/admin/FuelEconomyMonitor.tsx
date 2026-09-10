@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { Vehicle } from '../../types';
 import { economyApi, EconomyReport } from '../../services/economyApi';
 import { formatEconomyStatus, formatEconomyReason } from '../../lib/economyPresentation';
+import VehicleEvidencePanel from './VehicleEvidencePanel';
 
 const number = (v: number | null, decimals = 1) => v === null ? formatEconomyStatus('INSUFFICIENT_DATA') : v.toLocaleString('en-ZA', { maximumFractionDigits: decimals, minimumFractionDigits: decimals });
 const percentage = (v: number | null) => typeof v === 'number' && Number.isFinite(v) ? `${number(v)}%` : formatEconomyStatus('INSUFFICIENT_DATA');
@@ -10,7 +11,7 @@ const amount = (v: number | null) => v === null ? formatEconomyStatus('INSUFFICI
 const control = 'min-h-11 rounded border border-gray-300 bg-white px-3 py-2';
 
 export default function FuelEconomyMonitor(_props: { vehicles: Vehicle[] }) {
-    const [period, setPeriod] = useState<'30' | '90' | 'ALL'>('30'), [includeTest, setIncludeTest] = useState(false);
+    const [period, setPeriod] = useState<'30' | '90' | 'ALL'>('90'), [includeTest, setIncludeTest] = useState(false);
     const [report, setReport] = useState<EconomyReport | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(true), [retry, setRetry] = useState(0);
     useEffect(() => {
         let cancelled = false; setBusy(true); setError(''); setReport(null);
@@ -67,6 +68,7 @@ export default function FuelEconomyMonitor(_props: { vehicles: Vehicle[] }) {
                         {e.capacityUsed && <p>Usable capacity used: {e.capacityUsed.valueKWh} kWh; source: {e.capacityUsed.source}; snapshot: {e.capacityUsed.recordedAt}</p>}
                     </div>)}
                 </details>
+                {v.readiness && <VehicleEvidencePanel key={`${v.vehicleId}-${v.readiness.consumption.fingerprint}`} vehicle={v} period={period} includeTest={includeTest} onSaved={() => setRetry(n => n + 1)} />}
                 </th>
                 <td className="p-3 align-top">{v.powertrain}</td>
                 <td className="p-3 align-top"><p>{number(v.distanceSampleCount ? v.distanceKm : null)} km</p><p>{v.distanceProvenance === 'INSUFFICIENT_DATA' ? 'No usable driving data yet' : formatEconomyStatus(v.distanceProvenance)}</p><p>{v.distanceSampleCount} qualifying intervals</p><p>{v.unknownAssignments} unknown/invalid intervals</p></td>

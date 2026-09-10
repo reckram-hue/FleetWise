@@ -71,7 +71,7 @@ test('economy UI uses server evidence, distinct units and honest unknowns; perio
   assert.equal(nodes(tree, n => n.type === 'table').length, 1);
   assert.equal(text(nodes(tree, n => n.type === 'th')[0]), 'Registration / provenance');
   assert.match(words, /Total eligible EV\/ICE distance: Insufficient data km/);
-  assert.deepEqual(calls, [['30', false]]);
+  assert.deepEqual(calls, [['90', false]]);
   nodes(tree, n => n.type === 'select')[0].props.onChange({ target: { value: '90' } });
   render(); await h.settle(); tree = render();
   nodes(tree, n => n.type === 'input' && n.props.type === 'checkbox')[0].props.onChange({ target: { checked: true } });

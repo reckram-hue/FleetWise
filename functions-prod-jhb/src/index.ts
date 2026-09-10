@@ -10,7 +10,7 @@ import * as crypto from 'crypto';
 import { driverDistance, intervalDistance } from './assignmentDistance';
 import { createActiveAdminProfile, requireActiveAdmin } from './adminAuthorization';
 import { createInspectionHistoryHandlers } from './inspectionHistory';
-import { createEconomyHandler } from './economyApi';
+import { createEconomyHandler, createEvidenceReviewHandler } from './economyApi';
 import { usableCapacitySnapshot } from './economyMetrics';
 import { persistRefuel } from './refuelCapture';
 import { reservePinAttempt, assertActivePinDriver, pinAttemptDocumentId } from './pinAttempts';
@@ -3884,3 +3884,4 @@ export const getVehicleInspectionAdmin = onProdCall(inspectionHistory.getVehicle
 export const getInspectionPhotoAdmin = onProdCall(inspectionHistory.getInspectionPhotoAdmin);
 
 export const getFleetEconomySummaryAdmin = onProdCall(createEconomyHandler({ db, requireAdmin }));
+export const saveVehicleEvidenceReviewAdmin = onProdCall(createEvidenceReviewHandler({ db, requireAdmin }));

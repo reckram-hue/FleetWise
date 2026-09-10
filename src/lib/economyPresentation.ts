@@ -8,6 +8,8 @@ const statusLabels = new Map<string, string>([
     ['ESTIMATED', 'Estimated'],
     ['MIXED', 'Mixed data'],
     ['UNKNOWN', 'Not available'],
+    ['LIMITED_EVIDENCE', 'Limited evidence'],
+    ['SUFFICIENT_FOR_ANALYSIS', 'Sufficient for analysis'],
 ]);
 
 export const formatEconomyStatus = (status: string | null | undefined): string =>

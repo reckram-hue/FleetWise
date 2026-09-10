@@ -10,7 +10,7 @@ import * as crypto from 'crypto';
 import { driverDistance, intervalDistance } from './assignmentDistance';
 import { createActiveAdminProfile, requireActiveAdmin } from './adminAuthorization';
 import { createInspectionHistoryHandlers } from './inspectionHistory';
-import { createEconomyHandler } from './economyApi';
+import { createEconomyHandler, createEvidenceReviewHandler } from './economyApi';
 import { usableCapacitySnapshot } from './economyMetrics';
 import { persistRefuel } from './refuelCapture';
 import { reservePinAttempt, assertActivePinDriver, pinAttemptDocumentId } from './pinAttempts';
@@ -3879,3 +3879,4 @@ export const getVehicleInspectionAdmin = functions.https.onCall(inspectionHistor
 export const getInspectionPhotoAdmin = functions.https.onCall(inspectionHistory.getInspectionPhotoAdmin);
 
 export const getFleetEconomySummaryAdmin = functions.https.onCall(createEconomyHandler({ db, requireAdmin }));
+export const saveVehicleEvidenceReviewAdmin = functions.https.onCall(createEvidenceReviewHandler({ db, requireAdmin }));

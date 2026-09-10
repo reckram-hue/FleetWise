@@ -6,6 +6,7 @@ const { describe, test } = require('node:test');
 const source = readFileSync(join(__dirname, '..', 'src', 'index.ts'), 'utf8');
 
 const expectedCallables = [
+  'saveVehicleEvidenceReviewAdmin',
   'listVehicleInspectionsAdmin', 'getVehicleInspectionAdmin', 'getInspectionPhotoAdmin', 'getFleetEconomySummaryAdmin',
   'createAccidentReportDraft', 'updateAccidentReportDraft', 'getAccidentReportForDriver', 'uploadAccidentPhoto',
   'submitAccidentReport', 'listAccidentReportsAdmin', 'getAccidentReportAdmin', 'getAccidentPhoto', 'getDefectPhotoAdmin',
@@ -84,7 +85,7 @@ describe('Johannesburg production port invariants', () => {
 
   test('economy engine, read API and idempotent capture remain identical across backends', () => {
     const read = path => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
-    for (const name of ['economyMetrics.ts', 'economyApi.ts', 'refuelCapture.ts']) {
+    for (const name of ['economyMetrics.ts', 'economyApi.ts', 'evidenceReadiness.ts', 'refuelCapture.ts']) {
       assert.equal(read(join(__dirname, '..', 'src', name)), read(join(__dirname, '..', '..', 'functions', 'src', name)), name);
     }
   });

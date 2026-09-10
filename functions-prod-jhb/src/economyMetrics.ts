@@ -134,15 +134,16 @@ export function calculateEconomy(input: EconomyInput, options: { period: '30' | 
       && (!finite(millis(a.endedAt)) || millis(a.endedAt) >= from)).length + overlaps.size;
     if (unknownAssignments) reasons.add('UNKNOWN_INVALID_OR_OVERLAPPING_ASSIGNMENTS');
     const distanceKm = sum(usable.map(a => intervalDistance(a)!));
-    const samples: { distanceKm: number; quantity: number; cost: number | null; refs: string[]; capacity?: CapacitySnapshot }[] = [];
+    const samples: { distanceKm: number; quantity: number; cost: number | null; refs: string[]; capacity?: CapacitySnapshot; start: number; end: number; activity: number[] }[] = [];
     let chargerEnergyKWh = 0, chargerSampleCount = 0, chargerCoverageKm = 0;
     const chargerRecordIds: string[] = [];
     if (vehicle.vehicleType === 'ICE') {
-      const refuels = input.refuels.filter(r => r.vehicleId === vehicle.id && (!finite(millis(r.date)) || millis(r.date) <= options.now))
+      const refuels: Row[] = input.refuels.filter(r => r.vehicleId === vehicle.id && (!finite(millis(r.date)) || millis(r.date) <= options.now))
         .map(r => ({ ...r, excluded: !options.includeTest && test(r) }));
       const ice = iceIntervals(refuels, usable);
       for (const reason of ice.reasons) reasons.add(reason);
-      for (const i of ice.intervals) if (i.start >= from && i.end <= options.now) samples.push({ distanceKm: i.distanceKm, quantity: i.litres, cost: i.cost, refs: i.refs });
+      for (const i of ice.intervals) if (i.start >= from && i.end <= options.now) samples.push({ distanceKm: i.distanceKm, quantity: i.litres, cost: i.cost, refs: i.refs, start: i.start, end: i.end,
+        activity: [...usable.flatMap(a => [millis(a.startedAt), millis(a.endedAt)]), ...refuels.filter(r => i.refs.includes(r.id)).map(r => millis(r.date))].filter(t => t >= i.start && t <= i.end) });
     } else if (vehicle.vehicleType === 'EV') {
       for (const a of usable) {
         // Include conflicting claimed ownership so bad joins invalidate rather than disappear.
@@ -152,7 +153,7 @@ export function calculateEconomy(input: EconomyInput, options: { period: '30' | 
             : millis(s.startedAt) < millis(a.endedAt) && millis(s.endedAt) > millis(a.startedAt))))
           .map(s => ({ ...s, excluded: !options.includeTest && test(s) }));
         const result = evInterval(a, charges);
-        if (result.batteryEnergyKWh !== null) samples.push({ distanceKm: intervalDistance(a)!, quantity: result.batteryEnergyKWh, cost: result.cost, refs: [a.id, ...charges.map(s => s.id)], capacity: result.capacity! });
+        if (result.batteryEnergyKWh !== null) samples.push({ distanceKm: intervalDistance(a)!, quantity: result.batteryEnergyKWh, cost: result.cost, refs: [a.id, ...charges.map(s => s.id)], capacity: result.capacity!, start: millis(a.startedAt), end: millis(a.endedAt), activity: [millis(a.startedAt), millis(a.endedAt)] });
         else if (result.reason) reasons.add(result.reason);
         // Meter-reported input remains useful even when usable capacity/consumption is unknown.
         const meters = charges.filter(s => !s.excluded && ownerMatches(s, a) && s.status === 'CLOSED' && s.recordStatus === 'ACTIVE'
@@ -180,6 +181,8 @@ export function calculateEconomy(input: EconomyInput, options: { period: '30' | 
     if (costCoverageKm < distanceKm || cost === null) reasons.add('INSUFFICIENT_COST_DATA');
     return {
       vehicleId: vehicle.id, registration: vehicle.registration || null, powertrain: vehicle.vehicleType, isTestData: vehicle.isTestData === true,
+      testProvenanceAmbiguous: [vehicle, ...all, ...input.drivers, ...input.refuels.filter(r => r.vehicleId === vehicle.id), ...input.sessions.filter(r => r.vehicleId === vehicle.id), ...input.chargingEvents.filter(r => r.vehicleId === vehicle.id)]
+        .some(r => r.isTestData != null && typeof r.isTestData !== 'boolean'),
       periodStart: from ? new Date(from).toISOString() : usable.length ? new Date(Math.min(...usable.map(a => millis(a.startedAt)))).toISOString() : null,
       periodEnd: new Date(options.now).toISOString(), distanceKm, distanceSampleCount: usable.length, unknownAssignments,
       distanceProvenance: usable.length ? 'MEASURED' as Provenance : 'INSUFFICIENT_DATA' as Provenance,
@@ -194,6 +197,7 @@ export function calculateEconomy(input: EconomyInput, options: { period: '30' | 
         ? (vehicle.vehicleType === 'ICE' ? vehicle.manufacturerFuelConsumption : vehicle.manufacturerEnergyConsumption) : null,
       provenance: combineProvenance([usable.length ? 'MEASURED' : 'INSUFFICIENT_DATA', provenance]), reasons: [...reasons], excludedReturnEvents,
       evidence: samples.map(s => ({ recordIds: s.refs, capacityUsed: s.capacity || null, provenance })),
+      diagnosticSamples: samples.map(s => ({ distanceKm: s.distanceKm, quantity: s.quantity, cost: s.cost, start: s.start, end: s.end, activity: s.activity, capacity: s.capacity || null })),
     };
   });
   const aggregate = (powertrain: string) => {
