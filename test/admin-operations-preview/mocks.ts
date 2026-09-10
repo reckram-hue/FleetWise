@@ -51,8 +51,13 @@ const uxDefects = [{ id: 'ux-defect', vehicleId: uxVehicles[1].id, driverId: dri
 const uxReads: Record<string, (...args: any[]) => Promise<any>> = {
   getVehicles: async () => uxVehicles, getVehicle: async id => uxVehicles.find(v => v.id === id), getScheduledServices: async () => uxServices,
   getAllDefects: async () => uxDefects, getActiveDefects: async () => uxDefects,
-  getServiceProviders: async () => [{ id: 'ux-workshop', name: 'Sample workshop', active: true, specializations: ['Mechanical'] }],
-  getMaintenanceRecords: async vehicleId => [{ id: 'ux-history', vehicleId, date: '2026-08-20', serviceType: 'Routine service', odometer: 10000, cost: 950, notes: 'Synthetic example: oil and filter changed.' }],
+  getServiceProviders: async (activeOnly = false) => {
+    const rows = new URLSearchParams(location.search).has('workshopSetup')
+      ? [{ id: 'ux-legacy-provider', name: 'LOCAL TEST legacy provider — missing specializations', isActive: false }]
+      : [{ id: 'ux-workshop', name: 'Sample workshop', isActive: true, specializations: ['General'] }];
+    return rows.filter(p => !activeOnly || p.isActive);
+  },
+  getMaintenanceRecords: async vehicleId => [{ id: 'ux-history', vehicleId, date: '2026-08-20', serviceType: 'Routine service', serviceProvider: 'LOCAL TEST saved workshop snapshot', odometer: 10000, cost: 950, notes: 'Synthetic example: oil and filter changed.' }],
 };
 export default new Proxy({ getVehicles: async () => [vehicle], getUsers: async () => [driver], getActiveDefects: async () => [],
   listChargingLocationsAdmin: async () => [{ id: 'test-charger', name: 'TEST company charger', active: true, tariffMethod: 'PER_KWH', tariffRate: 2.5 }],

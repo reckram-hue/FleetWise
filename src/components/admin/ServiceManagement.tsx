@@ -22,7 +22,7 @@ type Stage = typeof stages[number];
 function serviceStage(s: ScheduledService): Stage {
   return s.releasedAt ? 'Completed' : s.returnedFromService ? 'Awaiting release' : s.sentForService ? 'At workshop' : 'Scheduled';
 }
-export default function ServiceManagement({ onChanged, initialVehicleId = '' }: { onChanged: () => void; initialVehicleId?: string }) {
+export default function ServiceManagement({ onChanged, initialVehicleId = '', onManageWorkshops }: { onChanged: () => void; initialVehicleId?: string; onManageWorkshops?: (vehicleId?: string) => void }) {
   const [services, setServices] = useState<ScheduledService[]>([]), [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [providers, setProviders] = useState<ServiceProvider[]>([]), [defects, setDefects] = useState<DefectReport[]>([]);
   const [form, setForm] = useState<Form | null>(null), [busy, setBusy] = useState(false), [loading, setLoading] = useState(true);
@@ -82,6 +82,11 @@ export default function ServiceManagement({ onChanged, initialVehicleId = '' }: 
       <button className="bg-blue-600 text-white rounded px-4 py-2" disabled={busy || loading} onClick={() => open('book')}>Schedule service</button>
       <button className="underline min-h-11" disabled={busy} onClick={() => { setError(''); reload().catch(e => setError(e.message)); }}>Refresh services</button></div>
     <p className="text-gray-600 mt-3">Schedule service, send the vehicle to a workshop, record completed work, then release it to make it available.</p>
+    {!loading && !error && !form && providers.length === 0 && <div className="border border-amber-300 bg-amber-50 rounded p-3 mt-3" role="status">
+      <p className="font-semibold">No active workshops are available for booking.</p>
+      <p>Add a workshop or activate an existing service provider before scheduling service. Workshop setup requires a name, contact person, phone, email and at least one specialization.</p>
+      {onManageWorkshops && <button type="button" className="underline min-h-11" onClick={() => onManageWorkshops(vehicleFilter || undefined)}>Manage workshops</button>}
+    </div>}
     <div className="flex flex-wrap items-end gap-3 my-4">
       <label className="w-full sm:flex-1 min-w-0">Vehicle
         <select disabled={busy} aria-label="Filter by vehicle" className="block border rounded p-2 w-full min-h-11" value={vehicleFilter} onChange={e => { setVehicleFilter(e.target.value); setForm(null); }}>
@@ -121,6 +126,7 @@ export default function ServiceManagement({ onChanged, initialVehicleId = '' }: 
     {form && <form onSubmit={submit} className="border rounded p-4 mt-4 space-y-3" aria-label="Service operation">
       <h3 ref={formHeading} tabIndex={-1} className="font-bold">{form.action === 'book' ? 'Book service' : form.action === 'dispatch' ? 'Send to workshop' : form.action === 'complete' ? 'Complete service work' : 'Release vehicle to Active'}</h3>
       {error && <p role="alert" className="text-red-800">{error}</p>}
+      {form.action === 'book' && <p className="text-sm text-gray-600">All booking fields are required except notes and defect links.</p>}
       {form.action === 'book' ? <div className="grid md:grid-cols-2 gap-3">
         <label>Vehicle<select required disabled={services.some(s => s.id === form.serviceId)} value={form.vehicleId} onChange={e => patch({ vehicleId: e.target.value, linked: [] })} className="block border p-2 w-full"><option value="">Select vehicle</option>{vehicles.filter(v => !['Sold','End of Life'].includes(v.status) && (includeTest || !v.isTestData || v.id === initialVehicleId)).map(v => <option value={v.id} key={v.id}>{label(v.id)}{v.isTestData ? ' — TEST' : ''}</option>)}</select></label>
         <label>Service type<input required value={form.serviceType} onChange={e => patch({ serviceType: e.target.value })} className="block border p-2 w-full" /></label>
@@ -129,6 +135,11 @@ export default function ServiceManagement({ onChanged, initialVehicleId = '' }: 
         <label>Booked date<input required type="date" value={form.bookedDate} onChange={e => patch({ bookedDate: e.target.value })} className="block border p-2 w-full min-w-0" /></label>
         <label>Booked time<input required type="time" value={form.bookedTime} onChange={e => patch({ bookedTime: e.target.value })} className="block border p-2 w-full min-w-0" /></label>
         <label>Workshop<select required value={form.serviceProviderId} onChange={e => patch({ serviceProviderId: e.target.value })} className="block border p-2 w-full min-w-0"><option value="">Select workshop</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+        {providers.length === 0 && <div className="border border-amber-300 bg-amber-50 rounded p-3 md:col-span-2" role="status">
+          <p>No active workshops are available. Add a workshop or activate an existing service provider before booking.</p>
+          {onManageWorkshops && <button type="button" className="underline min-h-11" onClick={() => onManageWorkshops(form.vehicleId || undefined)}>Manage workshops</button>}
+          <p className="text-sm">Your selected vehicle will be retained. Re-enter any unsaved booking details when you return.</p>
+        </div>}
       </div> : <p>{label(form.vehicleId)}</p>}
       {(form.action === 'book' || form.action === 'complete') && <fieldset><legend>{form.action === 'book' ? 'Defects addressed by this service' : 'Explicitly resolve repaired defects'}</legend>
         {(form.action === 'complete' ? form.reviewedDefects : defects).filter(d => d.vehicleId === form.vehicleId && !['Resolved','Duplicate'].includes(d.status) && (form.action === 'book' || form.linked.includes(d.id))).map(d => {

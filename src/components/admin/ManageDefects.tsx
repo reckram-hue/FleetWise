@@ -127,7 +127,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId,
             <Header title="Manage Defects" />
             <main className="max-w-7xl mx-auto p-6">
                 <Card>
-                    <div className="flex justify-between items-center mb-6">
+                    <div className="flex flex-wrap gap-3 justify-between items-center mb-6">
                         <h2 className="text-2xl font-bold text-gray-800">Defect Management</h2>
                         <button
                             onClick={onBack}
@@ -222,8 +222,8 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId,
                         <p>Loading defects...</p>
                     ) : (
                         <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
+                            <table className="block md:table w-full divide-y divide-gray-200">
+                                <thead className="hidden md:table-header-group bg-gray-50">
                                     <tr>
                                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                             Defect Details
@@ -242,16 +242,16 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId,
                                         </th>
                                     </tr>
                                 </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
+                                <tbody className="block md:table-row-group bg-white divide-y divide-gray-200">
                                     {filteredDefects.map((defect) => (
                                         <tr
                                             key={defect.id}
-                                            className={`hover:bg-gray-50 ${
+                                            className={`block md:table-row border rounded mb-4 md:mb-0 hover:bg-gray-50 ${
                                                 defect.urgency === DefectUrgency.Critical ? 'border-l-4 border-red-500' :
                                                 defect.urgency === DefectUrgency.High ? 'border-l-4 border-orange-500' : ''
                                             }`}
                                         >
-                                            <td className="px-6 py-4 whitespace-nowrap">
+                                            <td className="block md:table-cell px-3 py-3 break-words">
                                                 <button
                                                     onClick={() => handleDefectClick(defect)}
                                                     className="text-left hover:text-blue-600 hover:underline cursor-pointer"
@@ -267,7 +267,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId,
                                                     )}
                                                 </button>
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                            <td className="block md:table-cell px-3 py-3 break-words text-sm text-gray-500">
                                                 <div className="flex items-center text-sm">
                                                     <Car className="h-4 w-4 mr-1" />
                                                     {formatVehicleIdentity(defect, vehicles.find(v => v.id === defect.vehicleId)).primary}{isTestDefect(defect, users, vehicles) && <span className="ml-2 font-bold">TEST</span>}
@@ -277,7 +277,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId,
                                                     {getDriverName(defect.driverId)}
                                                 </div>
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap">
+                                            <td className="block md:table-cell px-3 py-3">
                                                 <div className="flex flex-col space-y-1">
                                                     <span className={`inline-flex px-2 text-xs font-semibold rounded-full ${getStatusColor(defect.status)}`}>
                                                         {defect.status}
@@ -287,7 +287,7 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId,
                                                     </span>
                                                 </div>
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                            <td className="block md:table-cell px-3 py-3 break-words text-sm text-gray-500">
                                                 {defect.assignedTo ? (
                                                     <div>
                                                         <div className="font-medium">{defect.assignedTo}</div>
@@ -301,22 +301,24 @@ const ManageDefects: React.FC<ManageDefectsProps> = ({ onBack, selectedDefectId,
                                                     <span className="text-gray-400">Unassigned</span>
                                                 )}
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                                <div className="flex space-x-2">
+                                            <td className="block md:table-cell px-3 py-3 text-sm font-medium">
+                                                <div className="flex flex-wrap gap-2">
                                                     <button
                                                         onClick={() => handleStatusUpdate(defect)}
-                                                        className="text-indigo-600 hover:text-indigo-900"
+                                                        className="text-indigo-600 hover:text-indigo-900 flex items-center gap-2 min-h-11"
                                                         title="Update Status"
                                                     >
                                                         <Edit className="h-4 w-4" />
+                                                        Update Status
                                                     </button>
                                                     {!defect.assignedTo && (
                                                         <button
                                                             onClick={() => handleAssignDefect(defect)}
-                                                            className="text-green-600 hover:text-green-900"
+                                                            className="text-green-600 hover:text-green-900 flex items-center gap-2 min-h-11"
                                                             title="Assign Defect"
                                                         >
                                                             <UserIcon className="h-4 w-4" />
+                                                            Assign Defect
                                                         </button>
                                                     )}
                                                 </div>
@@ -491,6 +493,7 @@ export const AssignDefectModal = ({
     onSave: () => void;
 }) => {
     const [assignedTo, setAssignedTo] = useState('');
+    const [assignmentError, setAssignmentError] = useState('');
     const [reviewed] = useState({ status: defect.status, revision: defect.defectRevision ?? 0 });
     const [estimatedCost, setEstimatedCost] = useState('');
     const [requestId] = useState(() => crypto.randomUUID());
@@ -504,13 +507,14 @@ export const AssignDefectModal = ({
         }
 
         setIsSubmitting(true);
+        setAssignmentError('');
         try {
             const cost = estimatedCost ? parseFloat(estimatedCost) : undefined;
             await api.transitionDefectAdmin({ defectId: defect.id, requestId, expectedStatus: reviewed.status, expectedDefectRevision: reviewed.revision, status: DefectStatus.InProgress, assignedTo, notes: 'Assigned for repair: ' + assignedTo, ...(cost !== undefined ? { estimatedCost: cost } : {}) });
             onSave();
         } catch (error) {
             console.error('Failed to assign defect:', error);
-            alert('Error assigning defect.');
+            setAssignmentError(error instanceof Error ? error.message : 'Could not assign defect. Close this form, reload and review the defect before trying again.');
         } finally {
             setIsSubmitting(false);
         }
@@ -534,6 +538,7 @@ export const AssignDefectModal = ({
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
+                    {assignmentError && <p role="alert" className="text-red-800">{assignmentError}</p>}
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Assign To</label>
                         <input

@@ -1,31 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import Header from '../shared/Header';
 import Card from '../shared/Card';
-import { ServiceProvider, VehicleType } from '../../types';
+import { ServiceProvider } from '../../types';
 import api from '../../services/firebaseApi';
 import { ArrowLeft, Plus, Edit, Trash2, Phone, Mail, MapPin, CheckCircle, XCircle } from 'lucide-react';
 
 interface ManageServiceProvidersProps {
     onBack: () => void;
+    backLabel?: string;
 }
 
-const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack }) => {
+const specializations = (provider: ServiceProvider | null) => Array.isArray(provider?.specializations) ? provider.specializations.filter(s => typeof s === 'string') : [];
+
+const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack, backLabel = 'Back to Dashboard' }) => {
     const [serviceProviders, setServiceProviders] = useState<ServiceProvider[]>([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [editingProvider, setEditingProvider] = useState<ServiceProvider | null>(null);
     const [showInactive, setShowInactive] = useState(false);
+    const [loadError, setLoadError] = useState('');
 
     useEffect(() => {
         fetchServiceProviders();
     }, [showInactive]);
 
     const fetchServiceProviders = async () => {
+        setLoading(true);
+        setLoadError('');
         try {
             const providers = await api.getServiceProviders(!showInactive);
             setServiceProviders(providers);
         } catch (error) {
             console.error('Failed to fetch service providers:', error);
+            setLoadError('Could not load workshops / service providers. Retry to check the available workshops.');
         } finally {
             setLoading(false);
         }
@@ -66,21 +73,22 @@ const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack 
 
     return (
         <div className="min-h-screen bg-gray-100">
-            <Header title="Manage Service Providers" />
-            <main className="max-w-7xl mx-auto p-6">
-                <div className="mb-6 flex items-center justify-between">
+            <Header title="Workshops / Service Providers" />
+            <main className="max-w-7xl mx-auto p-4 sm:p-6">
+                <div className="mb-6 flex flex-wrap gap-3 items-center justify-between">
                     <button
                         onClick={onBack}
                         className="flex items-center text-gray-600 hover:text-gray-800"
                     >
                         <ArrowLeft className="h-5 w-5 mr-2" />
-                        Back to Dashboard
+                        {backLabel}
                     </button>
-                    <div className="flex items-center space-x-4">
+                    <div className="flex flex-wrap gap-3 items-center">
                         <label className="flex items-center">
                             <input
                                 type="checkbox"
                                 checked={showInactive}
+                                disabled={loading}
                                 onChange={(e) => setShowInactive(e.target.checked)}
                                 className="mr-2"
                             />
@@ -102,15 +110,16 @@ const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack 
                     </Card>
                 ) : (
                     <Card>
-                        <h2 className="text-xl font-bold text-gray-800 mb-4">Service Providers</h2>
-                        {serviceProviders.length === 0 ? (
+                        <h2 className="text-xl font-bold text-gray-800 mb-4">Workshops / Service Providers</h2>
+                        <p className="text-sm text-gray-600 mb-4">Active service providers are available in the maintenance Workshop selector.</p>
+                        {loadError ? <div role="alert"><p>{loadError}</p><button className="underline min-h-11" onClick={fetchServiceProviders}>Retry loading providers</button></div> : serviceProviders.length === 0 ? (
                             <div className="text-center py-8 text-gray-500">
-                                No service providers found
+                                {showInactive ? 'No workshops / service providers have been configured. Add a service provider to get started.' : 'No active workshops / service providers. Add one or show inactive providers to activate an existing record.'}
                             </div>
                         ) : (
                             <div className="overflow-x-auto">
-                                <table className="min-w-full divide-y divide-gray-200">
-                                    <thead className="bg-gray-50">
+                                <table className="block md:table w-full divide-y divide-gray-200">
+                                    <thead className="hidden md:table-header-group bg-gray-50">
                                         <tr>
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                 Provider
@@ -132,10 +141,10 @@ const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack 
                                             </th>
                                         </tr>
                                     </thead>
-                                    <tbody className="bg-white divide-y divide-gray-200">
+                                    <tbody className="block md:table-row-group bg-white divide-y divide-gray-200">
                                         {serviceProviders.map((provider) => (
-                                            <tr key={provider.id}>
-                                                <td className="px-6 py-4 whitespace-nowrap">
+                                            <tr key={provider.id} className="block md:table-row border rounded mb-4 md:border-0 md:mb-0">
+                                                <td className="block md:table-cell px-3 py-3 break-words">
                                                     <div>
                                                         <div className="text-sm font-medium text-gray-900">
                                                             {provider.name}
@@ -145,7 +154,7 @@ const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack 
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                <td className="block md:table-cell px-3 py-3 break-words text-sm text-gray-500">
                                                     <div className="space-y-1">
                                                         <div className="flex items-center">
                                                             <Phone className="h-4 w-4 mr-1" />
@@ -163,7 +172,7 @@ const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack 
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                <td className="block md:table-cell px-3 py-3 break-words text-sm text-gray-500">
                                                     <div className="flex items-start">
                                                         <MapPin className="h-4 w-4 mr-1 mt-0.5 flex-shrink-0" />
                                                         <div>
@@ -172,9 +181,10 @@ const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack 
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                <td className="block md:table-cell px-3 py-3 break-words text-sm text-gray-500">
                                                     <div className="flex flex-wrap gap-1">
-                                                        {provider.specializations.map((spec) => (
+                                                        {specializations(provider).length === 0 && <span>Specializations not recorded</span>}
+                                                        {specializations(provider).map((spec) => (
                                                             <span
                                                                 key={spec}
                                                                 className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800"
@@ -184,9 +194,10 @@ const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack 
                                                         ))}
                                                     </div>
                                                 </td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                <td className="block md:table-cell px-3 py-3">
                                                     <button
                                                         onClick={() => handleToggleActive(provider)}
+                                                        aria-label={`${provider.isActive ? 'Deactivate' : 'Activate'} ${provider.name}`}
                                                         className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
                                                             provider.isActive
                                                                 ? 'bg-green-100 text-green-800 hover:bg-green-200'
@@ -201,19 +212,23 @@ const ManageServiceProviders: React.FC<ManageServiceProvidersProps> = ({ onBack 
                                                         {provider.isActive ? 'Active' : 'Inactive'}
                                                     </button>
                                                 </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                <td className="block md:table-cell px-3 py-3 text-sm font-medium">
                                                     <div className="flex space-x-2">
                                                         <button
                                                             onClick={() => handleEditProvider(provider)}
-                                                            className="text-indigo-600 hover:text-indigo-900"
+                                                            aria-label={`Edit ${provider.name}`}
+                                                            className="text-indigo-600 hover:text-indigo-900 min-h-11 px-2 flex items-center gap-2"
                                                         >
                                                             <Edit className="h-4 w-4" />
+                                                            Edit
                                                         </button>
                                                         <button
                                                             onClick={() => handleDeleteProvider(provider.id, provider.name)}
-                                                            className="text-red-600 hover:text-red-900"
+                                                            aria-label={`Delete ${provider.name}`}
+                                                            className="text-red-600 hover:text-red-900 min-h-11 px-2 flex items-center gap-2"
                                                         >
                                                             <Trash2 className="h-4 w-4" />
+                                                            Delete
                                                         </button>
                                                     </div>
                                                 </td>
@@ -248,7 +263,7 @@ interface ServiceProviderModalProps {
     onSave: () => void;
 }
 
-const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, onClose, onSave }) => {
+export const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, onClose, onSave }) => {
     const [formData, setFormData] = useState({
         name: provider?.name || '',
         contactPerson: provider?.contactPerson || '',
@@ -259,7 +274,7 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
         city: provider?.city || '',
         province: provider?.province || '',
         postalCode: provider?.postalCode || '',
-        specializations: provider?.specializations || [],
+        specializations: specializations(provider),
         isActive: provider?.isActive ?? true,
         notes: provider?.notes || ''
     });
@@ -276,7 +291,7 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
 
     const handleSave = async () => {
         if (!formData.name || !formData.contactPerson || !formData.primaryPhone || !formData.email) {
-            alert('Please fill in all required fields');
+            alert('Enter the provider name, contact person, primary phone and email address.');
             return;
         }
 
@@ -304,21 +319,22 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
     const availableSpecializations = ['ICE', 'EV', 'General', 'Warranty', 'Emergency', 'Insurance', 'Finance', 'Tracking', 'Toyota', 'Ford', 'Kia', 'Hyundai', 'VW'];
 
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-50" role="dialog" aria-modal="true" aria-label={provider ? 'Edit service provider' : 'Add service provider'}>
+            <div className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
                 <h3 className="text-lg font-semibold mb-4">
                     {provider ? 'Edit Service Provider' : 'Add Service Provider'}
                 </h3>
+                <p className="text-sm text-gray-600 mb-4">Fields marked * are required. Keep a workshop active to make it available for maintenance bookings.</p>
 
                 <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">
                                 Provider Name *
                             </label>
                             <input
                                 type="text"
-                                value={formData.name}
+                                aria-label="Provider name" value={formData.name}
                                 onChange={(e) => setFormData({...formData, name: e.target.value})}
                                 className="w-full border border-gray-300 rounded-md px-3 py-2"
                                 placeholder="e.g., City Motors Workshop"
@@ -330,7 +346,7 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
                             </label>
                             <input
                                 type="text"
-                                value={formData.contactPerson}
+                                aria-label="Contact person" value={formData.contactPerson}
                                 onChange={(e) => setFormData({...formData, contactPerson: e.target.value})}
                                 className="w-full border border-gray-300 rounded-md px-3 py-2"
                                 placeholder="e.g., John Smith"
@@ -338,14 +354,14 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">
                                 Primary Phone *
                             </label>
                             <input
                                 type="text"
-                                value={formData.primaryPhone}
+                                aria-label="Primary phone" value={formData.primaryPhone}
                                 onChange={(e) => setFormData({...formData, primaryPhone: e.target.value})}
                                 className="w-full border border-gray-300 rounded-md px-3 py-2"
                                 placeholder="021-555-0001"
@@ -357,7 +373,7 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
                             </label>
                             <input
                                 type="text"
-                                value={formData.secondaryPhone}
+                                aria-label="Secondary phone" value={formData.secondaryPhone}
                                 onChange={(e) => setFormData({...formData, secondaryPhone: e.target.value})}
                                 className="w-full border border-gray-300 rounded-md px-3 py-2"
                                 placeholder="082-555-0001"
@@ -371,7 +387,7 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
                         </label>
                         <input
                             type="email"
-                            value={formData.email}
+                            aria-label="Email address" value={formData.email}
                             onChange={(e) => setFormData({...formData, email: e.target.value})}
                             className="w-full border border-gray-300 rounded-md px-3 py-2"
                             placeholder="service@example.co.za"
@@ -380,25 +396,25 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
 
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Address *
+                            Address (optional)
                         </label>
                         <input
                             type="text"
-                            value={formData.address}
+                            aria-label="Address" value={formData.address}
                             onChange={(e) => setFormData({...formData, address: e.target.value})}
                             className="w-full border border-gray-300 rounded-md px-3 py-2"
                             placeholder="123 Main Road"
                         />
                     </div>
 
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">
-                                City *
+                                City (optional)
                             </label>
                             <input
                                 type="text"
-                                value={formData.city}
+                                aria-label="City" value={formData.city}
                                 onChange={(e) => setFormData({...formData, city: e.target.value})}
                                 className="w-full border border-gray-300 rounded-md px-3 py-2"
                                 placeholder="Cape Town"
@@ -406,11 +422,11 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">
-                                Province *
+                                Province (optional)
                             </label>
                             <input
                                 type="text"
-                                value={formData.province}
+                                aria-label="Province" value={formData.province}
                                 onChange={(e) => setFormData({...formData, province: e.target.value})}
                                 className="w-full border border-gray-300 rounded-md px-3 py-2"
                                 placeholder="Western Cape"
@@ -418,11 +434,11 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">
-                                Postal Code *
+                                Postal Code (optional)
                             </label>
                             <input
                                 type="text"
-                                value={formData.postalCode}
+                                aria-label="Postal code" value={formData.postalCode}
                                 onChange={(e) => setFormData({...formData, postalCode: e.target.value})}
                                 className="w-full border border-gray-300 rounded-md px-3 py-2"
                                 placeholder="8001"
@@ -434,7 +450,7 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                             Specializations *
                         </label>
-                        <div className="grid grid-cols-3 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                             {availableSpecializations.map((spec) => (
                                 <label key={spec} className="flex items-center">
                                     <input
@@ -466,7 +482,7 @@ const ServiceProviderModal: React.FC<ServiceProviderModalProps> = ({ provider, o
                             Notes
                         </label>
                         <textarea
-                            value={formData.notes}
+                            aria-label="Notes" value={formData.notes}
                             onChange={(e) => setFormData({...formData, notes: e.target.value})}
                             className="w-full border border-gray-300 rounded-md px-3 py-2 h-20"
                             placeholder="Additional notes about this service provider..."

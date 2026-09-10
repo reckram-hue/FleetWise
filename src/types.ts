@@ -84,6 +84,7 @@ export interface MaintenanceRecord {
     serviceType: string;
     cost: number;
     notes?: string;
+    serviceProvider?: string | null;
     // Test-data isolation marker — inherited from the vehicle at creation time.
     isTestData?: boolean;
 }

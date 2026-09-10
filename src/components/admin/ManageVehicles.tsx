@@ -185,6 +185,7 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ vehicle, onC
                             {records.map(record => <article key={record.id} className="border rounded-lg p-3 break-words">
                                 <div className="flex flex-wrap justify-between gap-2"><h5 className="font-semibold">{record.serviceType}</h5><p>{record.date}</p></div>
                                 <p className="text-sm my-1">{record.odometer.toLocaleString()} km · R {record.cost.toLocaleString()}</p>
+                                <p className="text-sm my-1">Workshop: {record.serviceProvider || 'Not recorded'}</p>
                                 <p className="text-sm text-gray-600 whitespace-pre-wrap">{record.notes}</p>
                             </article>)}
                         </div>

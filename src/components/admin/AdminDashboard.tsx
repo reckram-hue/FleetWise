@@ -27,7 +27,9 @@ const AdminDashboard: React.FC = () => {
     const [selectedDefectId, setSelectedDefectId] = useState<string | null>(null);
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     const [maintenanceVehicleId, setMaintenanceVehicleId] = useState<string | undefined>();
+    const [providerReturn, setProviderReturn] = useState('dashboard');
     const openMaintenance = (vehicleId?: string) => { setMaintenanceVehicleId(vehicleId); setView('maintenance'); };
+    const openWorkshops = (vehicleId?: string) => { setMaintenanceVehicleId(vehicleId); setProviderReturn('maintenance'); setView('service-providers'); };
 
     useEffect(() => {
         // Fetch vehicle data
@@ -98,10 +100,10 @@ const AdminDashboard: React.FC = () => {
             <Header title="Maintenance & Service" onBack={() => setView('dashboard')} />
             <main className="max-w-7xl mx-auto p-4 sm:p-6 space-y-4">
                 <div className="flex flex-wrap gap-4">
-                    <button className="underline min-h-11" onClick={() => setView('service-providers')}>Workshops / service providers</button>
+                    <button className="underline min-h-11" onClick={() => openWorkshops(maintenanceVehicleId)}>Workshops / service providers</button>
                     <button className="underline min-h-11" onClick={() => { setSelectedDefectId(null); setView('defects'); }}>Manage defects</button>
                 </div>
-                <ServiceManagement initialVehicleId={maintenanceVehicleId} onChanged={() => setRefreshTrigger(v => v + 1)} />
+                <ServiceManagement initialVehicleId={maintenanceVehicleId} onManageWorkshops={openWorkshops} onChanged={() => setRefreshTrigger(v => v + 1)} />
             </main>
         </div>;
     }
@@ -115,7 +117,7 @@ const AdminDashboard: React.FC = () => {
     }
 
     if (view === 'service-providers') {
-        return <ManageServiceProviders onBack={() => setView('dashboard')} />;
+        return <ManageServiceProviders backLabel={providerReturn === 'maintenance' ? 'Back to Maintenance & Service' : 'Back to Dashboard'} onBack={() => setView(providerReturn)} />;
     }
 
     if (view === 'defects') {
@@ -166,7 +168,7 @@ const AdminDashboard: React.FC = () => {
                 <Truck className="h-5 w-5 mr-2 inline" />
                 Vehicles
             </button>
-            <button onClick={() => setView('service-providers')} className="bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600 transition duration-300 shadow-lg">
+            <button onClick={() => { setProviderReturn('dashboard'); setView('service-providers'); }} className="bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600 transition duration-300 shadow-lg">
                 <Wrench className="h-5 w-5 mr-2 inline" />
                 Service Providers
             </button>
