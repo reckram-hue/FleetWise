@@ -5,23 +5,43 @@ import Card from '../shared/Card';
 import { MaintenanceModal } from './ManageVehicles';
 import { formatVehicleIdentity } from '../../lib/vehicleIdentity';
 
-export function serviceState(s: ScheduledService) {
-  if (s.releasedAt) return 'Released / Completed';
-  if (s.returnedFromService) return 'Work Completed / Awaiting Release';
-  if (s.sentForService) return 'At workshop';
-  return s.isBooked ? 'Scheduled / Booked' : 'Scheduled';
+function timestamp(value: unknown): number | null {
+  const time = value instanceof Date ? value.getTime() : typeof value === 'string' && value.trim() ? Date.parse(value) : NaN;
+  return Number.isFinite(time) ? time : null;
 }
+export function servicePresentation(s: ScheduledService, vehicle?: Vehicle): { label: string; stage: Stage; canRelease: boolean; detail?: string } {
+  // Service-specific release evidence survives a later, unrelated vehicle hold.
+  if (timestamp(s.releasedAt) !== null) return { label: 'Released / Completed', stage: 'Completed', canRelease: false };
+  if (!s.returnedFromService) return { label: s.sentForService ? 'At workshop' : s.isBooked ? 'Scheduled / Booked' : 'Scheduled',
+    stage: s.sentForService ? 'At workshop' : 'Scheduled', canRelease: false };
+  const current = vehicle?.id === s.vehicleId ? vehicle : undefined;
+  const completedAt = timestamp(s.completedAt), lastReleasedAt = timestamp(current?.lastReleasedAt);
+  // Separate lifecycle release does not rewrite an older service's hold ID.
+  // Require a dated release AFTER this modern completion and explicitly cleared
+  // current holds. Active alone proves no service release or hold ownership.
+  if (s.holdId && completedAt !== null && lastReleasedAt !== null && lastReleasedAt > completedAt && current?.lastReleasedBy &&
+      current.status === 'Active' && current.maintenanceHold === null && current.manualMaintenanceHold === false) {
+    return { label: 'Released / Completed', stage: 'Completed', canRelease: false,
+      detail: 'Vehicle released through a separate lifecycle review after this work was completed.' };
+  }
+  if (s.holdId && current?.maintenanceHold?.id && ['In Service', 'Repairs'].includes(current.status)) {
+    const ownsHold = s.holdId === current.maintenanceHold.id;
+    return { label: 'Work completed / Awaiting release', stage: 'Awaiting release', canRelease: ownsHold,
+      detail: ownsHold ? 'Work recorded. Review the release checks to make the vehicle available.' :
+        'A separate hold is active. Review and release the current hold in Manage Vehicles.' };
+  }
+  return { label: 'Work completed — release status unavailable', stage: 'Release status unavailable', canRelease: false,
+    detail: 'Release evidence is unavailable for this work. Review the vehicle lifecycle in Manage Vehicles.' };
+}
+export function serviceState(s: ScheduledService, vehicle?: Vehicle) { return servicePresentation(s, vehicle).label; }
 type Action = 'book' | 'dispatch' | 'complete' | 'release';
 type Form = { action: Action; requestId: string; serviceId: string; vehicleId: string; serviceType: string; dueDate: string;
   dueOdometer: string; bookedDate: string; bookedTime: string; serviceProviderId: string; notes: string; actualDate: string;
   odometer: string; cost: string; linked: string[]; resolved: string[]; clearManualHold: boolean; expectedRevision: number;
   expectedLifecycleRevision: number; expectedHoldId: string | null; holdReason: string; reviewedDefects: DefectReport[] };
 const today = () => new Date().toISOString().slice(0, 10);
-const stages = ['All services', 'Scheduled', 'At workshop', 'Awaiting release', 'Completed'] as const;
+const stages = ['All services', 'Scheduled', 'At workshop', 'Awaiting release', 'Completed', 'Release status unavailable'] as const;
 type Stage = typeof stages[number];
-function serviceStage(s: ScheduledService): Stage {
-  return s.releasedAt ? 'Completed' : s.returnedFromService ? 'Awaiting release' : s.sentForService ? 'At workshop' : 'Scheduled';
-}
 export default function ServiceManagement({ onChanged, initialVehicleId = '', onManageWorkshops }: { onChanged: () => void; initialVehicleId?: string; onManageWorkshops?: (vehicleId?: string) => void }) {
   const [services, setServices] = useState<ScheduledService[]>([]), [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [providers, setProviders] = useState<ServiceProvider[]>([]), [defects, setDefects] = useState<DefectReport[]>([]);
@@ -42,9 +62,10 @@ export default function ServiceManagement({ onChanged, initialVehicleId = '', on
   const selectedVehicle = vehicles.find(v => v.id === vehicleFilter);
   // An explicit vehicle-context link may show that TEST vehicle; fleet-wide views still exclude TEST by default.
   const scoped = services.filter(s => (includeTest || !isTest(s) || (initialVehicleId === s.vehicleId && vehicleFilter === s.vehicleId)) && (!vehicleFilter || s.vehicleId === vehicleFilter));
-  const visible = scoped.filter(s => stage === 'All services' || serviceStage(s) === stage);
+  const presentation = (s: ScheduledService) => servicePresentation(s, vehicles.find(v => v.id === s.vehicleId));
+  const visible = scoped.filter(s => stage === 'All services' || presentation(s).stage === stage);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-  const reminders = visible.filter(s => s.isBooked && !s.sentForService && !s.returnedFromService && !s.reminderSent && s.bookedDate === tomorrow);
+  const reminders = visible.filter(s => presentation(s).stage === 'Scheduled' && s.isBooked && !s.reminderSent && s.bookedDate === tomorrow);
   const identity = (id: string) => formatVehicleIdentity({ vehicleId: id }, vehicles.find(v => v.id === id));
   const label = (id: string) => identity(id).primary;
   function open(action: Action, s?: ScheduledService) {
@@ -97,30 +118,30 @@ export default function ServiceManagement({ onChanged, initialVehicleId = '', on
     </div>
     <p className="text-sm text-gray-600">Select a vehicle to view its maintenance history, including past work without a booking.</p>
     <label className="block my-3"><input type="checkbox" disabled={busy} checked={includeTest} onChange={e => { setIncludeTest(e.target.checked); setForm(null); if (!e.target.checked && selectedVehicle?.isTestData && vehicleFilter !== initialVehicleId) setVehicleFilter(''); }} /> Include TEST services</label>
-    <div role="group" aria-label="Service progress" className="flex flex-wrap gap-2 my-4">{stages.map(value => <button key={value} aria-pressed={stage === value} onClick={() => setStage(value)} className={`min-h-11 px-3 py-2 rounded border ${stage === value ? 'bg-blue-700 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300'}`}>{value} ({value === 'All services' ? scoped.length : scoped.filter(s => serviceStage(s) === value).length})</button>)}</div>
+    <div role="group" aria-label="Service progress" className="flex flex-wrap gap-2 my-4">{stages.map(value => <button key={value} aria-pressed={stage === value} onClick={() => setStage(value)} className={`min-h-11 px-3 py-2 rounded border ${stage === value ? 'bg-blue-700 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300'}`}>{value} ({value === 'All services' ? scoped.length : scoped.filter(s => presentation(s).stage === value).length})</button>)}</div>
     {!!reminders.length && <div className="border border-orange-200 bg-orange-50 rounded p-3 my-3"><h3 className="font-bold">Service Reminders Needed</h3>
       {reminders.map(s => <p key={s.id}>{label(s.vehicleId)} — {s.serviceType} tomorrow at {s.bookedTime} ({s.serviceProvider})</p>)}
       <p>Send appointment reminders to prevent missed bookings.</p></div>}
     {error && !form && <p role="alert" className="text-red-800 my-3">{error}</p>}{notice && <p role="status">{notice}</p>}
     {loading ? <p>Loading services…</p> : <div className="space-y-3">
-      {visible.map(s => <article key={s.id} aria-label={`${label(s.vehicleId)} — ${s.serviceType}`} className="border rounded-lg p-4 bg-gray-50 break-words">
+      {visible.map(s => { const state = presentation(s); return <article key={s.id} aria-label={`${label(s.vehicleId)} — ${s.serviceType}`} className="border rounded-lg p-4 bg-gray-50 break-words">
         <div className="grid gap-3 md:grid-cols-3">
           <div><h3 className="font-bold text-lg">{label(s.vehicleId)}{isTest(s) && ' — TEST'}</h3><p className="text-sm text-gray-600">{identity(s.vehicleId).secondary}</p>
             <p className="font-medium mt-2">{s.serviceType}</p><p className="text-sm">{s.serviceProvider || 'Workshop not selected'}</p></div>
           <div className="text-sm"><p>Due: {s.dueDate} · {s.dueOdometer != null ? `${s.dueOdometer.toLocaleString()} km` : 'Odometer not set'}</p>
             <p>{s.sentForService ? `Sent: ${s.sentDate}` : s.isBooked ? `Booked: ${s.bookedDate} at ${s.bookedTime}` : 'Not booked yet'}</p>
-            {!s.sentForService && !s.returnedFromService && s.dueDate <= today() && <p className="text-red-700 font-bold">{s.dueDate === today() ? 'Due today' : 'Overdue'}</p>}</div>
-          <div><p className="font-semibold text-blue-900">{serviceState(s)}</p>{s.returnedFromService && <p className="text-sm">Completed {s.returnDate} · R {s.actualCost?.toLocaleString()}</p>}
-            {s.returnedFromService && !s.releasedAt && <p className="text-sm mt-1">Work recorded. Review the release checks to make the vehicle available.</p>}</div>
+            {state.stage === 'Scheduled' && s.dueDate <= today() && <p className="text-red-700 font-bold">{s.dueDate === today() ? 'Due today' : 'Overdue'}</p>}</div>
+          <div><p className="font-semibold text-blue-900">{state.label}</p>{s.returnedFromService && <p className="text-sm">Completed {s.returnDate} · R {s.actualCost?.toLocaleString()}</p>}
+            {state.detail && <p className="text-sm mt-1">{state.detail}</p>}</div>
         </div>
         <div className="flex flex-wrap gap-2 mt-3">
-          {!s.sentForService && !s.returnedFromService && <><button className="underline min-h-11 px-2" disabled={busy} onClick={() => open('book', s)}>Book / edit</button>
+          {state.stage === 'Scheduled' && <><button className="underline min-h-11 px-2" disabled={busy} onClick={() => open('book', s)}>Book / edit</button>
             {s.isBooked && <button className="bg-blue-700 text-white rounded min-h-11 px-3" disabled={busy} onClick={() => open('dispatch', s)}>Send to workshop</button>}</>}
-          {s.sentForService && !s.returnedFromService && <button className="bg-blue-700 text-white rounded min-h-11 px-3" disabled={busy} onClick={() => open('complete', s)}>Record completed work</button>}
-          {s.returnedFromService && !s.releasedAt && <button className="bg-blue-700 text-white rounded min-h-11 px-3" disabled={busy} onClick={() => open('release', s)}>Release vehicle</button>}
+          {state.stage === 'At workshop' && <button className="bg-blue-700 text-white rounded min-h-11 px-3" disabled={busy} onClick={() => open('complete', s)}>Record completed work</button>}
+          {state.canRelease && <button className="bg-blue-700 text-white rounded min-h-11 px-3" disabled={busy} onClick={() => open('release', s)}>Release vehicle</button>}
           <button className="underline min-h-11 px-2" disabled={busy || !vehicles.some(v => v.id === s.vehicleId)} onClick={() => setHistoryVehicle(vehicles.find(v => v.id === s.vehicleId) || null)}>View maintenance history</button>
         </div>
-      </article>)}
+      </article>; })}
       {!visible.length && <p className="py-4">No services in this selection. Choose another stage or vehicle, or schedule service.</p>}
     </div>}
     {form && <form onSubmit={submit} className="border rounded p-4 mt-4 space-y-3" aria-label="Service operation">

@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {harness,nodes,text,button}=require('./uiHarness.cjs');
 const vehicle={id:'v',registration:'TEST SERVICE',status:'In Service',currentOdometer:1000,lastServiceOdometer:900,isTestData:true,lifecycleRevision:4,maintenanceHold:{id:'hold-a',source:'SERVICE',reason:'Reviewed workshop hold'}};
-const service={id:'s',vehicleId:'v',serviceType:'Oil service',dueDate:'2026-09-10',dueOdometer:2000,isBooked:true,sentForService:true,serviceProvider:'Workshop',linkedDefectIds:['d'],isTestData:true};
+const service={id:'s',vehicleId:'v',holdId:'hold-a',serviceType:'Oil service',dueDate:'2026-09-10',dueOdometer:2000,isBooked:true,sentForService:true,serviceProvider:'Workshop',linkedDefectIds:['d'],isTestData:true};
 const byLabel=(tree,label)=>nodes(tree,n=>n.type==='label' && text(n).trim().startsWith(label))[0];
 function input(tree,label,type='input') { const l=byLabel(tree,label); assert.ok(l,label); return nodes(l,n=>n.type===type)[0]; }
 async function board(s=service,over={}) {
@@ -17,7 +17,7 @@ test('service board excludes TEST initially and completion is awaiting release r
   const C=h.load('src/components/admin/ServiceManagement.tsx').default,props={onChanged(){}};
   h.render(C,props);await h.settle();let tree=h.render(C,props);assert.ok(!text(tree).includes('TEST SERVICE'));
   input(tree,'Include TEST services').props.onChange({target:{checked:true}});tree=h.render(C,props);
-  assert.match(text(tree),/TEST SERVICE — TEST/);assert.match(text(tree),/Work Completed \/ Awaiting Release/);
+  assert.match(text(tree),/TEST SERVICE — TEST/);assert.match(text(tree),/Work completed \/ Awaiting release/);
   assert.ok(button(tree,'Release vehicle'));assert.ok(!button(tree,'Record completed work'));assert.ok(!text(tree).includes('In Service'));
 });
 test('completion starts actual odometer/cost blank and resolves only selected explicit links',async()=>{

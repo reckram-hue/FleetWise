@@ -4,11 +4,11 @@ const { harness, nodes, text, button } = require('./uiHarness.cjs');
 
 const vehicles = [
   { id: 'v1', registration: 'CA 123-456', make: 'Sample', model: 'EV', status: 'Active', currentOdometer: 1000, serviceIntervalKm: 10000 },
-  { id: 'v2', registration: 'CA 234-567', make: 'Sample', model: 'Car', status: 'In Service', currentOdometer: 2000, serviceIntervalKm: 10000 },
+  { id: 'v2', registration: 'CA 234-567', make: 'Sample', model: 'Car', status: 'In Service', maintenanceHold: { id: 'hold-v2' }, currentOdometer: 2000, serviceIntervalKm: 10000 },
 ];
 const base = { vehicleId: 'v1', serviceType: 'Routine service', dueDate: '2026-09-11', dueOdometer: 10000, isBooked: true, bookedDate: '2026-09-11', bookedTime: '09:00', serviceProviderId: 'p1', revision: 3 };
 const services = [{ ...base, id: 'scheduled' }, { ...base, id: 'workshop', vehicleId: 'v2', sentForService: true },
-  { ...base, id: 'awaiting', sentForService: true, returnedFromService: true },
+  { ...base, id: 'awaiting', vehicleId: 'v2', holdId: 'hold-v2', sentForService: true, returnedFromService: true },
   { ...base, id: 'released', sentForService: true, returnedFromService: true, releasedAt: '2026-09-10' }];
 const defect = { id: 'd1', vehicleId: 'v2', driverId: 'driver', description: 'Brake noise', category: 'Mechanical', status: 'Open', urgency: 'High', reportedDateTime: new Date(), defectRevision: 3 };
 function setup(overrides = {}) {
@@ -90,7 +90,7 @@ test('explicit TEST context remains labelled and returning to all vehicles resto
   const b = await mount(h, 'ServiceManagement', { initialVehicleId: 'v1', onChanged() {} });
   assert.match(text(nodes(b.render(), n => n.type === 'article')[0]), /^CA 123-456 — TEST/);
   labelled(b.render(), 'Filter by vehicle').props.onChange({ target: { value: '' } });
-  assert.equal(nodes(b.render(), n => n.type === 'article').length, 1); // Only v2's non-TEST service remains.
+  assert.deepEqual(nodes(b.render(), n => n.type === 'article').map(n => n.key), ['workshop', 'awaiting']); // Only v2's non-TEST services remain.
 });
 
 test('vehicle-context scheduling preserves callable payload names and does not write on navigation', async () => {

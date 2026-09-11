@@ -32,18 +32,23 @@ export const callFunction = async () => { throw Error('Cloud access is disabled 
 export const getDriverSession = () => ({ driverId: driver.id, sessionToken: 'local-fixture' });
 export const clearDriverSession = () => {}; export const isSessionLocallyExpired = () => false;
 // Display-only examples for navigation QA. These are literals, never persisted or sent to Firebase.
-const uxVehicles = ['CA 123-456', 'CA 234-567', 'CA 345-678', 'CA 456-789', 'TEST UX'].map((registration, index) => ({
+const uxVehicles = ['CA 123-456', 'CA 234-567', 'CA 345-678', 'CA 456-789', 'TEST UX', 'CA 567-890', 'CA 678-901'].map((registration, index) => ({
   ...vehicle, id: `ux-vehicle-${index}`, registration, model: index % 2 ? 'Hatchback' : 'EV', vehicleType: index % 2 ? 'ICE' : 'EV',
   status: index === 1 ? 'In Service' : index === 2 ? 'Repairs' : 'Active', isTestData: index === 4,
   currentOdometer: 12000, lastServiceOdometer: 10000, serviceIntervalKm: 10000, lifecycleRevision: 1,
   maintenanceHold: index === 1 || index === 2 ? { id: `ux-hold-${index}`, source: 'SERVICE', reason: 'Workshop repair awaiting review' } : null,
+  manualMaintenanceHold: false,
+  lastReleasedAt: index === 5 ? new Date('2026-09-11T06:31:43Z') : undefined,
+  lastReleasedBy: index === 5 ? 'local-fixture-admin' : undefined,
 }));
 const uxServices = uxVehicles.map((v, index) => ({
-  id: `ux-service-${index}`, vehicleId: v.id, serviceType: index === 1 ? 'Brake repair' : 'Routine service',
+  id: `ux-service-${index}`, vehicleId: v.id, serviceType: index === 1 ? 'Brake repair' : index === 5 ? 'Separate lifecycle release' : index === 6 ? 'Legacy completed work' : 'Routine service',
   dueDate: '2026-09-11', dueOdometer: 20000, isBooked: true, bookedDate: '2026-09-11', bookedTime: '09:00',
-  serviceProviderId: 'ux-workshop', serviceProvider: 'Sample workshop', sentForService: index >= 1 && index <= 3,
-  sentDate: index >= 1 ? '2026-09-09' : null, returnedFromService: index === 2 || index === 3,
-  returnDate: index === 2 || index === 3 ? '2026-09-10' : null, actualCost: index >= 2 ? 1250 : undefined,
+  serviceProviderId: 'ux-workshop', serviceProvider: 'Sample workshop', sentForService: index >= 1 && index !== 4,
+  sentDate: index >= 1 ? '2026-09-09' : null, returnedFromService: index === 2 || index === 3 || index >= 5,
+  holdId: index === 6 ? undefined : `ux-hold-${index}`,
+  completedAt: index === 5 ? new Date('2026-09-11T06:28:56Z') : undefined,
+  returnDate: index === 2 || index === 3 ? '2026-09-10' : index >= 5 ? '2026-09-11' : null, actualCost: index >= 2 ? 1250 : undefined,
   releasedAt: index === 3 ? '2026-09-10T12:00:00Z' : null, linkedDefectIds: index === 1 ? ['ux-defect'] : [], isTestData: v.isTestData,
 }));
 const uxDefects = [{ id: 'ux-defect', vehicleId: uxVehicles[1].id, driverId: driver.id, description: 'Brake noise reported by driver',
@@ -57,7 +62,10 @@ const uxReads: Record<string, (...args: any[]) => Promise<any>> = {
       : [{ id: 'ux-workshop', name: 'Sample workshop', isActive: true, specializations: ['General'] }];
     return rows.filter(p => !activeOnly || p.isActive);
   },
-  getMaintenanceRecords: async vehicleId => [{ id: 'ux-history', vehicleId, date: '2026-08-20', serviceType: 'Routine service', serviceProvider: 'LOCAL TEST saved workshop snapshot', odometer: 10000, cost: 950, notes: 'Synthetic example: oil and filter changed.' }],
+  getMaintenanceRecords: async vehicleId => [
+    { id: 'ux-history', vehicleId, date: '2026-08-20', serviceType: 'Routine service', serviceProvider: 'LOCAL TEST saved workshop snapshot', serviceProviderId: 'deleted-provider', odometer: 10000, cost: 950, notes: 'Synthetic example: oil and filter changed.' },
+    { id: 'ux-legacy-history', vehicleId, date: '2026-08-01', serviceType: 'Legacy work', odometer: 9500, cost: 0, notes: 'Synthetic history with no recorded workshop.' },
+  ],
 };
 export default new Proxy({ getVehicles: async () => [vehicle], getUsers: async () => [driver], getActiveDefects: async () => [],
   listChargingLocationsAdmin: async () => [{ id: 'test-charger', name: 'TEST company charger', active: true, tariffMethod: 'PER_KWH', tariffRate: 2.5 }],

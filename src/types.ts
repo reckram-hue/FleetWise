@@ -122,6 +122,9 @@ export interface ScheduledService {
 }
 
 export interface Vehicle {
+    // Existing server lifecycle evidence; read-only in the frontend.
+    lastReleasedAt?: Date;
+    lastReleasedBy?: string;
     manualMaintenanceHold?: boolean;
     lifecycleRevision?: number;
     maintenanceHold?: { id: string; source: 'SERVICE' | 'MANUAL'; sourceId: string; reason: string; setAt: Date } | null;
